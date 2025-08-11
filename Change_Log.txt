@@ -1,0 +1,163 @@
+Offshore SST Map — Change Log
+
+Version History
+
+v0.1 — Initial Build (Early August 2025)
+	•	Created Streamlit app to visualize daily SST (Sea Surface Temperature) for NJ→MA AOI using NOAA CoastWatch ERDDAP.
+	•	Implemented:
+	•	Dataset search via ERDDAP API.
+	•	Automatic dataset selection with preference for MUR → GHRSST → OISST.
+	•	SST conversion from Kelvin to Fahrenheit.
+	•	Heatmap rendering with Folium ImageOverlay.
+	•	AOI polygon display via GeoJson.
+	•	Early Issues:
+	•	Hover-over SST reading not implemented (relied on click events).
+	•	Map recentered on every click/interaction.
+	•	Heatmap overlay alignment inconsistent with coastline.
+	•	Visual appearance: tiles bled over land in some areas.
+
+⸻
+
+v0.2 — First Hover Attempt
+	•	Added tooltip system using Folium click events to show SST values.
+	•	Added MousePosition plugin to show lat/lon in real time.
+	•	Problems:
+	•	Tooltips only appeared after clicking.
+	•	Map jumped/recentered after every click.
+	•	Heatmap alignment still imperfect.
+
+⸻
+
+v0.3 — Hover-over Conversion & Initial Stability Fixes
+	•	Replaced click events with first implementation of hover-over SST using st_folium last_mouse_position.
+	•	Added persistent view_center and view_zoom in st.session_state to try to reduce jumping.
+	•	Issues:
+	•	Hover values inconsistent, especially when zoomed in.
+	•	Map still reloaded and reset view on many interactions.
+	•	Hover logic tied to Streamlit updates → caused flicker.
+
+⸻
+
+v0.4 — Leaflet-Native Tooltips
+	•	Switched hover-over from Streamlit mouse tracking to Leaflet-native tooltips:
+	•	Added folium.CircleMarker at grid cell centers with invisible styling.
+	•	Each marker has a tooltip with precomputed °F value.
+	•	Added tooltip density mode:
+	•	Sparse (fastest), Normal, Dense (more coverage).
+	•	Results:
+	•	Tooltips far more reliable.
+	•	Still occasional gaps between markers, especially when zoomed in.
+
+⸻
+
+v0.5 — Coastline Masking & Visual Enhancements
+	•	Added AOI-based masking to hide SST values outside polygon.
+	•	Added land overlay layer so heatmap is visually beneath coastlines.
+	•	Improved heatmap alignment by correcting raster orientation (row 0 = North, col 0 = West).
+	•	Added upsampling (1x, 2x, 3x) for smoother visuals.
+	•	Improved color scale handling:
+	•	Fixed scale: 48–90°F.
+	•	Adaptive scale: 5th–95th percentile of AOI data.
+	•	UI updates:
+	•	Sidebar controls for upsample factor, scale lock, tooltip density, and lock/unlock map view.
+
+⸻
+
+v0.6 — Map Stability & ERDDAP Enhancements
+	•	Locked view option now prevents any recentering after user pans/zooms.
+	•	Map no longer jumps to AOI bounds after every interaction.
+	•	ERDDAP search logic improved:
+	•	Uses primary and fallback search terms from config.json.
+	•	Scoring system prioritizes daily SST datasets, MUR highest.
+	•	Variable detection improved from .das file to find SST variable name.
+	•	Grid spacing (km) calculated from dataset metadata.
+
+⸻
+
+v0.7 — Major Update (2025-08-11)
+
+Hover-over SST Fix
+	•	Leaflet-native tooltips fully implemented; no reliance on click events.
+	•	Tooltip density modes tuned for better coverage at different zoom levels.
+	•	Fixed issue where tooltips disappeared when zoomed in by recalculating stride based on grid resolution.
+
+Map Stability Improvements
+	•	view_center and view_zoom persist via st.session_state.
+	•	“Lock map view” prevents any recenter after interaction.
+
+Coastline Masking
+	•	SST raster clipped to AOI.
+	•	Added land overlay layer so coastlines mask heatmap for clean fit.
+	•	Improved tile alignment with coastline curves.
+
+Color & Scale
+	•	Added fixed color scale option (48–90°F).
+	•	Improved adaptive scaling to prevent extreme outliers from skewing.
+	•	Added 1x/2x/3x upsample for smoother rendering.
+
+Backend/Data
+	•	Robust Kelvin/Celsius/Fahrenheit handling in SST conversion.
+	•	ERDDAP fetch process more fault-tolerant and better dataset selection.
+
+Known Issues / Next Steps:
+	•	Tooltip coverage still a performance trade-off at very high zooms.
+	•	Coastal masking limited by dataset resolution; higher-res shoreline masks could improve fit.
+	•	Future possibility: vector-based mask for pixel-perfect coastline clipping.
+
+⸻
+
+[2025-08-05] v0.9.0
+	•	Initial working prototype for Streamlit-based Offshore SST map.
+	•	Added AOI polygon masking based on config.json coordinates.
+	•	Implemented ERDDAP dataset auto-discovery (MUR preferred; OISST fallback).
+	•	Added conversion to °F from Kelvin/Celsius datasets.
+	•	Added percentile-based color scaling and visual upsampling.
+	•	Enabled tooltips with SST values at decimated grid points.
+	•	Implemented st_folium integration for Folium rendering inside Streamlit.
+
+⸻
+
+[2025-08-07] v0.9.1
+	•	Fixed hover tooltip density scaling by zoom level.
+	•	Added persistent map view memory across reruns (pan/zoom preservation).
+	•	Reduced flicker by caching SST fetches for 1 hour (@st.cache_data).
+	•	Improved AOI masking logic to exclude data outside polygon bounds.
+
+⸻
+
+[2025-08-08] v0.9.2
+	•	Added high-resolution coastline masking using Natural Earth 10m dataset.
+	•	Rasterized coastline to SST grid for precise land/water separation.
+	•	Added optional visual upsample settings: 1x, 2x, and 3x.
+	•	Improved color mapping with fixed palette and percentile clamp (48–90°F).
+	•	Added live cursor readout (nearest-cell SST in °F) in caption below map.
+
+⸻
+
+[2025-08-09] v0.9.3
+	•	Improved hover tooltip reliability by increasing fill opacity slightly on markers.
+	•	Tweaked tooltip density defaults (“Normal” mode) for better zoomed-in detail.
+	•	Fixed bug where AOI mask incorrectly inverted in some lat/lon orientations.
+	•	Added “Lock color scale” checkbox to stabilize colors between fetches.
+	•	Adjusted coastline rasterization buffer to ~50 m to avoid pixel bleed onto land.
+	•	Updated requirements.txt to include geopandas, rasterio, and shapely.
+
+⸻
+
+[2025-08-11] v0.9.4
+	•	Fixed Long Island and Block Island coastline masking issue by ensuring Natural Earth 10m polygons include island geometries in AOI rasterization.
+	•	Increased inward buffer for shoreline masking from ~50 m to ~75 m for better alignment.
+	•	Confirmed high-res coastline overlay loads above SST raster with correct z-index.
+	•	Verified tooltip hover works more consistently across zoom levels; adjusted decimation stride calculation.
+	•	Added percentile-based color scale locking improvements to avoid over/under-saturation in low-data scenarios.
+	•	Cleaned up session state handling for pan/zoom preservation on rerun.
+
+⸻
+
+[2025-08-11] v0.9.5
+	•	Added user-defined tuna fishing Points of Interest (POIs) to map.
+	•	POI list: Haabs Ledge, Butterfish Hole, July2025, CIA, Gully, Wind Farm SW Corner, Tuna Ridge.
+	•	Set POI marker color to green for high visibility against SST heatmap.
+	•	Adjusted POI labels with text-shadow for readability against varying map backgrounds.
+	•	Implemented wide-layout CSS and large MAP_HEIGHT_PX setting to maximize viewport usage.
+	•	Static Folium HTML rendering now maintains tooltips, POIs, and lat/lon readout after pan/zoom without reruns.

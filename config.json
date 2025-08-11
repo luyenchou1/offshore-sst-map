@@ -1,0 +1,57 @@
+{
+  "aoi_polygon_lonlat": [
+    [
+      -74.133986,
+      40.6437461
+    ],
+    [
+      -74.1504615,
+      39.7817204
+    ],
+    [
+      -73.2141041,
+      39.8934973
+    ],
+    [
+      -71.808195,
+      40.305279
+    ],
+    [
+      -69.145022,
+      40.7083118
+    ],
+    [
+      -68.9198568,
+      41.9743756
+    ],
+    [
+      -69.4938797,
+      42.6547458
+    ],
+    [
+      -70.8723296,
+      42.2616367
+    ],
+    [
+      -74.1322623,
+      40.6427692
+    ]
+  ],
+  "default_palette": "tuna",
+  "servers": [
+    "https://coastwatch.noaa.gov/erddap",
+    "https://coastwatch.pfeg.noaa.gov/erddap",
+    "https://upwell.pfeg.noaa.gov/erddap"
+  ],
+  "primary_search_terms": [
+    "MUR",
+    "GHRSST",
+    "analysed_sst"
+  ],
+  "fallback_search_terms": [
+    "OISST",
+    "ncdcOisst2Agg",
+    "sst"
+  ],
+  "cache_days": 7
+}
