@@ -39,9 +39,9 @@
   ],
   "default_palette": "tuna",
   "servers": [
-    "https://coastwatch.noaa.gov/erddap",
     "https://coastwatch.pfeg.noaa.gov/erddap",
-    "https://upwell.pfeg.noaa.gov/erddap"
+    "https://upwell.pfeg.noaa.gov/erddap",
+    "https://coastwatch.noaa.gov/erddap"
   ],
   "primary_search_terms": [
     "MUR",

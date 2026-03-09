@@ -1,19 +1,34 @@
 # Offshore SST Map — NJ→MA AOI
 
-Daily sea-surface temperature (SST) for the offshore corridor from New York Harbor to Massachusetts (coastline → ~80 nm).  
-Data comes from NOAA CoastWatch ERDDAP (prefers **MUR GHRSST**; falls back to **OISST**). Temperatures are shown in **°F (whole degrees)**.
+Daily sea-surface temperature (SST) for the offshore corridor from New York Harbor to Massachusetts (coastline → ~80 nm).
+Data comes from NOAA CoastWatch ERDDAP (prefers **MUR GHRSST 1km**; falls back to **OISST**). Temperatures are shown in **°F (whole degrees)**.
 
-## What’s new (2025‑08‑10)
-- **Hover‑only SST probe**: Leaflet‑native tooltip grid shows °F when you move the mouse over the colored overlay (no clicks required).
-- **Lock map view**: Prevents any re‑centering/zoom changes while you interact. (We only auto‑fit on the very first render.)
-- **Orientation & AOI mask solidified**: Raster is correctly oriented north‑up, west‑left; pixels outside the polygon are masked to transparent.
-- **Adaptive/fixed color scale**: 5th–95th percentile by default (guard‑railed 48–90 °F), or lock to 48–90 °F.
-- **Visual upsample**: 1×/2×/3× display‑only smoothing for cleaner gradients.
+## What's new (v1.0 — Dash Migration)
+- **Migrated from Streamlit to Dash + Dash Leaflet** — smooth pan/zoom with no page reloads
+- **Fixed MUR dataset selection** — now correctly fetches 1km MUR data instead of 5km BLENDED
+- **Fixed winter/spring color scale** — temperatures below 48°F now show proper color differentiation
+- **Improved error handling** — server failures fall through to next server instead of crashing
+- **Auto date retry** — if latest date has no data (MUR latency), automatically tries older dates
+- **Faster rendering** — vectorized color mapping (~100x faster than per-pixel loop)
+- **Deployable** — ready for Render, Railway, or any WSGI host
 
-> If your map ever “jumped” before, turn on **Lock map view** in the sidebar. That keeps your current center/zoom stable.
-
-## Setup
+## Setup (Local)
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+python app.py
+```
+Open http://localhost:8050
+
+## Deploy to Render
+1. Push this repo to GitHub
+2. Connect the repo on [render.com](https://render.com)
+3. Render auto-detects the `Procfile` and deploys
+
+## Controls
+- **Days back**: Select 1-7 days back from today (UTC)
+- **Lock color scale**: Toggle between adaptive (percentile-based) or fixed (30-90°F) scale
+- **Visual resolution**: 1x native, 2x or 3x upsampled for smoother gradients
+- **Tooltip density**: Sparse/Normal/Dense hover grid
+- **Fetch SST**: Click to load data for the selected date
