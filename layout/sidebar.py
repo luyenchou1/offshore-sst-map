@@ -66,7 +66,7 @@ def build_sidebar():
         style={
             "padding": "1.25rem",
             "backgroundColor": "#f8f9fa",
-            "height": "calc(100vh - 80px)",
+            "height": "calc(100vh - 90px)",
             "overflowY": "auto",
         },
     )

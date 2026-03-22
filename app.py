@@ -288,8 +288,15 @@ app.clientside_callback(
         var overlay = document.getElementById('map-loading-overlay');
         if (overlay) {
             overlay.style.display = 'flex';
+            overlay.style.alignItems = 'center';
+            overlay.style.justifyContent = 'center';
         }
-        return window.dash_clientside.no_update;
+        var btn = document.getElementById('fetch-btn');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Loading...';
+        }
+        return Date.now();
     }
     """,
     Output("loading-trigger", "data"),

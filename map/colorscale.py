@@ -91,10 +91,10 @@ def build_legend_component(vmin: float, vmax: float):
         ],
         style={
             "position": "absolute",
-            "bottom": "30px",
+            "bottom": "40px",
             "right": "10px",
-            "zIndex": "1000",
-            "backgroundColor": "rgba(255,255,255,0.9)",
+            "zIndex": "999",
+            "backgroundColor": "rgba(255,255,255,0.92)",
             "padding": "8px 12px",
             "borderRadius": "4px",
             "boxShadow": "0 1px 4px rgba(0,0,0,0.3)",

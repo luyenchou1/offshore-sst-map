@@ -4,6 +4,8 @@ import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 from dash import html
 
+MAP_HEIGHT = "calc(100vh - 90px)"
+
 
 def build_map():
     return dbc.Col(
@@ -17,7 +19,7 @@ def build_map():
                         minZoom=5,
                         maxZoom=12,
                         style={
-                            "height": "calc(100vh - 80px)",
+                            "height": "100%",
                             "width": "100%",
                             "cursor": "crosshair",
                         },
@@ -100,7 +102,12 @@ def build_map():
                         },
                     ),
                 ],
-                style={"position": "relative"},
+                # Wrapper: fixed height, clips everything inside
+                style={
+                    "position": "relative",
+                    "height": MAP_HEIGHT,
+                    "overflow": "hidden",
+                },
             )
         ],
         width=10,
