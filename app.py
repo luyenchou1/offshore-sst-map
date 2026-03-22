@@ -189,33 +189,21 @@ def handle_map_click(click_data, sst_data):
     temp = arrF[lat_idx, lon_idx]
     if not np.isfinite(temp):
         return [
-            dl.Marker(
-                position=[lat, lng],
-                children=dl.Popup("No data here"),
+            dl.CircleMarker(
+                center=[lat, lng],
+                radius=6,
+                pathOptions={"color": "#e11d48", "weight": 2, "fillOpacity": 0.3},
+                children=[dl.Tooltip("No data", permanent=True)],
             )
         ]
 
+    label = f"{int(temp)}°F  ({lat:.2f}°N, {abs(lng):.2f}°W)"
     return [
-        dl.Marker(
-            position=[lat, lng],
-            children=dl.Popup(
-                html.Div(
-                    [
-                        html.Span(
-                            f"{int(temp)}°F",
-                            style={
-                                "fontSize": "1.2rem",
-                                "fontWeight": "bold",
-                            },
-                        ),
-                        html.Br(),
-                        html.Span(
-                            f"{lat:.3f}°N, {abs(lng):.3f}°W",
-                            style={"fontSize": "0.8rem", "color": "#666"},
-                        ),
-                    ]
-                )
-            ),
+        dl.CircleMarker(
+            center=[lat, lng],
+            radius=6,
+            pathOptions={"color": "#e11d48", "weight": 2, "fillOpacity": 0.3},
+            children=[dl.Tooltip(label, permanent=True, direction="top")],
         )
     ]
 
