@@ -38,7 +38,7 @@ def compute_color_bounds(arrF: np.ndarray, locked: bool = False):
     return vmin, vmax
 
 
-def build_legend_component(vmin: float, vmax: float):
+def build_legend_component(vmin: float, vmax: float, res_km: float = None):
     """Return a Dash html.Div positioned as a map overlay color legend."""
     gradient = ", ".join(SST_COLORS)
     n_ticks = 5
@@ -59,36 +59,60 @@ def build_legend_component(vmin: float, vmax: float):
             )
         )
 
+    # Format resolution label
+    if res_km is not None:
+        if res_km < 2:
+            res_label = f"{res_km:.1f} km grid"
+        else:
+            res_label = f"{res_km:.0f} km grid"
+    else:
+        res_label = None
+
+    children = [
+        html.Div(
+            "SST (°F)",
+            style={
+                "fontWeight": "600",
+                "fontSize": "12px",
+                "marginBottom": "4px",
+                "color": "#333",
+            },
+        ),
+        html.Div(
+            style={
+                "width": "200px",
+                "height": "14px",
+                "background": f"linear-gradient(to right, {gradient})",
+                "borderRadius": "2px",
+                "border": "1px solid #999",
+            }
+        ),
+        html.Div(
+            ticks,
+            style={
+                "position": "relative",
+                "width": "200px",
+                "height": "18px",
+                "marginTop": "2px",
+            },
+        ),
+    ]
+
+    if res_label:
+        children.append(
+            html.Div(
+                res_label,
+                style={
+                    "fontSize": "10px",
+                    "color": "#666",
+                    "marginTop": "4px",
+                    "textAlign": "right",
+                },
+            )
+        )
+
     return html.Div(
-        [
-            html.Div(
-                "SST (°F)",
-                style={
-                    "fontWeight": "600",
-                    "fontSize": "12px",
-                    "marginBottom": "4px",
-                    "color": "#333",
-                },
-            ),
-            html.Div(
-                style={
-                    "width": "200px",
-                    "height": "14px",
-                    "background": f"linear-gradient(to right, {gradient})",
-                    "borderRadius": "2px",
-                    "border": "1px solid #999",
-                }
-            ),
-            html.Div(
-                ticks,
-                style={
-                    "position": "relative",
-                    "width": "200px",
-                    "height": "18px",
-                    "marginTop": "2px",
-                },
-            ),
-        ],
+        children,
         style={
             "position": "absolute",
             "bottom": "40px",

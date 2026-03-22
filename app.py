@@ -138,9 +138,8 @@ def fetch_sst_data(n_clicks, n_intervals, days_back):
     Output("legend-container", "children"),
     Input("sst-store", "data"),
     Input("lock-scale", "value"),
-    Input("upsample-factor", "value"),
 )
-def render_map_layers(sst_data, lock_scale, up_factor):
+def render_map_layers(sst_data, lock_scale):
     aoi_geojson = build_aoi_geojson(CFG)
 
     if not sst_data:
@@ -150,18 +149,25 @@ def render_map_layers(sst_data, lock_scale, up_factor):
     lats = np.array(sst_data["lats"], dtype=np.float64)
     lons = np.array(sst_data["lons"], dtype=np.float64)
 
+    # Compute grid resolution from lat/lon step size
+    if len(lats) > 1:
+        deg_step = abs(float(lats[1] - lats[0]))
+        res_km = deg_step * 111.0  # 1° lat ≈ 111 km
+    else:
+        res_km = None
+
     # Data is already oriented and masked from the fetch callback
     locked = "lock" in (lock_scale or [])
     vmin, vmax = compute_color_bounds(arrF, locked=locked)
 
-    arrF_vis = upsample_visual(arrF, up_factor or 2)
+    arrF_vis = upsample_visual(arrF, 2)  # hardcoded 2x upsample
     overlay_url = sst_to_base64_png(arrF_vis, vmin, vmax)
     bounds = [
         [float(np.min(lats)), float(np.min(lons))],
         [float(np.max(lats)), float(np.max(lons))],
     ]
 
-    legend = build_legend_component(vmin, vmax)
+    legend = build_legend_component(vmin, vmax, res_km=res_km)
     poi_markers = build_poi_markers(arrF, lats, lons)
 
     return overlay_url, bounds, aoi_geojson, poi_markers, legend

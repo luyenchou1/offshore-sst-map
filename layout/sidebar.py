@@ -24,18 +24,6 @@ def build_sidebar():
                 value=[],
                 className="mb-3",
             ),
-            html.Label("Visual resolution", className="fw-bold"),
-            dcc.Dropdown(
-                id="upsample-factor",
-                options=[
-                    {"label": "1x (native)", "value": 1},
-                    {"label": "2x upsample", "value": 2},
-                    {"label": "3x upsample", "value": 3},
-                ],
-                value=2,
-                clearable=False,
-                className="mb-3",
-            ),
             dbc.Button(
                 "Fetch SST",
                 id="fetch-btn",
