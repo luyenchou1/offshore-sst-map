@@ -125,7 +125,7 @@ def build_poi_markers(arrF=None, lats=None, lons=None, selected=None):
                 radius=6,
                 pathOptions=_MARKER_STYLE,
                 children=[
-                    dl.Tooltip(
+                    dl.Popup(
                         html.Div(
                             tooltip_children,
                             style={
@@ -134,9 +134,6 @@ def build_poi_markers(arrF=None, lats=None, lons=None, selected=None):
                                 "paddingLeft": "6px",
                             },
                         ),
-                        direction="top",
-                        offset=[0, -10],
-                        pane="tooltipPane",
                     )
                 ],
             )
@@ -179,7 +176,7 @@ def build_poi_markers(arrF=None, lats=None, lons=None, selected=None):
                 bounds=[[d["sw"][0], d["sw"][1]], [d["ne"][0], d["ne"][1]]],
                 pathOptions=_DUMP_STYLE,
                 children=[
-                    dl.Tooltip(
+                    dl.Popup(
                         html.Div(
                             dump_children,
                             style={
@@ -188,8 +185,6 @@ def build_poi_markers(arrF=None, lats=None, lons=None, selected=None):
                                 "paddingLeft": "6px",
                             },
                         ),
-                        direction="top",
-                        pane="tooltipPane",
                     )
                 ],
             )

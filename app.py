@@ -51,7 +51,7 @@ app.layout = dbc.Container(
                     ),
                     html.P(
                         "7-day sea-surface temperatures (°F). "
-                        "Click map to read temps. Hover spots for details.",
+                        "Click map to read temps. Click spots for details.",
                         className="text-muted mb-1",
                         style={"fontSize": "0.8rem"},
                     ),
