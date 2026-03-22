@@ -281,20 +281,16 @@ def render_click_marker(click_pos, sst_data):
     ]
 
 
-# ---- Clientside: show loading overlay when fetch button is clicked ----
+# ---- Clientside: show map loading overlay immediately on fetch click ----
+# Only touches the overlay div (whose style is properly overwritten by
+# the server callback via Output).  Never manipulate the button DOM
+# directly — that conflicts with Dash's virtual-DOM reconciliation.
 app.clientside_callback(
     """
     function(n_clicks) {
         var overlay = document.getElementById('map-loading-overlay');
         if (overlay) {
             overlay.style.display = 'flex';
-            overlay.style.alignItems = 'center';
-            overlay.style.justifyContent = 'center';
-        }
-        var btn = document.getElementById('fetch-btn');
-        if (btn) {
-            btn.disabled = true;
-            btn.textContent = 'Loading...';
         }
         return Date.now();
     }
