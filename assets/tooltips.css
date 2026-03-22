@@ -1,3 +1,9 @@
+/* Make the SST image overlay transparent to mouse events so POI
+   markers underneath can receive hover/click. */
+.leaflet-image-layer {
+    pointer-events: none !important;
+}
+
 /* SST click-to-read tooltip */
 .sst-tooltip .leaflet-tooltip {
     background: white;

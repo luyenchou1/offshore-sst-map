@@ -43,8 +43,18 @@ def build_map():
                                 opacity=0.78,
                                 interactive=False,
                             ),
-                            dl.LayerGroup(id="poi-layer"),
-                            dl.LayerGroup(id="click-marker"),
+                            # Custom panes above the overlay pane (z-index 400)
+                            # so POIs and click markers receive hover/click events
+                            dl.Pane(
+                                dl.LayerGroup(id="poi-layer"),
+                                name="poi-pane",
+                                style={"zIndex": 650},
+                            ),
+                            dl.Pane(
+                                dl.LayerGroup(id="click-marker"),
+                                name="click-pane",
+                                style={"zIndex": 660},
+                            ),
                         ],
                     ),
                     html.Div(id="legend-container"),
