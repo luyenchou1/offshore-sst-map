@@ -8,6 +8,7 @@ Bug fixes applied:
 
 import io
 import logging
+import re
 import tempfile
 from datetime import timedelta
 from typing import Dict, List, Optional, Tuple
@@ -28,7 +29,7 @@ def erddap_search(server: str, terms: List[str]) -> Optional[pd.DataFrame]:
         r = requests.get(
             f"{server}/search/index.csv",
             params={"searchFor": " ".join(terms)},
-            timeout=25,
+            timeout=12,
         )
         r.raise_for_status()
         return pd.read_csv(io.StringIO(r.text))
@@ -104,8 +105,9 @@ def pick_dataset(
 
 
 def guess_var_from_das(das_text: str) -> Optional[str]:
+    """Match actual variable definitions in ERDDAP DAS (e.g. '  sst {')."""
     for v in ["analysed_sst", "sst", "sea_surface_temperature", "temperature"]:
-        if v in das_text:
+        if re.search(rf'^\s+{v}\s*\{{', das_text, re.MULTILINE):
             return v
     return None
 
@@ -115,7 +117,7 @@ def fetch_grid(
 ):
     """Download a NetCDF grid slice from ERDDAP and return (xarray.Dataset, var_name)."""
     das_url = f"{server}/griddap/{dsid}.das"
-    r = requests.get(das_url, timeout=25)
+    r = requests.get(das_url, timeout=15)
     r.raise_for_status()
     varname = guess_var_from_das(r.text)
     if not varname:
@@ -130,7 +132,7 @@ def fetch_grid(
         f"[({minlon}):1:({maxlon})]"
     )
     nc_url = f"{server}/griddap/{dsid}.nc?{query}"
-    rr = requests.get(nc_url, timeout=120)
+    rr = requests.get(nc_url, timeout=60)
     rr.raise_for_status()
 
     with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tf:

@@ -1,5 +1,6 @@
 """Points of interest (fishing spots) and AOI outline for the map."""
 
+import numpy as np
 import dash_leaflet as dl
 
 POIS = [
@@ -13,10 +14,22 @@ POIS = [
 ]
 
 
-def build_poi_markers():
-    """Return a list of dash-leaflet CircleMarker components for POIs."""
+def _lookup_temp(lat, lon, arrF, lats, lons):
+    """Find the temperature at the nearest grid point."""
+    lat_idx = np.argmin(np.abs(lats - lat))
+    lon_idx = np.argmin(np.abs(lons - lon))
+    val = arrF[lat_idx, lon_idx]
+    return int(val) if np.isfinite(val) else None
+
+
+def build_poi_markers(arrF=None, lats=None, lons=None):
+    """Return CircleMarker components for POIs, with SST if data is available."""
     markers = []
     for name, lat, lon in POIS:
+        temp = None
+        if arrF is not None and lats is not None and lons is not None:
+            temp = _lookup_temp(lat, lon, arrF, lats, lons)
+        label = f"{name} — {temp}°F" if temp is not None else name
         markers.append(
             dl.CircleMarker(
                 center=[lat, lon],
@@ -28,7 +41,7 @@ def build_poi_markers():
                     "fillColor": "#16a34a",
                     "fillOpacity": 0.9,
                 },
-                children=[dl.Tooltip(name)],
+                children=[dl.Tooltip(label)],
             )
         )
     return markers

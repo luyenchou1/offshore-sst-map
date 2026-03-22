@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["-c", "from app import app; app.run(debug=False, port=8050, threaded=True)"],
+      "port": 8050
+    }
+  ]
+}

@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 import dash
 import dash_bootstrap_components as dbc
+import dash_leaflet as dl
 import numpy as np
 from dash import Input, Output, State, dcc, html
 
@@ -22,7 +23,6 @@ from layout.sidebar import build_sidebar
 from map.colorscale import build_legend_component, compute_color_bounds
 from map.overlay import sst_to_base64_png
 from map.pois import build_aoi_geojson, build_poi_markers
-from map.tooltips import build_tooltip_geojson
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ app.layout = dbc.Container(
                     ),
                     html.P(
                         "Daily SST from NOAA CoastWatch ERDDAP (MUR preferred). "
-                        "Temperatures in °F. Pan/zoom freely — no page reloads.",
+                        "Temperatures in °F. Click the map to read temperatures.",
                         className="text-muted mb-2",
                         style={"fontSize": "0.85rem"},
                     ),
@@ -64,6 +64,8 @@ app.layout = dbc.Container(
             fullscreen=True,
             style={"backgroundColor": "rgba(255,255,255,0.7)"},
         ),
+        # Auto-fetch SST on page load (fires once after 500ms)
+        dcc.Interval(id="auto-fetch", interval=500, max_intervals=1),
     ],
     fluid=True,
     style={"padding": "0 0.5rem"},
@@ -76,31 +78,40 @@ app.layout = dbc.Container(
     Output("fetch-status", "children"),
     Output("loading-target", "children"),
     Input("fetch-btn", "n_clicks"),
+    Input("auto-fetch", "n_intervals"),
     State("days-back", "value"),
     prevent_initial_call=True,
 )
-def fetch_sst_data(n_clicks, days_back):
+def fetch_sst_data(n_clicks, n_intervals, days_back):
     target_date = datetime.now(timezone.utc).date() - timedelta(days=days_back - 1)
     try:
         sst = get_sst(target_date, CFG)
+
+        # Pre-process: orient and mask once so downstream callbacks are simpler
+        arrF = sst["arrF"]
+        lats = sst["lats"]
+        lons = sst["lons"]
+        arrF, lats, lons = orient_to_leaflet(arrF, lats, lons)
+        arrF = mask_aoi_rasterized(arrF, lats, lons, CFG)
+        arrF = mask_land_rasterized(arrF, lats, lons)
+
         payload = {
             "server": sst["server"],
             "dataset_id": sst["dataset_id"],
             "dataset_title": sst["dataset_title"],
             "var": sst["var"],
             "units": sst["units"],
-            "arrF": sst["arrF"].tolist(),
-            "lats": sst["lats"].tolist(),
-            "lons": sst["lons"].tolist(),
+            "arrF": arrF.tolist(),
+            "lats": lats.tolist(),
+            "lons": lons.tolist(),
             "date_used": sst.get("date_used", str(target_date)),
         }
+        date_str = sst.get("date_used", str(target_date))
         status = dbc.Alert(
             [
-                html.Strong(f"{sst['dataset_id']}"),
-                f" — {sst['dataset_title']}",
+                html.Strong(f"Loaded: {date_str}"),
                 html.Br(),
-                f"Date: {sst.get('date_used', target_date)} | "
-                f"Var: {sst['var']} ({sst['units']})",
+                f"{sst['dataset_id']}",
             ],
             color="success",
             className="py-2 px-3 mb-0",
@@ -120,36 +131,27 @@ def fetch_sst_data(n_clicks, days_back):
 @app.callback(
     Output("sst-overlay", "url"),
     Output("sst-overlay", "bounds"),
-    Output("tooltip-layer", "data"),
     Output("aoi-outline", "data"),
     Output("poi-layer", "children"),
     Output("legend-container", "children"),
     Input("sst-store", "data"),
     Input("lock-scale", "value"),
     Input("upsample-factor", "value"),
-    Input("tooltip-density", "value"),
 )
-def render_map_layers(sst_data, lock_scale, up_factor, tip_density):
+def render_map_layers(sst_data, lock_scale, up_factor):
     aoi_geojson = build_aoi_geojson(CFG)
-    poi_markers = build_poi_markers()
 
     if not sst_data:
-        return "", [[0, 0], [0, 0]], None, aoi_geojson, poi_markers, ""
+        return "", [[0, 0], [0, 0]], aoi_geojson, build_poi_markers(), ""
 
-    arrF = np.array(sst_data["arrF"])
-    lats = np.array(sst_data["lats"])
-    lons = np.array(sst_data["lons"])
+    arrF = np.array(sst_data["arrF"], dtype=np.float64)
+    lats = np.array(sst_data["lats"], dtype=np.float64)
+    lons = np.array(sst_data["lons"], dtype=np.float64)
 
-    # Orient, mask AOI, mask land
-    arrF, lats, lons = orient_to_leaflet(arrF, lats, lons)
-    arrF = mask_aoi_rasterized(arrF, lats, lons, CFG)
-    arrF = mask_land_rasterized(arrF, lats, lons)
-
-    # Color bounds (Bug 2 fix applied in compute_color_bounds)
+    # Data is already oriented and masked from the fetch callback
     locked = "lock" in (lock_scale or [])
     vmin, vmax = compute_color_bounds(arrF, locked=locked)
 
-    # Upsample for visual smoothness, then render to PNG
     arrF_vis = upsample_visual(arrF, up_factor or 2)
     overlay_url = sst_to_base64_png(arrF_vis, vmin, vmax)
     bounds = [
@@ -157,11 +159,64 @@ def render_map_layers(sst_data, lock_scale, up_factor, tip_density):
         [float(np.max(lats)), float(np.max(lons))],
     ]
 
-    # Tooltip GeoJSON + legend
-    tooltip_data = build_tooltip_geojson(arrF, lats, lons, tip_density or "Normal")
     legend = build_legend_component(vmin, vmax)
+    poi_markers = build_poi_markers(arrF, lats, lons)
 
-    return overlay_url, bounds, tooltip_data, aoi_geojson, poi_markers, legend
+    return overlay_url, bounds, aoi_geojson, poi_markers, legend
+
+
+# ---- Callback 3: Click-to-read temperature ----
+@app.callback(
+    Output("click-marker", "children"),
+    Input("sst-map", "click_lat_lng"),
+    State("sst-store", "data"),
+    prevent_initial_call=True,
+)
+def handle_map_click(click_lat_lng, sst_data):
+    if not click_lat_lng or not sst_data:
+        return []
+
+    lat, lng = click_lat_lng
+    arrF = np.array(sst_data["arrF"], dtype=np.float64)
+    lats = np.array(sst_data["lats"], dtype=np.float64)
+    lons = np.array(sst_data["lons"], dtype=np.float64)
+
+    # Find nearest grid point
+    lat_idx = np.argmin(np.abs(lats - lat))
+    lon_idx = np.argmin(np.abs(lons - lng))
+
+    temp = arrF[lat_idx, lon_idx]
+    if not np.isfinite(temp):
+        return [
+            dl.Marker(
+                position=[lat, lng],
+                children=dl.Popup("No data here"),
+            )
+        ]
+
+    return [
+        dl.Marker(
+            position=[lat, lng],
+            children=dl.Popup(
+                html.Div(
+                    [
+                        html.Span(
+                            f"{int(temp)}°F",
+                            style={
+                                "fontSize": "1.2rem",
+                                "fontWeight": "bold",
+                            },
+                        ),
+                        html.Br(),
+                        html.Span(
+                            f"{lat:.3f}°N, {abs(lng):.3f}°W",
+                            style={"fontSize": "0.8rem", "color": "#666"},
+                        ),
+                    ]
+                )
+            ),
+        )
+    ]
 
 
 if __name__ == "__main__":

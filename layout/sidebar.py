@@ -13,7 +13,7 @@ def build_sidebar():
                 id="days-back",
                 min=1,
                 max=7,
-                value=3,
+                value=5,
                 step=1,
                 marks={i: str(i) for i in range(1, 8)},
             ),
@@ -36,17 +36,6 @@ def build_sidebar():
                 clearable=False,
                 className="mb-3",
             ),
-            html.Label("Tooltip density", className="fw-bold"),
-            dcc.Dropdown(
-                id="tooltip-density",
-                options=[
-                    {"label": m, "value": m}
-                    for m in ["Sparse", "Normal", "Dense"]
-                ],
-                value="Normal",
-                clearable=False,
-                className="mb-3",
-            ),
             dbc.Button(
                 "Fetch SST",
                 id="fetch-btn",
@@ -54,6 +43,12 @@ def build_sidebar():
                 className="w-100 mt-2",
             ),
             html.Div(id="fetch-status", className="mt-3"),
+            html.Hr(),
+            html.P(
+                "Click anywhere on the map to read SST at that point.",
+                className="text-muted mb-0",
+                style={"fontSize": "0.8rem"},
+            ),
         ],
         width=2,
         style={
