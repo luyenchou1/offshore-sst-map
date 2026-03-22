@@ -168,15 +168,16 @@ def render_map_layers(sst_data, lock_scale, up_factor):
 # ---- Callback 3: Click-to-read temperature ----
 @app.callback(
     Output("click-marker", "children"),
-    Input("sst-map", "click_lat_lng"),
+    Input("sst-map", "clickData"),
     State("sst-store", "data"),
     prevent_initial_call=True,
 )
-def handle_map_click(click_lat_lng, sst_data):
-    if not click_lat_lng or not sst_data:
+def handle_map_click(click_data, sst_data):
+    if not click_data or not sst_data:
         return []
 
-    lat, lng = click_lat_lng
+    lat = click_data["latlng"]["lat"]
+    lng = click_data["latlng"]["lng"]
     arrF = np.array(sst_data["arrF"], dtype=np.float64)
     lats = np.array(sst_data["lats"], dtype=np.float64)
     lons = np.array(sst_data["lons"], dtype=np.float64)

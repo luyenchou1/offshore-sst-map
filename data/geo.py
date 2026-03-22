@@ -103,9 +103,6 @@ def mask_aoi_rasterized(
             dtype="uint8",
         ).astype(bool)
 
-        # Flip mask vertically because rasterize produces south-up
-        aoi_mask = np.flipud(aoi_mask)
-
         out = arrF.copy()
         out[~aoi_mask] = np.nan
         return out
@@ -178,9 +175,6 @@ def mask_land_rasterized(
             all_touched=True,
             dtype="uint8",
         ).astype(bool)
-
-        # Flip mask vertically because rasterize produces south-up
-        land_mask = np.flipud(land_mask)
 
         out = arrF.copy()
         out[land_mask] = np.nan
