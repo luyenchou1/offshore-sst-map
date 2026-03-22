@@ -42,18 +42,14 @@ def build_sidebar():
                 color="primary",
                 className="w-100 mt-2",
             ),
-            html.Div(
-                id="fetch-status",
-                className="mt-3",
-                children=dbc.Alert(
-                    [
-                        dbc.Spinner(size="sm", color="info"),
-                        " Loading SST data...",
-                    ],
-                    color="info",
-                    className="py-2 px-3 mb-0",
-                    style={"fontSize": "0.8rem"},
-                ),
+            # Spinner wraps the fetch-status area — Dash automatically shows
+            # the spinner while any callback updating fetch-status is running
+            dbc.Spinner(
+                html.Div(id="fetch-status", className="mt-3"),
+                color="primary",
+                type="border",
+                size="sm",
+                spinner_style={"marginTop": "1rem"},
             ),
             html.Hr(),
             html.P(

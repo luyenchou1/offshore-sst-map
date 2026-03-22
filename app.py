@@ -58,8 +58,6 @@ app.layout = dbc.Container(
         dbc.Row([build_sidebar(), build_map()]),
         dcc.Store(id="sst-store"),
         dcc.Store(id="click-pos"),  # persists clicked lat/lng across date changes
-        dcc.Store(id="loading-trigger"),  # clientside callback target
-        html.Div(id="loading-target", style={"display": "none"}),
         # Auto-fetch SST on page load (fires once after 500ms)
         dcc.Interval(id="auto-fetch", interval=500, max_intervals=1),
     ],
@@ -72,9 +70,6 @@ app.layout = dbc.Container(
 @app.callback(
     Output("sst-store", "data"),
     Output("fetch-status", "children"),
-    Output("loading-target", "children"),
-    Output("fetch-btn", "children"),
-    Output("fetch-btn", "disabled"),
     Output("map-loading-overlay", "style"),
     Input("fetch-btn", "n_clicks"),
     Input("auto-fetch", "n_intervals"),
@@ -119,15 +114,17 @@ def fetch_sst_data(n_clicks, n_intervals, days_back):
             className="py-2 px-3 mb-0",
             style={"fontSize": "0.8rem"},
         )
-        return payload, status, "", "Fetch SST", False, hidden
+        return payload, status, hidden
     except Exception as e:
         logger.exception("SST fetch failed")
         return (
             dash.no_update,
-            dbc.Alert(f"Error: {e}", color="danger", className="py-2 px-3 mb-0"),
-            "",
-            "Fetch SST",
-            False,
+            dbc.Alert(
+                f"Error: {e}",
+                color="danger",
+                className="py-2 px-3 mb-0",
+                style={"fontSize": "0.8rem"},
+            ),
             hidden,
         )
 
@@ -279,26 +276,6 @@ def render_click_marker(click_pos, sst_data):
             ],
         )
     ]
-
-
-# ---- Clientside: show map loading overlay immediately on fetch click ----
-# Only touches the overlay div (whose style is properly overwritten by
-# the server callback via Output).  Never manipulate the button DOM
-# directly — that conflicts with Dash's virtual-DOM reconciliation.
-app.clientside_callback(
-    """
-    function(n_clicks) {
-        var overlay = document.getElementById('map-loading-overlay');
-        if (overlay) {
-            overlay.style.display = 'flex';
-        }
-        return Date.now();
-    }
-    """,
-    Output("loading-trigger", "data"),
-    Input("fetch-btn", "n_clicks"),
-    prevent_initial_call=True,
-)
 
 
 if __name__ == "__main__":
