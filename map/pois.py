@@ -51,7 +51,8 @@ def build_poi_markers(arrF=None, lats=None, lons=None):
                     dl.Tooltip(
                         label,
                         direction="top",
-                        offset=[0, -6],
+                        offset=[0, -10],
+                        pane="tooltipPane",
                     )
                 ],
             )
