@@ -32,9 +32,10 @@ def build_map():
                                 id="aoi-outline",
                                 options={
                                     "style": {
-                                        "color": "#222",
-                                        "weight": 2,
+                                        "color": "#94a3b8",
+                                        "weight": 1.5,
                                         "fillOpacity": 0,
+                                        "dashArray": "6 4",
                                     }
                                 },
                             ),

@@ -36,7 +36,7 @@ with open("config.json") as f:
 app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.FLATLY],
-    title="Offshore SST (NJ→MA)",
+    title="Offshore SST Analyzer",
 )
 server = app.server  # for gunicorn
 
@@ -45,15 +45,15 @@ app.layout = dbc.Container(
         dbc.Row(
             dbc.Col(
                 [
-                    html.H3(
-                        "Offshore SST — NJ to MA AOI",
+                    html.H4(
+                        "Offshore SST Analyzer",
                         className="mt-2 mb-0",
                     ),
                     html.P(
-                        "Daily SST from NOAA CoastWatch ERDDAP (MUR preferred). "
-                        "Temperatures in °F. Click the map to read temperatures.",
-                        className="text-muted mb-2",
-                        style={"fontSize": "0.85rem"},
+                        "7-day sea-surface temperatures (°F). "
+                        "Click map to read temps. Hover spots for details.",
+                        className="text-muted mb-1",
+                        style={"fontSize": "0.8rem"},
                     ),
                 ]
             )
@@ -198,15 +198,10 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
             d = datetime.strptime(rd["date"], "%Y-%m-%d")
             marks[i] = str(d.day)
 
-        status = dbc.Alert(
-            [
-                html.Strong(f"Loaded: {date_start} to {date_end}"),
-                html.Br(),
-                f"{sst['dataset_id']} ({num_days} days)",
-            ],
-            color="success",
-            className="py-2 px-3 mb-0",
-            style={"fontSize": "0.8rem"},
+        status = html.Div(
+            f"MUR 1km \u2022 {num_days} days loaded",
+            className="text-success",
+            style={"fontSize": "0.75rem", "fontWeight": "500"},
         )
 
         anim_visible = {"display": "block"}
@@ -243,15 +238,17 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
     Input("sst-store", "data"),
     Input("frame-slider", "value"),
     Input("lock-scale", "value"),
+    Input("show-pois", "value"),
     prevent_initial_call="initial_duplicate",
 )
-def render_map_layers(sst_data, frame_idx, lock_scale):
+def render_map_layers(sst_data, frame_idx, lock_scale, show_pois):
     aoi_geojson = build_aoi_geojson(CFG)
+    pois_visible = "show" in (show_pois or [])
 
     hidden = {"display": "none"}
 
     if not sst_data or "frames" not in sst_data:
-        return "", [[0, 0], [0, 0]], aoi_geojson, build_poi_markers(), "", dash.no_update
+        return "", [[0, 0], [0, 0]], aoi_geojson, build_poi_markers(show=pois_visible), "", dash.no_update
 
     frame_idx = frame_idx or 0
     num_frames = len(sst_data["frames"])
@@ -273,7 +270,7 @@ def render_map_layers(sst_data, frame_idx, lock_scale):
     res_km = sst_data.get("res_km")
 
     legend = build_legend_component(vmin, vmax, res_km=res_km)
-    poi_markers = build_poi_markers(arrF, lats, lons)
+    poi_markers = build_poi_markers(arrF, lats, lons, show=pois_visible)
 
     return overlay_url, bounds, aoi_geojson, poi_markers, legend, hidden
 
@@ -386,7 +383,7 @@ def render_click_marker(click_pos, sst_data, frame_idx):
 )
 def toggle_play_pause(n_clicks, currently_disabled):
     if currently_disabled:
-        return False, "\u23F8 Pause"
+        return False, "\u23F8"  # pause icon
     else:
         return True, "\u25B6 Play"
 
