@@ -10,6 +10,7 @@ import io
 import logging
 import re
 import tempfile
+import time
 from datetime import timedelta
 from typing import Dict, List, Optional, Tuple
 
@@ -29,7 +30,7 @@ def erddap_search(server: str, terms: List[str]) -> Optional[pd.DataFrame]:
         r = requests.get(
             f"{server}/search/index.csv",
             params={"searchFor": " ".join(terms)},
-            timeout=12,
+            timeout=8,
         )
         r.raise_for_status()
         return pd.read_csv(io.StringIO(r.text))
@@ -117,7 +118,7 @@ def fetch_grid(
 ):
     """Download a NetCDF grid slice from ERDDAP and return (xarray.Dataset, var_name)."""
     das_url = f"{server}/griddap/{dsid}.das"
-    r = requests.get(das_url, timeout=15)
+    r = requests.get(das_url, timeout=10)
     r.raise_for_status()
     varname = guess_var_from_das(r.text)
     if not varname:
@@ -132,7 +133,7 @@ def fetch_grid(
         f"[({minlon}):1:({maxlon})]"
     )
     nc_url = f"{server}/griddap/{dsid}.nc?{query}"
-    rr = requests.get(nc_url, timeout=60)
+    rr = requests.get(nc_url, timeout=20)
     rr.raise_for_status()
 
     with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tf:
@@ -150,10 +151,14 @@ def get_sst(target_date, config: Dict) -> Dict:
       - Requires MUR when using primary search terms (Bug 1 fix)
       - Wraps fetch_grid in try/except per server (Bug 3 fix)
     """
+    MAX_SECONDS = 25  # total time budget — must finish within Dash's timeout
+
     aoi = [tuple(pt) for pt in config["aoi_polygon_lonlat"]]
     lons_aoi = [p[0] for p in aoi]
     lats_aoi = [p[1] for p in aoi]
     bbox = (min(lons_aoi), min(lats_aoi), max(lons_aoi), max(lats_aoi))
+
+    t0 = time.monotonic()
 
     # Bug 4 fix: try up to 3 dates to handle MUR data latency
     for date_offset in range(3):
@@ -163,6 +168,12 @@ def get_sst(target_date, config: Dict) -> Dict:
             is_primary = terms == config["primary_search_terms"]
 
             for server in config["servers"]:
+                if time.monotonic() - t0 > MAX_SECONDS:
+                    raise RuntimeError(
+                        f"SST fetch timed out after {MAX_SECONDS}s. "
+                        f"Data for this date range may not be available yet."
+                    )
+
                 df = erddap_search(server, terms)
                 choice = pick_dataset(df, require_mur=is_primary)  # Bug 1 fix
                 if not choice:
