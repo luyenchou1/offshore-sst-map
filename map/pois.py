@@ -2,6 +2,7 @@
 
 import numpy as np
 import dash_leaflet as dl
+from dash import html
 
 # ---- All available fishing spots (name, lat, lon) ----
 ALL_POIS = [
@@ -98,10 +99,25 @@ def build_poi_markers(arrF=None, lats=None, lons=None, selected=None):
         if arrF is not None and lats is not None and lons is not None:
             temp = _lookup_temp(lat, lon, arrF, lats, lons)
 
+        tooltip_children = [
+            html.Div(name, style={
+                "fontSize": "0.85rem", "fontWeight": "700",
+                "color": "#1e293b", "lineHeight": "1.2",
+            }),
+        ]
         if temp is not None:
-            label = f"{name}\n{temp:.1f}°F"
-        else:
-            label = name
+            tooltip_children.append(
+                html.Div(f"{temp:.1f}°F", style={
+                    "fontSize": "1rem", "fontWeight": "700",
+                    "color": "#334155", "marginTop": "2px",
+                }),
+            )
+        tooltip_children.append(
+            html.Div(f"{lat:.3f}°N, {abs(lon):.3f}°W", style={
+                "fontSize": "0.65rem", "color": "#94a3b8",
+                "marginTop": "2px",
+            }),
+        )
 
         markers.append(
             dl.CircleMarker(
@@ -110,7 +126,14 @@ def build_poi_markers(arrF=None, lats=None, lons=None, selected=None):
                 pathOptions=_MARKER_STYLE,
                 children=[
                     dl.Tooltip(
-                        label,
+                        html.Div(
+                            tooltip_children,
+                            style={
+                                "textAlign": "center",
+                                "borderLeft": "3px solid #64748b",
+                                "paddingLeft": "6px",
+                            },
+                        ),
                         direction="top",
                         offset=[0, -10],
                         pane="tooltipPane",
@@ -128,10 +151,28 @@ def build_poi_markers(arrF=None, lats=None, lons=None, selected=None):
         if arrF is not None and lats is not None and lons is not None:
             temp = _lookup_temp(center_lat, center_lon, arrF, lats, lons)
 
+        dump_children = [
+            html.Div(d["name"], style={
+                "fontSize": "0.85rem", "fontWeight": "700",
+                "color": "#1e293b", "lineHeight": "1.2",
+            }),
+        ]
         if temp is not None:
-            dump_label = f"{d['name']}\n{temp:.1f}°F"
-        else:
-            dump_label = d["name"]
+            dump_children.append(
+                html.Div(f"{temp:.1f}°F (center)", style={
+                    "fontSize": "1rem", "fontWeight": "700",
+                    "color": "#334155", "marginTop": "2px",
+                }),
+            )
+        dump_children.append(
+            html.Div(
+                f"{center_lat:.3f}°N, {abs(center_lon):.3f}°W",
+                style={
+                    "fontSize": "0.65rem", "color": "#94a3b8",
+                    "marginTop": "2px",
+                },
+            ),
+        )
 
         markers.append(
             dl.Rectangle(
@@ -139,7 +180,14 @@ def build_poi_markers(arrF=None, lats=None, lons=None, selected=None):
                 pathOptions=_DUMP_STYLE,
                 children=[
                     dl.Tooltip(
-                        dump_label,
+                        html.Div(
+                            dump_children,
+                            style={
+                                "textAlign": "center",
+                                "borderLeft": "3px solid #64748b",
+                                "paddingLeft": "6px",
+                            },
+                        ),
                         direction="top",
                         pane="tooltipPane",
                     )
