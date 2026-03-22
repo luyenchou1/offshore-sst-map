@@ -238,17 +238,16 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
     Input("sst-store", "data"),
     Input("frame-slider", "value"),
     Input("lock-scale", "value"),
-    Input("show-pois", "value"),
+    Input("poi-picker", "value"),
     prevent_initial_call="initial_duplicate",
 )
-def render_map_layers(sst_data, frame_idx, lock_scale, show_pois):
+def render_map_layers(sst_data, frame_idx, lock_scale, selected_pois):
     aoi_geojson = build_aoi_geojson(CFG)
-    pois_visible = "show" in (show_pois or [])
 
     hidden = {"display": "none"}
 
     if not sst_data or "frames" not in sst_data:
-        return "", [[0, 0], [0, 0]], aoi_geojson, build_poi_markers(show=pois_visible), "", dash.no_update
+        return "", [[0, 0], [0, 0]], aoi_geojson, build_poi_markers(selected=selected_pois), "", dash.no_update
 
     frame_idx = frame_idx or 0
     num_frames = len(sst_data["frames"])
@@ -270,7 +269,7 @@ def render_map_layers(sst_data, frame_idx, lock_scale, show_pois):
     res_km = sst_data.get("res_km")
 
     legend = build_legend_component(vmin, vmax, res_km=res_km)
-    poi_markers = build_poi_markers(arrF, lats, lons, show=pois_visible)
+    poi_markers = build_poi_markers(arrF, lats, lons, selected=selected_pois)
 
     return overlay_url, bounds, aoi_geojson, poi_markers, legend, hidden
 

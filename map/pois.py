@@ -3,8 +3,8 @@
 import numpy as np
 import dash_leaflet as dl
 
-# ---- Point POIs (name, lat, lon) ----
-POIS = [
+# ---- All available fishing spots (name, lat, lon) ----
+ALL_POIS = [
     # Original spots
     ("Haabs Ledge",         40.868250, -71.838200),
     ("Butterfish Hole",     40.836467, -71.674900),
@@ -36,6 +36,38 @@ DUMP_BOX = {
     "se": (40.667, -70.750),
 }
 
+# Marker style: subtle hollow rings in muted slate
+_MARKER_STYLE = {
+    "color": "#475569",
+    "weight": 1.5,
+    "fill": True,
+    "fillColor": "#475569",
+    "fillOpacity": 0.15,
+}
+
+_DUMP_STYLE = {
+    "color": "#475569",
+    "weight": 1.5,
+    "fill": True,
+    "fillColor": "#475569",
+    "fillOpacity": 0.06,
+    "dashArray": "6 4",
+}
+
+
+def get_poi_options():
+    """Return list of {label, value} for the multi-select dropdown."""
+    options = [{"label": name, "value": name} for name, _, _ in ALL_POIS]
+    options.append({"label": DUMP_BOX["name"], "value": DUMP_BOX["name"]})
+    return options
+
+
+def get_all_poi_names():
+    """Return list of all POI names (for default selection)."""
+    names = [name for name, _, _ in ALL_POIS]
+    names.append(DUMP_BOX["name"])
+    return names
+
 
 def _lookup_temp(lat, lon, arrF, lats, lons):
     """Find the temperature at the nearest grid point."""
@@ -45,18 +77,23 @@ def _lookup_temp(lat, lon, arrF, lats, lons):
     return float(val) if np.isfinite(val) else None
 
 
-def build_poi_markers(arrF=None, lats=None, lons=None, show=True):
-    """Return CircleMarker components for POIs + The Dump rectangle.
+def build_poi_markers(arrF=None, lats=None, lons=None, selected=None):
+    """Return marker components for selected POIs + The Dump rectangle.
 
-    If show=False, returns an empty list (POIs hidden by toggle).
+    Args:
+        selected: list of POI names to show, or None for all.
     """
-    if not show:
+    if selected is not None and len(selected) == 0:
         return []
 
     markers = []
+    selected_set = set(selected) if selected is not None else None
 
     # Point markers
-    for name, lat, lon in POIS:
+    for name, lat, lon in ALL_POIS:
+        if selected_set is not None and name not in selected_set:
+            continue
+
         temp = None
         if arrF is not None and lats is not None and lons is not None:
             temp = _lookup_temp(lat, lon, arrF, lats, lons)
@@ -69,14 +106,8 @@ def build_poi_markers(arrF=None, lats=None, lons=None, show=True):
         markers.append(
             dl.CircleMarker(
                 center=[lat, lon],
-                radius=5,
-                pathOptions={
-                    "color": "#16a34a",
-                    "weight": 2,
-                    "fill": True,
-                    "fillColor": "#16a34a",
-                    "fillOpacity": 0.9,
-                },
+                radius=6,
+                pathOptions=_MARKER_STYLE,
                 children=[
                     dl.Tooltip(
                         label,
@@ -89,38 +120,32 @@ def build_poi_markers(arrF=None, lats=None, lons=None, show=True):
         )
 
     # The Dump — rectangle overlay with center temp
-    d = DUMP_BOX
-    center_lat = (d["nw"][0] + d["sw"][0]) / 2
-    center_lon = (d["nw"][1] + d["ne"][1]) / 2
-    temp = None
-    if arrF is not None and lats is not None and lons is not None:
-        temp = _lookup_temp(center_lat, center_lon, arrF, lats, lons)
+    if selected_set is None or DUMP_BOX["name"] in selected_set:
+        d = DUMP_BOX
+        center_lat = (d["nw"][0] + d["sw"][0]) / 2
+        center_lon = (d["nw"][1] + d["ne"][1]) / 2
+        temp = None
+        if arrF is not None and lats is not None and lons is not None:
+            temp = _lookup_temp(center_lat, center_lon, arrF, lats, lons)
 
-    if temp is not None:
-        dump_label = f"{d['name']}\n{temp:.1f}°F"
-    else:
-        dump_label = d["name"]
+        if temp is not None:
+            dump_label = f"{d['name']}\n{temp:.1f}°F"
+        else:
+            dump_label = d["name"]
 
-    markers.append(
-        dl.Rectangle(
-            bounds=[[d["sw"][0], d["sw"][1]], [d["ne"][0], d["ne"][1]]],
-            pathOptions={
-                "color": "#16a34a",
-                "weight": 2,
-                "fill": True,
-                "fillColor": "#16a34a",
-                "fillOpacity": 0.08,
-                "dashArray": "6 4",
-            },
-            children=[
-                dl.Tooltip(
-                    dump_label,
-                    direction="top",
-                    pane="tooltipPane",
-                )
-            ],
+        markers.append(
+            dl.Rectangle(
+                bounds=[[d["sw"][0], d["sw"][1]], [d["ne"][0], d["ne"][1]]],
+                pathOptions=_DUMP_STYLE,
+                children=[
+                    dl.Tooltip(
+                        dump_label,
+                        direction="top",
+                        pane="tooltipPane",
+                    )
+                ],
+            )
         )
-    )
 
     return markers
 

@@ -5,6 +5,8 @@ from datetime import date, timedelta
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
+from map.pois import get_all_poi_names, get_poi_options
+
 
 def build_sidebar():
     today = date.today()
@@ -86,13 +88,17 @@ def build_sidebar():
                 ],
             ),
             html.Hr(className="my-2"),
-            # Layer toggles
-            dbc.Checklist(
-                id="show-pois",
-                options=[{"label": " Fishing spots", "value": "show"}],
-                value=["show"],
-                className="mb-1",
-                style={"fontSize": "0.85rem"},
+            # Fishing spot picker
+            html.Label("Fishing spots", className="fw-bold mb-1",
+                        style={"fontSize": "0.85rem"}),
+            dcc.Dropdown(
+                id="poi-picker",
+                options=get_poi_options(),
+                value=get_all_poi_names(),
+                multi=True,
+                placeholder="Select spots...",
+                style={"fontSize": "0.8rem"},
+                className="mb-2",
             ),
             dbc.Checklist(
                 id="lock-scale",
