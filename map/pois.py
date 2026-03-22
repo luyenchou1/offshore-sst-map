@@ -2,7 +2,6 @@
 
 import numpy as np
 import dash_leaflet as dl
-from dash import html
 
 POIS = [
     ("Haabs Ledge",         40.868250, -71.838200),
@@ -31,44 +30,16 @@ def build_poi_markers(arrF=None, lats=None, lons=None):
         if arrF is not None and lats is not None and lons is not None:
             temp = _lookup_temp(lat, lon, arrF, lats, lons)
 
-        # Build tooltip content: name always shown, temp when available
+        # Plain string label — reliable across all browsers / dash-leaflet versions
         if temp is not None:
-            tooltip_content = html.Div(
-                [
-                    html.Div(
-                        name,
-                        style={
-                            "fontWeight": "600",
-                            "fontSize": "0.85rem",
-                            "color": "#1e293b",
-                        },
-                    ),
-                    html.Div(
-                        f"{temp:.1f}°F",
-                        style={
-                            "fontSize": "0.95rem",
-                            "fontWeight": "700",
-                            "color": "#16a34a",
-                            "marginTop": "1px",
-                        },
-                    ),
-                ],
-                style={"textAlign": "center"},
-            )
+            label = f"{name}\n{temp:.1f}°F"
         else:
-            tooltip_content = html.Div(
-                name,
-                style={
-                    "fontWeight": "600",
-                    "fontSize": "0.85rem",
-                    "color": "#1e293b",
-                },
-            )
+            label = name
 
         markers.append(
             dl.CircleMarker(
                 center=[lat, lon],
-                radius=5,
+                radius=6,
                 pathOptions={
                     "color": "#16a34a",
                     "weight": 2,
@@ -78,10 +49,9 @@ def build_poi_markers(arrF=None, lats=None, lons=None):
                 },
                 children=[
                     dl.Tooltip(
-                        tooltip_content,
+                        label,
                         direction="top",
                         offset=[0, -6],
-                        className="poi-tooltip",
                     )
                 ],
             )

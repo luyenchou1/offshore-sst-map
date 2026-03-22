@@ -41,12 +41,54 @@ def build_map():
                                 url="",
                                 bounds=[[0, 0], [0, 0]],
                                 opacity=0.78,
+                                interactive=False,
                             ),
                             dl.LayerGroup(id="poi-layer"),
                             dl.LayerGroup(id="click-marker"),
                         ],
                     ),
                     html.Div(id="legend-container"),
+                    # Loading overlay on map
+                    html.Div(
+                        id="map-loading-overlay",
+                        children=[
+                            html.Div(
+                                [
+                                    html.Div(
+                                        className="spinner-border text-primary",
+                                        role="status",
+                                        style={"width": "3rem", "height": "3rem"},
+                                    ),
+                                    html.Div(
+                                        "Loading SST data...",
+                                        style={
+                                            "marginTop": "0.75rem",
+                                            "fontWeight": "600",
+                                            "color": "#334155",
+                                            "fontSize": "0.95rem",
+                                        },
+                                    ),
+                                ],
+                                style={
+                                    "display": "flex",
+                                    "flexDirection": "column",
+                                    "alignItems": "center",
+                                },
+                            )
+                        ],
+                        style={
+                            "position": "absolute",
+                            "top": 0,
+                            "left": 0,
+                            "right": 0,
+                            "bottom": 0,
+                            "backgroundColor": "rgba(255,255,255,0.7)",
+                            "display": "flex",
+                            "alignItems": "center",
+                            "justifyContent": "center",
+                            "zIndex": 1000,
+                        },
+                    ),
                 ],
                 style={"position": "relative"},
             )

@@ -13,7 +13,7 @@ import dash
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 import numpy as np
-from dash import Input, Output, State, callback_context, dcc, html
+from dash import Input, Output, State, dcc, html
 
 from data.convert import upsample_visual
 from data.erddap import get_sst
@@ -58,13 +58,8 @@ app.layout = dbc.Container(
         dbc.Row([build_sidebar(), build_map()]),
         dcc.Store(id="sst-store"),
         dcc.Store(id="click-pos"),  # persists clicked lat/lng across date changes
-        dcc.Loading(
-            id="loading-overlay",
-            type="default",
-            children=html.Div(id="loading-target"),
-            fullscreen=True,
-            style={"backgroundColor": "rgba(255,255,255,0.7)"},
-        ),
+        dcc.Store(id="loading-trigger"),  # clientside callback target
+        html.Div(id="loading-target", style={"display": "none"}),
         # Auto-fetch SST on page load (fires once after 500ms)
         dcc.Interval(id="auto-fetch", interval=500, max_intervals=1),
     ],
@@ -80,12 +75,16 @@ app.layout = dbc.Container(
     Output("loading-target", "children"),
     Output("fetch-btn", "children"),
     Output("fetch-btn", "disabled"),
+    Output("map-loading-overlay", "style"),
     Input("fetch-btn", "n_clicks"),
     Input("auto-fetch", "n_intervals"),
     State("days-back", "value"),
     prevent_initial_call=True,
 )
 def fetch_sst_data(n_clicks, n_intervals, days_back):
+    # Style to hide the map loading overlay when done
+    hidden = {"display": "none"}
+
     target_date = datetime.now(timezone.utc).date() - timedelta(days=days_back - 1)
     try:
         sst = get_sst(target_date, CFG)
@@ -120,7 +119,7 @@ def fetch_sst_data(n_clicks, n_intervals, days_back):
             className="py-2 px-3 mb-0",
             style={"fontSize": "0.8rem"},
         )
-        return payload, status, "", "Fetch SST", False
+        return payload, status, "", "Fetch SST", False, hidden
     except Exception as e:
         logger.exception("SST fetch failed")
         return (
@@ -129,6 +128,7 @@ def fetch_sst_data(n_clicks, n_intervals, days_back):
             "",
             "Fetch SST",
             False,
+            hidden,
         )
 
 
@@ -281,20 +281,19 @@ def render_click_marker(click_pos, sst_data):
     ]
 
 
-# ---- Clientside: show spinner on Fetch button while loading ----
+# ---- Clientside: show loading overlay when fetch button is clicked ----
 app.clientside_callback(
     """
-    function(n_clicks, n_intervals) {
-        // Fires immediately on button click / auto-fetch, before the
-        // server callback returns.  The server callback overwrites these
-        // outputs when it finishes.
-        return ["Loading\u2026", true];
+    function(n_clicks) {
+        var overlay = document.getElementById('map-loading-overlay');
+        if (overlay) {
+            overlay.style.display = 'flex';
+        }
+        return window.dash_clientside.no_update;
     }
     """,
-    Output("fetch-btn", "children", allow_duplicate=True),
-    Output("fetch-btn", "disabled", allow_duplicate=True),
+    Output("loading-trigger", "data"),
     Input("fetch-btn", "n_clicks"),
-    Input("auto-fetch", "n_intervals"),
     prevent_initial_call=True,
 )
 
