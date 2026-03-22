@@ -42,7 +42,19 @@ def build_sidebar():
                 color="primary",
                 className="w-100 mt-2",
             ),
-            html.Div(id="fetch-status", className="mt-3"),
+            html.Div(
+                id="fetch-status",
+                className="mt-3",
+                children=dbc.Alert(
+                    [
+                        dbc.Spinner(size="sm", color="info"),
+                        " Loading SST data...",
+                    ],
+                    color="info",
+                    className="py-2 px-3 mb-0",
+                    style={"fontSize": "0.8rem"},
+                ),
+            ),
             html.Hr(),
             html.P(
                 "Click anywhere on the map to read SST at that point.",

@@ -13,7 +13,7 @@ import dash
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 import numpy as np
-from dash import Input, Output, State, dcc, html
+from dash import Input, Output, State, callback_context, dcc, html
 
 from data.convert import upsample_visual
 from data.erddap import get_sst
@@ -57,6 +57,7 @@ app.layout = dbc.Container(
         ),
         dbc.Row([build_sidebar(), build_map()]),
         dcc.Store(id="sst-store"),
+        dcc.Store(id="click-pos"),  # persists clicked lat/lng across date changes
         dcc.Loading(
             id="loading-overlay",
             type="default",
@@ -77,6 +78,8 @@ app.layout = dbc.Container(
     Output("sst-store", "data"),
     Output("fetch-status", "children"),
     Output("loading-target", "children"),
+    Output("fetch-btn", "children"),
+    Output("fetch-btn", "disabled"),
     Input("fetch-btn", "n_clicks"),
     Input("auto-fetch", "n_intervals"),
     State("days-back", "value"),
@@ -117,13 +120,15 @@ def fetch_sst_data(n_clicks, n_intervals, days_back):
             className="py-2 px-3 mb-0",
             style={"fontSize": "0.8rem"},
         )
-        return payload, status, ""
+        return payload, status, "", "Fetch SST", False
     except Exception as e:
         logger.exception("SST fetch failed")
         return (
             dash.no_update,
             dbc.Alert(f"Error: {e}", color="danger", className="py-2 px-3 mb-0"),
             "",
+            "Fetch SST",
+            False,
         )
 
 
@@ -165,19 +170,31 @@ def render_map_layers(sst_data, lock_scale, up_factor):
     return overlay_url, bounds, aoi_geojson, poi_markers, legend
 
 
-# ---- Callback 3: Click-to-read temperature ----
+# ---- Callback 3a: Save clicked position ----
 @app.callback(
-    Output("click-marker", "children"),
+    Output("click-pos", "data"),
     Input("sst-map", "clickData"),
-    State("sst-store", "data"),
     prevent_initial_call=True,
 )
-def handle_map_click(click_data, sst_data):
-    if not click_data or not sst_data:
+def save_click_pos(click_data):
+    if not click_data:
+        return dash.no_update
+    return {"lat": click_data["latlng"]["lat"], "lng": click_data["latlng"]["lng"]}
+
+
+# ---- Callback 3b: Render click marker (fires on click OR sst-store change) ----
+@app.callback(
+    Output("click-marker", "children"),
+    Input("click-pos", "data"),
+    Input("sst-store", "data"),
+    prevent_initial_call=True,
+)
+def render_click_marker(click_pos, sst_data):
+    if not click_pos or not sst_data:
         return []
 
-    lat = click_data["latlng"]["lat"]
-    lng = click_data["latlng"]["lng"]
+    lat = click_pos["lat"]
+    lng = click_pos["lng"]
     arrF = np.array(sst_data["arrF"], dtype=np.float64)
     lats = np.array(sst_data["lats"], dtype=np.float64)
     lons = np.array(sst_data["lons"], dtype=np.float64)
@@ -193,19 +210,93 @@ def handle_map_click(click_data, sst_data):
                 center=[lat, lng],
                 radius=6,
                 pathOptions={"color": "#e11d48", "weight": 2, "fillOpacity": 0.3},
-                children=[dl.Tooltip("No data", permanent=True)],
+                children=[
+                    dl.Tooltip(
+                        html.Div(
+                            [
+                                html.Div(
+                                    "No data",
+                                    style={
+                                        "fontSize": "0.95rem",
+                                        "fontWeight": "600",
+                                        "color": "#888",
+                                    },
+                                ),
+                                html.Div(
+                                    f"{lat:.3f}°N, {abs(lng):.3f}°W",
+                                    style={
+                                        "fontSize": "0.7rem",
+                                        "color": "#999",
+                                        "marginTop": "2px",
+                                    },
+                                ),
+                            ],
+                            style={"textAlign": "center"},
+                        ),
+                        permanent=True,
+                        direction="top",
+                        offset=[0, -8],
+                        className="sst-tooltip",
+                    )
+                ],
             )
         ]
 
-    label = f"{int(temp)}°F  ({lat:.2f}°N, {abs(lng):.2f}°W)"
     return [
         dl.CircleMarker(
             center=[lat, lng],
             radius=6,
             pathOptions={"color": "#e11d48", "weight": 2, "fillOpacity": 0.3},
-            children=[dl.Tooltip(label, permanent=True, direction="top")],
+            children=[
+                dl.Tooltip(
+                    html.Div(
+                        [
+                            html.Div(
+                                f"{temp:.1f}°F",
+                                style={
+                                    "fontSize": "1.15rem",
+                                    "fontWeight": "700",
+                                    "color": "#1e293b",
+                                    "lineHeight": "1.2",
+                                },
+                            ),
+                            html.Div(
+                                f"{lat:.3f}°N, {abs(lng):.3f}°W",
+                                style={
+                                    "fontSize": "0.7rem",
+                                    "color": "#94a3b8",
+                                    "marginTop": "2px",
+                                },
+                            ),
+                        ],
+                        style={"textAlign": "center"},
+                    ),
+                    permanent=True,
+                    direction="top",
+                    offset=[0, -8],
+                    className="sst-tooltip",
+                )
+            ],
         )
     ]
+
+
+# ---- Clientside: show spinner on Fetch button while loading ----
+app.clientside_callback(
+    """
+    function(n_clicks, n_intervals) {
+        // Fires immediately on button click / auto-fetch, before the
+        // server callback returns.  The server callback overwrites these
+        // outputs when it finishes.
+        return ["Loading\u2026", true];
+    }
+    """,
+    Output("fetch-btn", "children", allow_duplicate=True),
+    Output("fetch-btn", "disabled", allow_duplicate=True),
+    Input("fetch-btn", "n_clicks"),
+    Input("auto-fetch", "n_intervals"),
+    prevent_initial_call=True,
+)
 
 
 if __name__ == "__main__":

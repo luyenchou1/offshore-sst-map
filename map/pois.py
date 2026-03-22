@@ -2,6 +2,7 @@
 
 import numpy as np
 import dash_leaflet as dl
+from dash import html
 
 POIS = [
     ("Haabs Ledge",         40.868250, -71.838200),
@@ -19,7 +20,7 @@ def _lookup_temp(lat, lon, arrF, lats, lons):
     lat_idx = np.argmin(np.abs(lats - lat))
     lon_idx = np.argmin(np.abs(lons - lon))
     val = arrF[lat_idx, lon_idx]
-    return int(val) if np.isfinite(val) else None
+    return float(val) if np.isfinite(val) else None
 
 
 def build_poi_markers(arrF=None, lats=None, lons=None):
@@ -29,7 +30,41 @@ def build_poi_markers(arrF=None, lats=None, lons=None):
         temp = None
         if arrF is not None and lats is not None and lons is not None:
             temp = _lookup_temp(lat, lon, arrF, lats, lons)
-        label = f"{name} — {temp}°F" if temp is not None else name
+
+        # Build tooltip content: name always shown, temp when available
+        if temp is not None:
+            tooltip_content = html.Div(
+                [
+                    html.Div(
+                        name,
+                        style={
+                            "fontWeight": "600",
+                            "fontSize": "0.85rem",
+                            "color": "#1e293b",
+                        },
+                    ),
+                    html.Div(
+                        f"{temp:.1f}°F",
+                        style={
+                            "fontSize": "0.95rem",
+                            "fontWeight": "700",
+                            "color": "#16a34a",
+                            "marginTop": "1px",
+                        },
+                    ),
+                ],
+                style={"textAlign": "center"},
+            )
+        else:
+            tooltip_content = html.Div(
+                name,
+                style={
+                    "fontWeight": "600",
+                    "fontSize": "0.85rem",
+                    "color": "#1e293b",
+                },
+            )
+
         markers.append(
             dl.CircleMarker(
                 center=[lat, lon],
@@ -41,7 +76,14 @@ def build_poi_markers(arrF=None, lats=None, lons=None):
                     "fillColor": "#16a34a",
                     "fillOpacity": 0.9,
                 },
-                children=[dl.Tooltip(label)],
+                children=[
+                    dl.Tooltip(
+                        tooltip_content,
+                        direction="top",
+                        offset=[0, -6],
+                        className="poi-tooltip",
+                    )
+                ],
             )
         )
     return markers

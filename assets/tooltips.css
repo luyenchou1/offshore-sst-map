@@ -1,0 +1,25 @@
+/* SST click-to-read tooltip */
+.sst-tooltip .leaflet-tooltip {
+    background: white;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 5px 10px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    white-space: nowrap;
+}
+.sst-tooltip .leaflet-tooltip::before {
+    border-top-color: #cbd5e1;
+}
+
+/* POI fishing-spot hover tooltip */
+.poi-tooltip .leaflet-tooltip {
+    background: white;
+    border: 1px solid #86efac;
+    border-radius: 6px;
+    padding: 4px 8px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+    white-space: nowrap;
+}
+.poi-tooltip .leaflet-tooltip::before {
+    border-top-color: #86efac;
+}
