@@ -61,6 +61,7 @@ app.layout = dbc.Container(
         dbc.Row([build_sidebar(), build_map()]),
         dcc.Store(id="sst-store"),
         dcc.Store(id="click-pos"),
+        html.Div(id="fetch-spinner-target", style={"display": "none"}),
         # Auto-fetch SST on page load (fires once after 500ms)
         dcc.Interval(id="auto-fetch", interval=500, max_intervals=1),
     ],
@@ -69,15 +70,33 @@ app.layout = dbc.Container(
 )
 
 
+# ---- Show loading overlay immediately when Fetch is clicked ----
+@app.callback(
+    Output("map-loading-overlay", "style"),
+    Input("fetch-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def show_loading_on_fetch(n_clicks):
+    return {
+        "position": "absolute",
+        "top": 0, "left": 0, "right": 0, "bottom": 0,
+        "backgroundColor": "rgba(255,255,255,0.7)",
+        "display": "flex",
+        "alignItems": "center",
+        "justifyContent": "center",
+        "zIndex": 1000,
+    }
+
+
 # ---- Callback 1: Fetch 7-day SST data ----
 @app.callback(
     Output("sst-store", "data"),
     Output("fetch-status", "children"),
-    Output("map-loading-overlay", "style"),
     Output("frame-slider", "marks"),
     Output("frame-slider", "value"),
     Output("frame-slider", "max"),
     Output("anim-controls", "style"),
+    Output("fetch-spinner-target", "children"),
     Input("fetch-btn", "n_clicks"),
     Input("auto-fetch", "n_intervals"),
     State("end-date-picker", "date"),
@@ -85,7 +104,6 @@ app.layout = dbc.Container(
     prevent_initial_call=True,
 )
 def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
-    hidden = {"display": "none"}
 
     # Parse the date string from the date picker
     if end_date_str:
@@ -174,11 +192,11 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
         date_start = raw_days[0]["date"]
         date_end = raw_days[-1]["date"]
 
-        # Build slider marks with short date labels
+        # Build slider marks — just day-of-month to avoid overlap
         marks = {}
         for i, rd in enumerate(raw_days):
             d = datetime.strptime(rd["date"], "%Y-%m-%d")
-            marks[i] = d.strftime("%b %d")
+            marks[i] = str(d.day)
 
         status = dbc.Alert(
             [
@@ -194,9 +212,9 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
         anim_visible = {"display": "block"}
 
         return (
-            payload, status, hidden,
+            payload, status,
             marks, num_days - 1, num_days - 1,
-            anim_visible,
+            anim_visible, "",
         )
 
     except Exception as e:
@@ -209,9 +227,8 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
                 className="py-2 px-3 mb-0",
                 style={"fontSize": "0.8rem"},
             ),
-            hidden,
             dash.no_update, dash.no_update, dash.no_update,
-            dash.no_update,
+            dash.no_update, "",
         )
 
 
@@ -222,15 +239,19 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
     Output("aoi-outline", "data"),
     Output("poi-layer", "children"),
     Output("legend-container", "children"),
+    Output("map-loading-overlay", "style", allow_duplicate=True),
     Input("sst-store", "data"),
     Input("frame-slider", "value"),
     Input("lock-scale", "value"),
+    prevent_initial_call="initial_duplicate",
 )
 def render_map_layers(sst_data, frame_idx, lock_scale):
     aoi_geojson = build_aoi_geojson(CFG)
 
+    hidden = {"display": "none"}
+
     if not sst_data or "frames" not in sst_data:
-        return "", [[0, 0], [0, 0]], aoi_geojson, build_poi_markers(), ""
+        return "", [[0, 0], [0, 0]], aoi_geojson, build_poi_markers(), "", dash.no_update
 
     frame_idx = frame_idx or 0
     num_frames = len(sst_data["frames"])
@@ -254,7 +275,7 @@ def render_map_layers(sst_data, frame_idx, lock_scale):
     legend = build_legend_component(vmin, vmax, res_km=res_km)
     poi_markers = build_poi_markers(arrF, lats, lons)
 
-    return overlay_url, bounds, aoi_geojson, poi_markers, legend
+    return overlay_url, bounds, aoi_geojson, poi_markers, legend, hidden
 
 
 # ---- Callback 3a: Save clicked position ----

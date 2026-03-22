@@ -36,14 +36,7 @@ def build_sidebar():
                 color="primary",
                 className="w-100 mt-2",
             ),
-            # Spinner wraps the fetch-status area
-            dbc.Spinner(
-                html.Div(id="fetch-status", className="mt-3"),
-                color="primary",
-                type="border",
-                size="sm",
-                spinner_style={"marginTop": "1rem"},
-            ),
+            html.Div(id="fetch-status", className="mt-3"),
             # Animation controls — hidden until data is loaded
             html.Div(
                 id="anim-controls",

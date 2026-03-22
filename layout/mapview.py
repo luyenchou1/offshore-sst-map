@@ -61,7 +61,7 @@ def build_map():
                         ],
                     ),
                     html.Div(id="legend-container"),
-                    # Loading overlay on map
+                    # Loading overlay on map — shown during all fetches
                     html.Div(
                         id="map-loading-overlay",
                         children=[
@@ -73,12 +73,21 @@ def build_map():
                                         style={"width": "3rem", "height": "3rem"},
                                     ),
                                     html.Div(
-                                        "Loading SST data...",
+                                        "Loading 7-day SST data...",
                                         style={
                                             "marginTop": "0.75rem",
                                             "fontWeight": "600",
                                             "color": "#334155",
                                             "fontSize": "0.95rem",
+                                        },
+                                    ),
+                                    html.Div(
+                                        "This may take up to a minute",
+                                        style={
+                                            "marginTop": "0.25rem",
+                                            "color": "#64748b",
+                                            "fontSize": "0.8rem",
+                                            "fontStyle": "italic",
                                         },
                                     ),
                                 ],
