@@ -3,20 +3,23 @@
 Daily sea-surface temperature visualization for the offshore corridor
 from New York Harbor to Massachusetts. Data from NOAA CoastWatch ERDDAP
 (MUR GHRSST preferred, OISST fallback). Temperatures in °F.
+
+Supports 7-day animated windows: pick any end date back to 2002 and
+step or auto-play through the week's SST evolution.
 """
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import dash
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 import numpy as np
-from dash import Input, Output, State, dcc, html
+from dash import Input, Output, State, ctx, dcc, html
 
 from data.convert import upsample_visual
-from data.erddap import get_sst
+from data.erddap import get_sst_multiday
 from data.geo import mask_aoi_rasterized, mask_land_rasterized, orient_to_leaflet
 from layout.mapview import build_map
 from layout.sidebar import build_sidebar
@@ -57,7 +60,7 @@ app.layout = dbc.Container(
         ),
         dbc.Row([build_sidebar(), build_map()]),
         dcc.Store(id="sst-store"),
-        dcc.Store(id="click-pos"),  # persists clicked lat/lng across date changes
+        dcc.Store(id="click-pos"),
         # Auto-fetch SST on page load (fires once after 500ms)
         dcc.Interval(id="auto-fetch", interval=500, max_intervals=1),
     ],
@@ -66,55 +69,136 @@ app.layout = dbc.Container(
 )
 
 
-# ---- Callback 1: Fetch SST data ----
+# ---- Callback 1: Fetch 7-day SST data ----
 @app.callback(
     Output("sst-store", "data"),
     Output("fetch-status", "children"),
     Output("map-loading-overlay", "style"),
+    Output("frame-slider", "marks"),
+    Output("frame-slider", "value"),
+    Output("frame-slider", "max"),
+    Output("anim-controls", "style"),
     Input("fetch-btn", "n_clicks"),
     Input("auto-fetch", "n_intervals"),
-    State("days-back", "value"),
+    State("end-date-picker", "date"),
+    State("lock-scale", "value"),
     prevent_initial_call=True,
 )
-def fetch_sst_data(n_clicks, n_intervals, days_back):
-    # Style to hide the map loading overlay when done
+def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
     hidden = {"display": "none"}
 
-    target_date = datetime.now(timezone.utc).date() - timedelta(days=days_back - 1)
-    try:
-        sst = get_sst(target_date, CFG)
+    # Parse the date string from the date picker
+    if end_date_str:
+        end_date = datetime.strptime(end_date_str[:10], "%Y-%m-%d").date()
+    else:
+        end_date = date.today() - timedelta(days=4)
 
-        # Pre-process: orient and mask once so downstream callbacks are simpler
-        arrF = sst["arrF"]
-        lats = sst["lats"]
-        lons = sst["lons"]
-        arrF, lats, lons = orient_to_leaflet(arrF, lats, lons)
-        arrF = mask_aoi_rasterized(arrF, lats, lons, CFG)
-        arrF = mask_land_rasterized(arrF, lats, lons)
+    try:
+        sst = get_sst_multiday(end_date, CFG)
+
+        # Process each day's 2D slice: orient, mask, convert to PNG
+        lats_raw = sst["lats"]
+        lons_raw = sst["lons"]
+
+        processed_days = []
+        all_finite = []
+
+        for day_data in sst["days"]:
+            arrF = day_data["arrF"]
+            arrF, lats, lons = orient_to_leaflet(arrF, lats_raw.copy(), lons_raw.copy())
+            arrF = mask_aoi_rasterized(arrF, lats, lons, CFG)
+            arrF = mask_land_rasterized(arrF, lats, lons)
+            processed_days.append({"arrF": arrF, "date": day_data["date"]})
+            finite = arrF[np.isfinite(arrF)]
+            if finite.size > 0:
+                all_finite.append(finite)
+
+        # Use the oriented lats/lons (same for all days)
+        # (orient_to_leaflet may flip them, but result is same for every slice)
+        lats = processed_days[0]["arrF"]  # dummy — we need the oriented coords
+        # Re-orient once to get the correct lat/lon arrays
+        _, lats, lons = orient_to_leaflet(
+            sst["days"][0]["arrF"], lats_raw.copy(), lons_raw.copy()
+        )
+
+        # Compute resolution
+        if len(lats) > 1:
+            res_km = abs(float(lats[1] - lats[0])) * 111.0
+        else:
+            res_km = None
+
+        # Unified color bounds across all days
+        locked = "lock" in (lock_scale or [])
+        if locked:
+            vmin, vmax = 30.0, 90.0
+        elif all_finite:
+            stacked = np.concatenate(all_finite)
+            vmin, vmax = compute_color_bounds(
+                np.array(stacked, dtype=np.float64), locked=False
+            )
+        else:
+            vmin, vmax = 30.0, 90.0
+
+        # Pre-render each day's PNG and prepare payload
+        frames = []
+        raw_days = []
+        for pd_item in processed_days:
+            arrF_vis = upsample_visual(pd_item["arrF"], 2)
+            png_url = sst_to_base64_png(arrF_vis, vmin, vmax)
+            frames.append(png_url)
+            raw_days.append({
+                "arrF": pd_item["arrF"].tolist(),
+                "date": pd_item["date"],
+            })
+
+        bounds = [
+            [float(np.min(lats)), float(np.min(lons))],
+            [float(np.max(lats)), float(np.max(lons))],
+        ]
 
         payload = {
+            "frames": frames,
+            "raw_days": raw_days,
+            "lats": lats.tolist(),
+            "lons": lons.tolist(),
+            "bounds": bounds,
+            "vmin": vmin,
+            "vmax": vmax,
+            "res_km": res_km,
             "server": sst["server"],
             "dataset_id": sst["dataset_id"],
             "dataset_title": sst["dataset_title"],
-            "var": sst["var"],
-            "units": sst["units"],
-            "arrF": arrF.tolist(),
-            "lats": lats.tolist(),
-            "lons": lons.tolist(),
-            "date_used": sst.get("date_used", str(target_date)),
         }
-        date_str = sst.get("date_used", str(target_date))
+
+        num_days = len(frames)
+        date_start = raw_days[0]["date"]
+        date_end = raw_days[-1]["date"]
+
+        # Build slider marks with short date labels
+        marks = {}
+        for i, rd in enumerate(raw_days):
+            d = datetime.strptime(rd["date"], "%Y-%m-%d")
+            marks[i] = d.strftime("%b %d")
+
         status = dbc.Alert(
             [
-                html.Strong(f"Loaded: {date_str}"),
+                html.Strong(f"Loaded: {date_start} to {date_end}"),
                 html.Br(),
-                f"{sst['dataset_id']}",
+                f"{sst['dataset_id']} ({num_days} days)",
             ],
             color="success",
             className="py-2 px-3 mb-0",
             style={"fontSize": "0.8rem"},
         )
-        return payload, status, hidden
+
+        anim_visible = {"display": "block"}
+
+        return (
+            payload, status, hidden,
+            marks, num_days - 1, num_days - 1,
+            anim_visible,
+        )
+
     except Exception as e:
         logger.exception("SST fetch failed")
         return (
@@ -126,10 +210,12 @@ def fetch_sst_data(n_clicks, n_intervals, days_back):
                 style={"fontSize": "0.8rem"},
             ),
             hidden,
+            dash.no_update, dash.no_update, dash.no_update,
+            dash.no_update,
         )
 
 
-# ---- Callback 2: Render map layers ----
+# ---- Callback 2: Render map layers for current frame ----
 @app.callback(
     Output("sst-overlay", "url"),
     Output("sst-overlay", "bounds"),
@@ -137,35 +223,33 @@ def fetch_sst_data(n_clicks, n_intervals, days_back):
     Output("poi-layer", "children"),
     Output("legend-container", "children"),
     Input("sst-store", "data"),
+    Input("frame-slider", "value"),
     Input("lock-scale", "value"),
 )
-def render_map_layers(sst_data, lock_scale):
+def render_map_layers(sst_data, frame_idx, lock_scale):
     aoi_geojson = build_aoi_geojson(CFG)
 
-    if not sst_data:
+    if not sst_data or "frames" not in sst_data:
         return "", [[0, 0], [0, 0]], aoi_geojson, build_poi_markers(), ""
 
-    arrF = np.array(sst_data["arrF"], dtype=np.float64)
+    frame_idx = frame_idx or 0
+    num_frames = len(sst_data["frames"])
+    if frame_idx >= num_frames:
+        frame_idx = num_frames - 1
+
+    # Pre-rendered PNG for this frame
+    overlay_url = sst_data["frames"][frame_idx]
+    bounds = sst_data["bounds"]
+
+    # Raw data for POI temperature lookups
+    arrF = np.array(sst_data["raw_days"][frame_idx]["arrF"], dtype=np.float64)
     lats = np.array(sst_data["lats"], dtype=np.float64)
     lons = np.array(sst_data["lons"], dtype=np.float64)
 
-    # Compute grid resolution from lat/lon step size
-    if len(lats) > 1:
-        deg_step = abs(float(lats[1] - lats[0]))
-        res_km = deg_step * 111.0  # 1° lat ≈ 111 km
-    else:
-        res_km = None
-
-    # Data is already oriented and masked from the fetch callback
-    locked = "lock" in (lock_scale or [])
-    vmin, vmax = compute_color_bounds(arrF, locked=locked)
-
-    arrF_vis = upsample_visual(arrF, 2)  # hardcoded 2x upsample
-    overlay_url = sst_to_base64_png(arrF_vis, vmin, vmax)
-    bounds = [
-        [float(np.min(lats)), float(np.min(lons))],
-        [float(np.max(lats)), float(np.max(lons))],
-    ]
+    # Unified color bounds
+    vmin = sst_data["vmin"]
+    vmax = sst_data["vmax"]
+    res_km = sst_data.get("res_km")
 
     legend = build_legend_component(vmin, vmax, res_km=res_km)
     poi_markers = build_poi_markers(arrF, lats, lons)
@@ -185,20 +269,26 @@ def save_click_pos(click_data):
     return {"lat": click_data["latlng"]["lat"], "lng": click_data["latlng"]["lng"]}
 
 
-# ---- Callback 3b: Render click marker (fires on click OR sst-store change) ----
+# ---- Callback 3b: Render click marker (fires on click, frame change, or data change) ----
 @app.callback(
     Output("click-marker", "children"),
     Input("click-pos", "data"),
     Input("sst-store", "data"),
+    Input("frame-slider", "value"),
     prevent_initial_call=True,
 )
-def render_click_marker(click_pos, sst_data):
-    if not click_pos or not sst_data:
+def render_click_marker(click_pos, sst_data, frame_idx):
+    if not click_pos or not sst_data or "raw_days" not in sst_data:
         return []
+
+    frame_idx = frame_idx or 0
+    num_frames = len(sst_data["raw_days"])
+    if frame_idx >= num_frames:
+        frame_idx = num_frames - 1
 
     lat = click_pos["lat"]
     lng = click_pos["lng"]
-    arrF = np.array(sst_data["arrF"], dtype=np.float64)
+    arrF = np.array(sst_data["raw_days"][frame_idx]["arrF"], dtype=np.float64)
     lats = np.array(sst_data["lats"], dtype=np.float64)
     lons = np.array(sst_data["lons"], dtype=np.float64)
 
@@ -207,6 +297,8 @@ def render_click_marker(click_pos, sst_data):
     lon_idx = np.argmin(np.abs(lons - lng))
 
     temp = arrF[lat_idx, lon_idx]
+    day_date = sst_data["raw_days"][frame_idx]["date"]
+
     if not np.isfinite(temp):
         return [
             dl.CircleMarker(
@@ -217,28 +309,18 @@ def render_click_marker(click_pos, sst_data):
                     dl.Tooltip(
                         html.Div(
                             [
-                                html.Div(
-                                    "No data",
-                                    style={
-                                        "fontSize": "0.95rem",
-                                        "fontWeight": "600",
-                                        "color": "#888",
-                                    },
-                                ),
-                                html.Div(
-                                    f"{lat:.3f}°N, {abs(lng):.3f}°W",
-                                    style={
-                                        "fontSize": "0.7rem",
-                                        "color": "#999",
-                                        "marginTop": "2px",
-                                    },
-                                ),
+                                html.Div("No data", style={
+                                    "fontSize": "0.95rem", "fontWeight": "600",
+                                    "color": "#888",
+                                }),
+                                html.Div(f"{lat:.3f}°N, {abs(lng):.3f}°W", style={
+                                    "fontSize": "0.7rem", "color": "#999",
+                                    "marginTop": "2px",
+                                }),
                             ],
                             style={"textAlign": "center"},
                         ),
-                        permanent=True,
-                        direction="top",
-                        offset=[0, -8],
+                        permanent=True, direction="top", offset=[0, -8],
                         className="sst-tooltip",
                     )
                 ],
@@ -254,34 +336,94 @@ def render_click_marker(click_pos, sst_data):
                 dl.Tooltip(
                     html.Div(
                         [
-                            html.Div(
-                                f"{temp:.1f}°F",
-                                style={
-                                    "fontSize": "1.15rem",
-                                    "fontWeight": "700",
-                                    "color": "#1e293b",
-                                    "lineHeight": "1.2",
-                                },
-                            ),
-                            html.Div(
-                                f"{lat:.3f}°N, {abs(lng):.3f}°W",
-                                style={
-                                    "fontSize": "0.7rem",
-                                    "color": "#94a3b8",
-                                    "marginTop": "2px",
-                                },
-                            ),
+                            html.Div(f"{temp:.1f}°F", style={
+                                "fontSize": "1.15rem", "fontWeight": "700",
+                                "color": "#1e293b", "lineHeight": "1.2",
+                            }),
+                            html.Div(f"{lat:.3f}°N, {abs(lng):.3f}°W", style={
+                                "fontSize": "0.7rem", "color": "#94a3b8",
+                                "marginTop": "2px",
+                            }),
                         ],
                         style={"textAlign": "center"},
                     ),
-                    permanent=True,
-                    direction="top",
-                    offset=[0, -8],
+                    permanent=True, direction="top", offset=[0, -8],
                     className="sst-tooltip",
                 )
             ],
         )
     ]
+
+
+# ---- Callback 4: Play/Pause toggle ----
+@app.callback(
+    Output("anim-interval", "disabled"),
+    Output("play-pause-btn", "children"),
+    Input("play-pause-btn", "n_clicks"),
+    State("anim-interval", "disabled"),
+    prevent_initial_call=True,
+)
+def toggle_play_pause(n_clicks, currently_disabled):
+    if currently_disabled:
+        return False, "\u23F8 Pause"
+    else:
+        return True, "\u25B6 Play"
+
+
+# ---- Callback 5: Auto-advance frame on interval tick ----
+@app.callback(
+    Output("frame-slider", "value", allow_duplicate=True),
+    Input("anim-interval", "n_intervals"),
+    State("frame-slider", "value"),
+    State("frame-slider", "max"),
+    prevent_initial_call=True,
+)
+def auto_advance_frame(n_intervals, current_val, max_val):
+    if current_val is None or max_val is None:
+        return dash.no_update
+    next_val = current_val + 1
+    if next_val > max_val:
+        next_val = 0
+    return next_val
+
+
+# ---- Callback 6: Step forward/back buttons ----
+@app.callback(
+    Output("frame-slider", "value", allow_duplicate=True),
+    Input("step-back-btn", "n_clicks"),
+    Input("step-fwd-btn", "n_clicks"),
+    State("frame-slider", "value"),
+    State("frame-slider", "max"),
+    prevent_initial_call=True,
+)
+def step_frame(back_clicks, fwd_clicks, current_val, max_val):
+    if current_val is None or max_val is None:
+        return dash.no_update
+    triggered = ctx.triggered_id
+    if triggered == "step-back-btn":
+        return max(0, current_val - 1)
+    elif triggered == "step-fwd-btn":
+        return min(max_val, current_val + 1)
+    return dash.no_update
+
+
+# ---- Callback 7: Day indicator text ----
+@app.callback(
+    Output("day-indicator", "children"),
+    Input("frame-slider", "value"),
+    State("sst-store", "data"),
+)
+def update_day_indicator(frame_idx, sst_data):
+    if not sst_data or "raw_days" not in sst_data:
+        return ""
+    frame_idx = frame_idx or 0
+    num_days = len(sst_data["raw_days"])
+    if frame_idx >= num_days:
+        frame_idx = num_days - 1
+    day_date = sst_data["raw_days"][frame_idx]["date"]
+    d = datetime.strptime(day_date, "%Y-%m-%d")
+    label = d.strftime("%b %d, %Y")
+    return f"{label}  (Day {frame_idx + 1} of {num_days})"
 
 
 if __name__ == "__main__":

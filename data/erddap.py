@@ -143,6 +143,45 @@ def fetch_grid(
     return ds, varname
 
 
+def fetch_grid_multiday(
+    server: str,
+    dsid: str,
+    date_start,
+    date_end,
+    bbox: Tuple[float, float, float, float],
+):
+    """Download a multi-day NetCDF grid from ERDDAP.
+
+    Returns (xarray.Dataset, var_name) with a time dimension spanning
+    date_start through date_end.
+    """
+    das_url = f"{server}/griddap/{dsid}.das"
+    r = requests.get(das_url, timeout=10)
+    r.raise_for_status()
+    varname = guess_var_from_das(r.text)
+    if not varname:
+        raise RuntimeError("Could not identify SST variable in dataset DAS.")
+
+    minlon, minlat, maxlon, maxlat = bbox
+    t0 = f"{date_start}T00:00:00Z"
+    t1 = f"{date_end}T23:59:59Z"
+    query = (
+        f"{varname}[({t0}):1:({t1})]"
+        f"[({minlat}):1:({maxlat})]"
+        f"[({minlon}):1:({maxlon})]"
+    )
+    nc_url = f"{server}/griddap/{dsid}.nc?{query}"
+    # Larger timeout for multi-day downloads (~10x single-day data)
+    rr = requests.get(nc_url, timeout=75)
+    rr.raise_for_status()
+
+    with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tf:
+        tf.write(rr.content)
+        path = tf.name
+    ds = xr.open_dataset(path)
+    return ds, varname
+
+
 def get_sst(target_date, config: Dict) -> Dict:
     """Fetch SST data, returning a dict with arrF, lats, lons, metadata.
 
@@ -217,6 +256,96 @@ def get_sst(target_date, config: Dict) -> Dict:
                     "lats": lats,
                     "lons": lons,
                     "date_used": str(date),
+                }
+
+    raise RuntimeError(
+        "No compatible SST dataset found on any configured ERDDAP server."
+    )
+
+
+def get_sst_multiday(end_date, config: Dict, num_days: int = 7) -> Dict:
+    """Fetch multiple days of SST in a single ERDDAP request.
+
+    Returns a dict with per-day 2D arrays, shared lats/lons, and metadata.
+    Falls back to older date ranges if the requested end_date is not yet
+    available (MUR has ~2-day latency).
+    """
+    MAX_SECONDS = 90  # 7-day downloads are larger; allow more time
+
+    aoi = [tuple(pt) for pt in config["aoi_polygon_lonlat"]]
+    lons_aoi = [p[0] for p in aoi]
+    lats_aoi = [p[1] for p in aoi]
+    bbox = (min(lons_aoi), min(lats_aoi), max(lons_aoi), max(lats_aoi))
+
+    t0 = time.monotonic()
+
+    # Try the requested window, then shift back 1-2 days for MUR latency
+    for date_offset in range(3):
+        adj_end = end_date - timedelta(days=date_offset)
+        adj_start = adj_end - timedelta(days=num_days - 1)
+
+        for terms in [config["primary_search_terms"], config["fallback_search_terms"]]:
+            is_primary = terms == config["primary_search_terms"]
+
+            for server in config["servers"]:
+                if time.monotonic() - t0 > MAX_SECONDS:
+                    raise RuntimeError(
+                        f"SST fetch timed out after {MAX_SECONDS}s. "
+                        f"Data for this date range may not be available yet."
+                    )
+
+                df = erddap_search(server, terms)
+                choice = pick_dataset(df, require_mur=is_primary)
+                if not choice:
+                    continue
+
+                dsid, title = choice["id"], choice["title"]
+
+                try:
+                    ds, varname = fetch_grid_multiday(
+                        server, dsid, adj_start, adj_end, bbox
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "fetch_grid_multiday failed for %s/%s on %s to %s: %s",
+                        server, dsid, adj_start, adj_end, e,
+                    )
+                    continue
+
+                da = ds[varname]
+                lat_name = next(
+                    (d for d in ds.dims if "lat" in d.lower()), "lat"
+                )
+                lon_name = next(
+                    (d for d in ds.dims if "lon" in d.lower()), "lon"
+                )
+                lats = ds[lat_name].values
+                lons = ds[lon_name].values
+                units = da.attrs.get("units", "kelvin")
+
+                # Extract time coordinate
+                time_name = next(
+                    (d for d in ds.dims if "time" in d.lower()), "time"
+                )
+                times = ds[time_name].values
+
+                # Build per-day slices
+                days = []
+                for i in range(len(times)):
+                    slice_2d = da.values[i, :, :]
+                    arrF = to_fahrenheit_whole(slice_2d, units)
+                    date_str = str(np.datetime_as_string(times[i], unit="D"))
+                    days.append({"arrF": arrF, "date": date_str})
+
+                return {
+                    "server": server,
+                    "dataset_id": dsid,
+                    "dataset_title": title,
+                    "var": varname,
+                    "units": units,
+                    "days": days,
+                    "lats": lats,
+                    "lons": lons,
                 }
 
     raise RuntimeError(
