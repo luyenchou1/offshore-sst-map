@@ -45,17 +45,18 @@ def build_map():
                                 opacity=0.78,
                                 interactive=False,
                             ),
-                            # Custom panes above the overlay pane (z-index 400)
-                            # so POIs and click markers receive hover/click events
+                            # Custom panes: above overlayPane (400) but below
+                            # Leaflet's tooltipPane (650) so tooltips render
+                            # on top of the markers, not behind them.
                             dl.Pane(
                                 dl.LayerGroup(id="poi-layer"),
                                 name="poi-pane",
-                                style={"zIndex": 650},
+                                style={"zIndex": 450},
                             ),
                             dl.Pane(
                                 dl.LayerGroup(id="click-marker"),
                                 name="click-pane",
-                                style={"zIndex": 660},
+                                style={"zIndex": 500},
                             ),
                         ],
                     ),
