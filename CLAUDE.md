@@ -1,7 +1,7 @@
-# Offshore SST Map — Project Context
+# Offshore SST Analyzer — Project Context
 
 ## What This Is
-Dash 4.0 web app showing daily sea-surface temperatures (SST) for the NJ-to-MA offshore corridor. Users pick a 7-day date window and animate through the week's SST evolution to spot fishing-relevant trends (warm eddies, cold upwelling, thermoclines).
+Dash 4.0 web app ("Offshore SST Analyzer") showing daily sea-surface temperatures for the NJ-to-MA offshore corridor. Users pick any 7-day date window (back to June 2002) and animate through the week's SST evolution to spot fishing-relevant trends (warm eddies, cold upwelling, thermoclines).
 
 ## Tech Stack
 - **Dash 4.0** + **dash-leaflet** + **dash-bootstrap-components** (Flatly theme)
@@ -25,15 +25,15 @@ User picks date → Fetch button → get_sst_multiday() → 7 parallel ERDDAP re
 ### Key Files
 | File | Purpose |
 |------|---------|
-| `app.py` | Main app, all callbacks (7 total), layout |
+| `app.py` | Main app, all callbacks (9 total), layout |
 | `data/erddap.py` | ERDDAP search, fetch, multi-day parallel download |
 | `data/geo.py` | Orient arrays, AOI mask, land mask (all 2D only) |
 | `data/convert.py` | Kelvin→Fahrenheit, 2x visual upsample |
-| `layout/sidebar.py` | Date picker, animation controls, fetch button |
+| `layout/sidebar.py` | Date picker, animation controls, POI picker, fetch button |
 | `layout/mapview.py` | dl.Map with custom panes, loading overlay |
 | `map/overlay.py` | Array → RGBA → base64 PNG |
 | `map/colorscale.py` | Legend component, adaptive color bounds |
-| `map/pois.py` | 7 fishing spots with temp lookups |
+| `map/pois.py` | 20 fishing spots + The Dump rectangle, multi-select picker |
 | `config.json` | AOI polygon, ERDDAP servers, search terms |
 
 ### Callback Structure
@@ -54,6 +54,7 @@ User picks date → Fetch button → get_sst_multiday() → 7 parallel ERDDAP re
 - **`allow_duplicate=True` requires `prevent_initial_call=True`** (or `"initial_duplicate"`). Dash 4 enforces this strictly.
 - **`dbc.Spinner` v2 uses `spinner_class_name`**, not `className`. The constructor will error.
 - **Callback timeouts are browser-side**, not server-side. If a synchronous Dash callback takes >30s, the browser gives up with "server did not respond" and the callback system can get stuck. Once stuck, subsequent clicks don't fire. Solution: keep callbacks under 30s or use time budgets.
+- **Changing callback inputs/outputs changes the callback hash.** Browser-cached JS from a previous session will 500 with "Callback function not found." Users must hard-refresh after callback signature changes.
 
 ### ERDDAP Behavior
 - **MUR data latency**: ~2 days behind. Always try `end_date - 0`, then `-1`, then `-2`.
@@ -68,27 +69,54 @@ Map layer panes and their z-index values matter enormously:
 - **poi-pane**: 450 (custom — above overlay, below tooltips)
 - **click-pane**: 500 (custom — above POIs, below tooltips)
 - **tooltipPane**: 650 (Leaflet default — tooltips render here)
+- **popupPane**: 700 (Leaflet default — POI click popups render here)
 - **Loading overlay**: 1000 (HTML div above everything)
 
 If POI markers and tooltipPane have the same z-index, the markers render ON TOP of their own tooltips. The fix: put markers in custom panes below 650.
 
 ### ImageOverlay Must Be Non-Interactive
-Set `interactive=False` on `dl.ImageOverlay` AND add `pointer-events: none !important` in CSS (`.leaflet-image-layer`). Otherwise the overlay swallows all mouse events, preventing hover on POI markers underneath.
+Set `interactive=False` on `dl.ImageOverlay` AND add `pointer-events: none !important` in CSS (`.leaflet-image-layer`). Otherwise the overlay swallows all mouse events, preventing clicks on POI markers underneath.
+
+### Interaction Model
+- **Click map** → permanent tooltip with SST reading (temp + coords)
+- **Click POI marker** → popup with spot name, temp, coords (slate-blue left border accent)
+- **Click The Dump rectangle** → popup with name, center temp, coords
+- Only one popup/tooltip visible at a time — clicking a new location dismisses the previous one
+- POI clicks don't propagate to the map (markers are interactive), so no dual-tooltip conflict
+- This model works identically on mobile (tap = click)
 
 ### Performance Notes
 - **7-day payload size**: ~7 MB JSON in dcc.Store (7 raw arrays + 7 base64 PNGs). Acceptable but worth monitoring.
 - **Pre-rendering PNGs server-side** with unified vmin/vmax makes frame switching instant — the render callback just selects a pre-built base64 URL.
 - **2x upsample** (scipy zoom) is hardcoded. Higher factors showed negligible visual improvement for more processing cost.
+- **AOI expansion** (39.5°N southern boundary) added ~15% more grid cells — negligible impact.
 
-## POI Fishing Spots
+## POI Fishing Spots (20 points + 1 rectangle)
 ```
-Haabs Ledge        40.868250, -71.838200
-Butterfish Hole    40.836467, -71.674900
-July2025           40.895550, -71.830817
-CIA                40.933433, -71.716667
-Gully              41.020483, -71.416950
-Wind Farm SW Corner 40.973983, -71.273300
-Tuna Ridge         40.916667, -71.279167
+Original:
+  Haabs Ledge          40.868, -71.838
+  Butterfish Hole      40.836, -71.675
+  July2025             40.896, -71.831
+  CIA                  40.933, -71.717
+  Gully                41.020, -71.417
+  Wind Farm SW Corner  40.974, -71.273
+  Tuna Ridge           40.917, -71.279
+
+Added (source: marinebasin.com):
+  Bacardi Wreck        39.883, -72.645
+  Coimbra Wreck        40.401, -72.339
+  Cartwright           41.000, -71.808
+  Coxes Ledge          41.050, -71.158
+  West Atlantis        40.075, -70.450
+  East Atlantis        39.958, -69.917
+  The Dip              39.908, -71.733
+  Fish Tails           40.062, -71.355
+  Jennie's Horn        40.813, -71.544
+  Mud Hole             40.937, -71.417
+  Ranger Wreck         40.588, -71.790
+
+The Dump (source: saltycape.com):
+  Rectangle: 40.667-40.833°N, 70.750-70.996°W
 ```
 
 ## Running Locally

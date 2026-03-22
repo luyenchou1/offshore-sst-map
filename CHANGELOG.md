@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-03-22 — Phase 1: UI Polish, POIs, Expanded Coverage
+
+### Added
+- **20 fishing spots + The Dump**: Bacardi Wreck, Coimbra Wreck, Cartwright, Coxes Ledge, West/East Atlantis, The Dip, Fish Tails, Jennie's Horn, Mud Hole, Ranger Wreck. The Dump rendered as a dashed rectangle (10x10 mi box, source: saltycape.com).
+- **POI multi-select picker**: Dropdown to choose exactly which fishing spots to display on the map.
+- **Expanded AOI**: Southern boundary pushed from ~39.9°N to 39.5°N to cover all new spots (Bacardi, The Dip, Atlantis canyons, Fish Tails).
+
+### Changed
+- **Renamed to "Offshore SST Analyzer"** (dropped "NJ to MA AOI" reference).
+- **POI markers restyled**: Hollow slate-colored rings (subtle, non-competing with SST overlay) replacing solid green circles.
+- **POI tooltips enhanced**: Bold name, prominent temperature, lat/lon coordinates, slate-blue left border accent to distinguish from SST click-to-read tooltips.
+- **POI interaction unified to click**: POIs now use `dl.Popup` (click to open) instead of `dl.Tooltip` (hover). Only one popup visible at a time. Works identically on mobile (tap = click).
+- **Compact status text**: "MUR 1km • 7 days loaded" replaces verbose green alert box.
+- **AOI boundary**: Light gray dashed line instead of solid black.
+- **Play/Pause button**: Icon-only (▶/⏸), consistent sizing.
+- **Date picker**: Friendlier "MMM D, YYYY" format.
+- **Tighter sidebar**: Removed "Controls" header, condensed spacing.
+
 ## 2026-03-22 — 7-Day Animation & UX Overhaul
 
 ### Added

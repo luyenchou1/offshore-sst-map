@@ -1,7 +1,7 @@
 # Roadmap
 
 ## Phase 1: UI Polish & POIs
-*Status: Up next*
+*Status: Complete*
 
 ### 1a. UI Scrub
 - Rename title to "Offshore SST Analyzer" (drop AOI reference)
