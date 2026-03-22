@@ -263,14 +263,61 @@ def get_sst(target_date, config: Dict) -> Dict:
     )
 
 
+def _fetch_single_day(server, dsid, varname, date, bbox):
+    """Fetch one day — helper for parallel execution.
+
+    Skips the DAS lookup (already done by caller) and fetches the grid
+    directly.  Retries once on 429 rate-limit errors.
+    """
+    minlon, minlat, maxlon, maxlat = bbox
+    t0 = f"{date}T00:00:00Z"
+    t1 = f"{date}T23:59:59Z"
+    query = (
+        f"{varname}[({t0}):1:({t1})]"
+        f"[({minlat}):1:({maxlat})]"
+        f"[({minlon}):1:({maxlon})]"
+    )
+    nc_url = f"{server}/griddap/{dsid}.nc?{query}"
+
+    for attempt in range(3):
+        rr = requests.get(nc_url, timeout=30)
+        if rr.status_code == 429:
+            time.sleep(2 * (attempt + 1))  # back off: 2s, 4s, 6s
+            continue
+        rr.raise_for_status()
+        break
+    else:
+        raise RuntimeError(f"Rate limited after 3 retries for {date}")
+
+    with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tf:
+        tf.write(rr.content)
+        path = tf.name
+    ds = xr.open_dataset(path)
+    da = ds[varname].squeeze()
+    lat_name = next((d for d in ds.dims if "lat" in d.lower()), "lat")
+    lon_name = next((d for d in ds.dims if "lon" in d.lower()), "lon")
+    data2 = (
+        da.values[0, :, :] if ("time" in da.dims and da.ndim == 3) else da.values
+    )
+    lats = ds[lat_name].values
+    lons = ds[lon_name].values
+    units = da.attrs.get("units", "kelvin")
+    arrF = to_fahrenheit_whole(data2, units)
+    return {"arrF": arrF, "date": str(date), "lats": lats, "lons": lons, "units": units}
+
+
 def get_sst_multiday(end_date, config: Dict, num_days: int = 7) -> Dict:
-    """Fetch multiple days of SST in a single ERDDAP request.
+    """Fetch multiple days of SST using parallel individual-day requests.
 
     Returns a dict with per-day 2D arrays, shared lats/lons, and metadata.
     Falls back to older date ranges if the requested end_date is not yet
     available (MUR has ~2-day latency).
+
+    Uses concurrent.futures to fetch all days in parallel for speed.
     """
-    MAX_SECONDS = 90  # 7-day downloads are larger; allow more time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    MAX_SECONDS = 90
 
     aoi = [tuple(pt) for pt in config["aoi_polygon_lonlat"]]
     lons_aoi = [p[0] for p in aoi]
@@ -282,7 +329,7 @@ def get_sst_multiday(end_date, config: Dict, num_days: int = 7) -> Dict:
     # Try the requested window, then shift back 1-2 days for MUR latency
     for date_offset in range(3):
         adj_end = end_date - timedelta(days=date_offset)
-        adj_start = adj_end - timedelta(days=num_days - 1)
+        dates = [adj_end - timedelta(days=i) for i in range(num_days - 1, -1, -1)]
 
         for terms in [config["primary_search_terms"], config["fallback_search_terms"]]:
             is_primary = terms == config["primary_search_terms"]
@@ -301,51 +348,53 @@ def get_sst_multiday(end_date, config: Dict, num_days: int = 7) -> Dict:
 
                 dsid, title = choice["id"], choice["title"]
 
+                # Look up the variable name once (shared across all days)
                 try:
-                    ds, varname = fetch_grid_multiday(
-                        server, dsid, adj_start, adj_end, bbox
-                    )
+                    das_url = f"{server}/griddap/{dsid}.das"
+                    r = requests.get(das_url, timeout=10)
+                    r.raise_for_status()
+                    varname = guess_var_from_das(r.text)
+                    if not varname:
+                        continue
+                except Exception:
+                    continue
+
+                # Fetch all days in parallel (max 2 to avoid rate limits)
+                try:
+                    results = {}
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        futures = {
+                            pool.submit(
+                                _fetch_single_day, server, dsid, varname, d, bbox
+                            ): d
+                            for d in dates
+                        }
+                        for fut in as_completed(futures):
+                            d = futures[fut]
+                            results[d] = fut.result()  # raises on failure
                 except Exception as e:
                     logger.warning(
-                        "fetch_grid_multiday failed for %s/%s on %s to %s: %s",
-                        server, dsid, adj_start, adj_end, e,
+                        "Parallel fetch failed for %s/%s on %s to %s: %s",
+                        server, dsid, dates[0], dates[-1], e,
                     )
                     continue
 
-                da = ds[varname]
-                lat_name = next(
-                    (d for d in ds.dims if "lat" in d.lower()), "lat"
-                )
-                lon_name = next(
-                    (d for d in ds.dims if "lon" in d.lower()), "lon"
-                )
-                lats = ds[lat_name].values
-                lons = ds[lon_name].values
-                units = da.attrs.get("units", "kelvin")
-
-                # Extract time coordinate
-                time_name = next(
-                    (d for d in ds.dims if "time" in d.lower()), "time"
-                )
-                times = ds[time_name].values
-
-                # Build per-day slices
+                # Assemble results in chronological order
                 days = []
-                for i in range(len(times)):
-                    slice_2d = da.values[i, :, :]
-                    arrF = to_fahrenheit_whole(slice_2d, units)
-                    date_str = str(np.datetime_as_string(times[i], unit="D"))
-                    days.append({"arrF": arrF, "date": date_str})
+                for d in dates:
+                    r = results[d]
+                    days.append({"arrF": r["arrF"], "date": r["date"]})
 
+                first = results[dates[0]]
                 return {
                     "server": server,
                     "dataset_id": dsid,
                     "dataset_title": title,
-                    "var": varname,
-                    "units": units,
+                    "var": "analysed_sst",
+                    "units": first["units"],
                     "days": days,
-                    "lats": lats,
-                    "lons": lons,
+                    "lats": first["lats"],
+                    "lons": first["lons"],
                 }
 
     raise RuntimeError(
