@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-03-22 — Measure Tool & Unified Click System
+
+### Added
+- **Ruler/measure tool**: Two-click distance measurement with heading. Shows nautical miles, statute miles, bearing, and compass direction (e.g. "42.3 nm (48.7 mi) • 225° SW"). Measure button in sidebar toggles mode. Snaps to POI coordinates when clicking near a fishing spot.
+
+### Changed
+- **Unified click interactions**: All map clicks (SST reading, POI info, measure) route through one callback and render in the same click-marker layer. Only one tooltip visible at a time — no more overlapping popups.
+- **POI markers are visual-only**: No more `dl.Popup` children. Click detection uses proximity threshold (~5 nm) via `find_nearest_poi()`. Clicks bubble through to the map for unified handling.
+- **Play/Pause button**: Plain text labels instead of unicode icons (which rendered inconsistently across browsers).
+
 ## 2026-03-22 — Phase 1: UI Polish, POIs, Expanded Coverage
 
 ### Added

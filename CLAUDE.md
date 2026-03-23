@@ -55,6 +55,8 @@ User picks date → Fetch button → get_sst_multiday() → 7 parallel ERDDAP re
 - **`dbc.Spinner` v2 uses `spinner_class_name`**, not `className`. The constructor will error.
 - **Callback timeouts are browser-side**, not server-side. If a synchronous Dash callback takes >30s, the browser gives up with "server did not respond" and the callback system can get stuck. Once stuck, subsequent clicks don't fire. Solution: keep callbacks under 30s or use time budgets.
 - **Changing callback inputs/outputs changes the callback hash.** Browser-cached JS from a previous session will 500 with "Callback function not found." Users must hard-refresh after callback signature changes.
+- **Avoid unicode icons in button labels.** Characters like ⏸ (U+23F8) and ❚❚ (U+275A) render inconsistently across browsers/OS. Use plain text labels ("Play"/"Pause") instead.
+- **Server must be restarted for code changes to take effect.** Committing and pushing is not enough — the running Dash dev server serves from memory. Preview server must be stopped and restarted.
 
 ### ERDDAP Behavior
 - **MUR data latency**: ~2 days behind. Always try `end_date - 0`, then `-1`, then `-2`.
@@ -77,13 +79,20 @@ If POI markers and tooltipPane have the same z-index, the markers render ON TOP 
 ### ImageOverlay Must Be Non-Interactive
 Set `interactive=False` on `dl.ImageOverlay` AND add `pointer-events: none !important` in CSS (`.leaflet-image-layer`). Otherwise the overlay swallows all mouse events, preventing clicks on POI markers underneath.
 
-### Interaction Model
-- **Click map** → permanent tooltip with SST reading (temp + coords)
-- **Click POI marker** → popup with spot name, temp, coords (slate-blue left border accent)
-- **Click The Dump rectangle** → popup with name, center temp, coords
-- Only one popup/tooltip visible at a time — clicking a new location dismisses the previous one
-- POI clicks don't propagate to the map (markers are interactive), so no dual-tooltip conflict
-- This model works identically on mobile (tap = click)
+### Interaction Model — Unified Click System
+All clicks route through a single `handle_map_click` callback. Only one tooltip visible at a time.
+- **Click near a POI** (~0.08° threshold via `find_nearest_poi()`) → shows POI info (name, temp, coords) in the click-marker layer with slate-blue left border accent
+- **Click empty map** → shows SST reading (temp + coords) with red circle marker
+- **Measure mode** → two-click distance/bearing tool. If clicked near a POI, snaps to POI coordinates and shows POI name in the A/B labels
+- POI markers are **visual-only** (`bubblingMouseEvents=True`, no Popup/Tooltip children). All info display is callback-driven through the click-marker layer
+- This unified model works identically on mobile (tap = click)
+
+### Measure Tool
+- Toggle via "📏 Measure" button in sidebar
+- Click point A, click point B → dashed indigo line with distance label at midpoint
+- Shows: nautical miles, statute miles, bearing, compass direction (e.g. "42.3 nm (48.7 mi) • 225° SW")
+- Snaps to POI coordinates when clicking near a fishing spot
+- Math in `map/measure.py`: haversine distance + initial bearing formula
 
 ### Performance Notes
 - **7-day payload size**: ~7 MB JSON in dcc.Store (7 raw arrays + 7 base64 PNGs). Acceptable but worth monitoring.
