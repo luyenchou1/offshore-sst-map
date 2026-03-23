@@ -280,7 +280,7 @@ def _fetch_single_day(server, dsid, varname, date, bbox):
     nc_url = f"{server}/griddap/{dsid}.nc?{query}"
 
     for attempt in range(3):
-        rr = requests.get(nc_url, timeout=30)
+        rr = requests.get(nc_url, timeout=45)
         if rr.status_code == 429:
             time.sleep(2 * (attempt + 1))  # back off: 2s, 4s, 6s
             continue
