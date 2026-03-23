@@ -3,33 +3,26 @@
 ## Phase 1: UI Polish & POIs
 *Status: Complete*
 
-### 1a. UI Scrub
-- Rename title to "Offshore SST Analyzer" (drop AOI reference)
-- Simplify the green "Loaded" status alert — condense date range (already in slider) and data source
-- Soften AOI boundary — light gray dashed line instead of solid black
-- Fix date picker month arrow direction (up → down)
-- Simplify Play/Pause button — icon only, consistent styling
-- Review sidebar spacing for shorter viewports
-- Consider showing current frame date in the legend
-- General polish pass on typography, spacing, contrast
-
-### 1b. Add Fishing Spots
-- User will provide additional POI names and coordinates
-- Add to `map/pois.py` POIS list
-- Trivial change, bundle with UI scrub
+- Renamed to "Offshore SST Analyzer"
+- Compact status text, subtle AOI boundary, clean Play/Pause labels
+- 20 fishing spots + The Dump rectangle added
+- Multi-select POI picker dropdown with count label
+- Expanded AOI south to 39.5°N for full POI coverage
+- Unified click system (POI info, SST readings, measure tool — one tooltip at a time)
+- Ruler/measure tool with distance (nm/mi) and heading
 
 ## Phase 2: GotOne Branding
-*Status: Planned*
+*Status: Complete*
 
-- Match styling to [gotoneapp.com](https://www.gotoneapp.com) — colors, fonts, visual identity
-- Add GotOne logo (user to provide PNG/SVG) to header
-- Rename app to "GotOne Offshore SST Analyzer"
-- Swap Bootstrap theme to match GotOne palette
-- Custom CSS for buttons, alerts, controls
-- Pull brand colors and fonts from the live website
+- Dark navy header (#0a1628) with white GotOne fish logotype
+- Dark navy sidebar matching header, light text throughout
+- Brand blue (#0183fe) for slider track, spinner, measure accents
+- White pill-shaped buttons with dark text (matches GotOne CTA style)
+- Dark text on white inputs (date picker, POI dropdown, calendar popup)
+- Custom CSS overrides for Dash 4 component class names
 
 ## Phase 3: Responsive / Mobile
-*Status: Planned — do after branding to avoid double-rework*
+*Status: Planned — next up*
 
 - Stacked layout on mobile (controls above map, or collapsible drawer)
 - Full-width map on small screens

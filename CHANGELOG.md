@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-03-22 — Phase 2: GotOne Branding
+
+### Added
+- **GotOne branding**: Dark navy header and sidebar (#0a1628) with white fish logotype.
+- **Brand blue (#0183fe)** throughout: slider track, spinner, measure accents, status text.
+- **Custom CSS** (`assets/gotone.css`): Full styling overrides for Dash 4 component class names (date picker, dropdown, calendar popup, slider).
+
+### Changed
+- **White pill-shaped buttons** on dark sidebar (matches GotOne CTA style: white bg, dark text).
+- **Dark text on white inputs**: Date picker, POI dropdown, and calendar popup all legible against dark sidebar.
+- **Larger header**: 72px with 56px logotype for better brand presence.
+- **Title**: "GotOne Offshore SST Analyzer" in browser tab.
+
 ## 2026-03-22 — Measure Tool & Unified Click System
 
 ### Added

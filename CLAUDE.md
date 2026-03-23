@@ -1,15 +1,24 @@
-# Offshore SST Analyzer — Project Context
+# GotOne Offshore SST Analyzer — Project Context
 
 ## What This Is
-Dash 4.0 web app ("Offshore SST Analyzer") showing daily sea-surface temperatures for the NJ-to-MA offshore corridor. Users pick any 7-day date window (back to June 2002) and animate through the week's SST evolution to spot fishing-relevant trends (warm eddies, cold upwelling, thermoclines).
+Dash 4.0 web app ("GotOne Offshore SST Analyzer") branded for [gotoneapp.com](https://www.gotoneapp.com). Shows daily sea-surface temperatures for the NJ-to-MA offshore corridor. Users pick any 7-day date window (back to June 2002) and animate through the week's SST evolution to spot fishing-relevant trends (warm eddies, cold upwelling, thermoclines).
 
 ## Tech Stack
-- **Dash 4.0** + **dash-leaflet** + **dash-bootstrap-components** (Flatly theme)
+- **Dash 4.0** + **dash-leaflet** + **dash-bootstrap-components** (Flatly theme + GotOne CSS overrides)
 - **NOAA CoastWatch ERDDAP** — MUR GHRSST (1km, preferred) with OISST (25km) fallback
 - Data available from 2002-06-01 to ~2 days ago (MUR has ~2-day latency)
 - Python 3.12, venv at `.venv/`
 - Dev server: `.venv/bin/python -c "from app import app; app.run(...)"`  (port 8050)
 - Production: gunicorn via Procfile
+
+## GotOne Branding
+- **Primary blue**: `#0183fe` (buttons active states, slider, spinner, measure tool)
+- **Dark navy**: `#0a1628` (header, sidebar background)
+- **Logo**: `assets/gotone-logo.png` — white fish + "GotOne" logotype on transparent bg (56px height)
+- **Source logos**: `Branding:Logo/` folder (not deployed — gitignored)
+- **Buttons**: White pill-shaped (border-radius 100px) with dark text on dark sidebar
+- **Inputs**: White background with dark navy text (#0a1628) for date picker, dropdown, calendar popup
+- **CSS**: `assets/gotone.css` contains all brand overrides. Must use Dash 4 class names (see below)
 
 ## Architecture
 
@@ -25,7 +34,7 @@ User picks date → Fetch button → get_sst_multiday() → 7 parallel ERDDAP re
 ### Key Files
 | File | Purpose |
 |------|---------|
-| `app.py` | Main app, all callbacks (9 total), layout |
+| `app.py` | Main app, all callbacks (10 total), layout |
 | `data/erddap.py` | ERDDAP search, fetch, multi-day parallel download |
 | `data/geo.py` | Orient arrays, AOI mask, land mask (all 2D only) |
 | `data/convert.py` | Kelvin→Fahrenheit, 2x visual upsample |
@@ -34,7 +43,10 @@ User picks date → Fetch button → get_sst_multiday() → 7 parallel ERDDAP re
 | `map/overlay.py` | Array → RGBA → base64 PNG |
 | `map/colorscale.py` | Legend component, adaptive color bounds |
 | `map/pois.py` | 20 fishing spots + The Dump rectangle, multi-select picker |
+| `map/measure.py` | Haversine distance, initial bearing, compass direction |
 | `config.json` | AOI polygon, ERDDAP servers, search terms |
+| `assets/gotone.css` | GotOne brand CSS overrides (colors, dark sidebar, inputs) |
+| `assets/gotone-logo.png` | White fish logotype on transparent background |
 
 ### Callback Structure
 1. **show_loading_on_fetch** — Fast callback on button click, shows map overlay immediately
@@ -46,6 +58,7 @@ User picks date → Fetch button → get_sst_multiday() → 7 parallel ERDDAP re
 7. **auto_advance_frame** — Increments frame slider on interval tick (wraps 6→0)
 8. **step_frame** — Step forward/back buttons
 9. **update_day_indicator** — Shows "Mar 15, 2026 (Day 3 of 7)"
+10. **update_poi_count** — Shows "(19/19)" count next to "FISHING SPOTS" label
 
 ## Critical Lessons Learned
 
@@ -57,6 +70,8 @@ User picks date → Fetch button → get_sst_multiday() → 7 parallel ERDDAP re
 - **Changing callback inputs/outputs changes the callback hash.** Browser-cached JS from a previous session will 500 with "Callback function not found." Users must hard-refresh after callback signature changes.
 - **Avoid unicode icons in button labels.** Characters like ⏸ (U+23F8) and ❚❚ (U+275A) render inconsistently across browsers/OS. Use plain text labels ("Play"/"Pause") instead.
 - **Server must be restarted for code changes to take effect.** Committing and pushing is not enough — the running Dash dev server serves from memory. Preview server must be stopped and restarted.
+- **Dash 4 CSS class names differ from older versions.** Date picker uses `.dash-datepicker-input` (not `.DateInput_input`). Dropdown uses `.dash-dropdown-value`, `.dash-options-list-option-text` (not `.Select-value-label`). Calendar uses `.dash-datepicker-calendar`. Always inspect the actual DOM to find the right selectors — don't guess from docs for older versions.
+- **Dark sidebar + white inputs require aggressive CSS overrides.** Dash components inherit text color from their parent. When the sidebar has light text, every input/dropdown/calendar inside it also gets light text. Must use `!important` on the specific Dash 4 class names for each component.
 
 ### ERDDAP Behavior
 - **MUR data latency**: ~2 days behind. Always try `end_date - 0`, then `-1`, then `-2`.
