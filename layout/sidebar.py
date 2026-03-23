@@ -89,8 +89,16 @@ def build_sidebar():
             ),
             html.Hr(className="my-2"),
             # Fishing spot picker
-            html.Label("Fishing spots", className="fw-bold mb-1",
-                        style={"fontSize": "0.85rem"}),
+            html.Div(
+                [
+                    html.Span("Fishing spots", className="fw-bold",
+                              style={"fontSize": "0.85rem"}),
+                    html.Span(id="poi-count",
+                              style={"fontSize": "0.75rem", "color": "#64748b",
+                                     "marginLeft": "0.5rem"}),
+                ],
+                className="mb-1",
+            ),
             dcc.Dropdown(
                 id="poi-picker",
                 options=get_poi_options(),

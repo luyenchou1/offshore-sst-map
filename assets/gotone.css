@@ -96,20 +96,33 @@ body {
 }
 .gotone-sidebar .DateInput_input {
     background: white !important;
-    color: #1e293b !important;
-    font-weight: 500;
+    color: #0a1628 !important;
+    font-weight: 600;
     font-size: 0.85rem;
 }
 
 /* --- Sidebar dropdown on dark bg --- */
-.gotone-sidebar .Select-control,
 .gotone-sidebar .dash-dropdown .Select-control {
-    background-color: #1e293b !important;
-    border-color: #334155 !important;
+    background-color: white !important;
+    border-color: #cbd5e1 !important;
+    border-radius: 8px !important;
 }
-.gotone-sidebar .Select-value-label,
-.gotone-sidebar .Select-placeholder {
-    color: #cbd5e1 !important;
+.gotone-sidebar .dash-dropdown .Select-value-label {
+    color: #0a1628 !important;
+    font-weight: 500;
+}
+.gotone-sidebar .dash-dropdown .Select-placeholder {
+    color: #64748b !important;
+}
+.gotone-sidebar .dash-dropdown .Select-input input {
+    color: #0a1628 !important;
+}
+/* Hide the truncated tag previews — just show count */
+.gotone-sidebar .dash-dropdown .Select--multi .Select-value {
+    display: none !important;
+}
+.gotone-sidebar .dash-dropdown .Select--multi .Select-input {
+    margin-left: 0 !important;
 }
 
 /* --- Sidebar slider on dark bg --- */

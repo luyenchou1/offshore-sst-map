@@ -28,7 +28,7 @@ from map.measure import format_measurement
 from map.overlay import sst_to_base64_png
 from map.pois import (
     build_aoi_geojson, build_poi_markers, build_poi_tooltip,
-    find_nearest_poi, _lookup_temp,
+    find_nearest_poi, get_all_poi_names, _lookup_temp,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -616,6 +616,17 @@ def toggle_measure(n_clicks, measure):
             "",
             [],
         )
+
+
+# ---- Callback 9: POI count label ----
+@app.callback(
+    Output("poi-count", "children"),
+    Input("poi-picker", "value"),
+)
+def update_poi_count(selected):
+    n = len(selected) if selected else 0
+    total = len(get_all_poi_names())
+    return f"({n}/{total})"
 
 
 if __name__ == "__main__":
