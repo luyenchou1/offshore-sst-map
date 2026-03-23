@@ -21,8 +21,9 @@ body {
 }
 .gotone-header img {
     height: 36px;
-    width: 36px;
+    width: auto;
     border-radius: 50%;
+    object-fit: contain;
 }
 .gotone-header h1 {
     color: white;
@@ -37,37 +38,90 @@ body {
     margin: 0;
 }
 
-/* --- Buttons: GotOne pill style --- */
-.btn-primary,
-.btn-primary:hover,
-.btn-primary:focus,
-.btn-primary:active {
-    background-color: #0183fe !important;
-    border-color: #0183fe !important;
+/* --- Buttons: white pill on dark sidebar --- */
+.gotone-sidebar .btn-primary,
+.gotone-sidebar .btn-primary:hover,
+.gotone-sidebar .btn-primary:focus,
+.gotone-sidebar .btn-primary:active {
+    background-color: white !important;
+    border-color: white !important;
+    color: #0a1628 !important;
     border-radius: 100px !important;
+    font-weight: 600;
 }
-.btn-outline-secondary {
+.gotone-sidebar .btn-primary:hover {
+    background-color: #e2e8f0 !important;
+    border-color: #e2e8f0 !important;
+}
+.gotone-sidebar .btn-outline-secondary,
+.gotone-sidebar .btn-outline-secondary:hover {
     border-radius: 100px !important;
+    color: #cbd5e1 !important;
+    border-color: #475569 !important;
 }
-.btn-primary:hover {
-    background-color: #006fd6 !important;
-    border-color: #006fd6 !important;
+.gotone-sidebar .btn-outline-secondary:hover {
+    background-color: #1e293b !important;
 }
 
-/* --- Sidebar --- */
+/* --- Sidebar: dark navy --- */
 .gotone-sidebar {
-    background-color: #f8fafc !important;
-    border-right: 1px solid #e2e8f0;
+    background-color: #0a1628 !important;
+    color: #e2e8f0;
 }
 .gotone-sidebar .fw-bold {
-    color: #334155;
+    color: #94a3b8;
     font-size: 0.8rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
 }
 .gotone-sidebar hr {
-    border-color: #e2e8f0;
-    opacity: 0.6;
+    border-color: #1e293b;
+    opacity: 0.8;
+}
+.gotone-sidebar .text-success {
+    color: #4ade80 !important;
+}
+.gotone-sidebar .text-muted {
+    color: #64748b !important;
+}
+.gotone-sidebar .form-check-label,
+.gotone-sidebar label {
+    color: #cbd5e1 !important;
+}
+
+/* --- Sidebar date picker on dark bg --- */
+.gotone-sidebar .SingleDatePickerInput {
+    background: #1e293b !important;
+    border-color: #334155 !important;
+    border-radius: 8px !important;
+}
+.gotone-sidebar .DateInput_input {
+    background: #1e293b !important;
+    color: #e2e8f0 !important;
+    font-size: 0.85rem;
+}
+
+/* --- Sidebar dropdown on dark bg --- */
+.gotone-sidebar .Select-control,
+.gotone-sidebar .dash-dropdown .Select-control {
+    background-color: #1e293b !important;
+    border-color: #334155 !important;
+}
+.gotone-sidebar .Select-value-label,
+.gotone-sidebar .Select-placeholder {
+    color: #cbd5e1 !important;
+}
+
+/* --- Sidebar slider on dark bg --- */
+.gotone-sidebar .rc-slider-rail {
+    background-color: #334155 !important;
+}
+.gotone-sidebar .rc-slider-mark-text {
+    color: #94a3b8 !important;
+}
+.gotone-sidebar .rc-slider-dot {
+    border-color: #475569 !important;
+    background-color: #1e293b !important;
 }
 
 /* --- Spinner --- */

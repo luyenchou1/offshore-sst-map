@@ -40,7 +40,7 @@ def build_sidebar():
                     html.Div(
                         id="day-indicator",
                         className="text-center mb-1",
-                        style={"fontSize": "0.85rem", "fontWeight": "600"},
+                        style={"fontSize": "0.85rem", "fontWeight": "600", "color": "#e2e8f0"},
                     ),
                     dcc.Slider(
                         id="frame-slider",
