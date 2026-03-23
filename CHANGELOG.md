@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-03-23 — Sidebar Polish
+
+### Changed
+- **Sidebar grouped into 3 sections** (Data, Playback, Map Tools) with visible dividers (#334155) and muted uppercase labels.
+- **Fetch SST button** is now brand blue (#0183fe) with white text — clearly the primary CTA. Lighter date picker text (weight 400) so it doesn't compete.
+- **Section spacing** increased for clearer visual separation between control groups.
+- **Gitignore**: Added `Branding:Logo/` to prevent source logo files from being committed.
+
 ## 2026-03-22 — Phase 2: GotOne Branding
 
 ### Added
