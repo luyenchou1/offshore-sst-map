@@ -62,12 +62,12 @@ def build_sidebar():
                                 style={"minWidth": "36px"},
                             ),
                             dbc.Button(
-                                "\u25B6",
+                                "Play",
                                 id="play-pause-btn",
                                 color="primary",
                                 size="sm",
                                 className="me-1",
-                                style={"minWidth": "36px"},
+                                style={"minWidth": "50px"},
                             ),
                             dbc.Button(
                                 "\u25B6",
