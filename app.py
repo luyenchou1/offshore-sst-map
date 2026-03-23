@@ -235,51 +235,132 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
         )
 
 
-# ---- Callback 2: Render map layers for current frame ----
+# ---- Callback 2: Render static layers (POIs, legend, AOI) ----
+# Only fires on data load or POI selection change — NOT on frame changes.
 @app.callback(
-    Output("sst-overlay", "url"),
-    Output("sst-overlay", "bounds"),
     Output("aoi-outline", "data"),
     Output("poi-layer", "children"),
     Output("legend-container", "children"),
     Output("map-loading-overlay", "style", allow_duplicate=True),
     Input("sst-store", "data"),
-    Input("frame-slider", "value"),
-    Input("lock-scale", "value"),
     Input("poi-picker", "value"),
+    Input("lock-scale", "value"),
     prevent_initial_call="initial_duplicate",
 )
-def render_map_layers(sst_data, frame_idx, lock_scale, selected_pois):
+def render_static_layers(sst_data, selected_pois, lock_scale):
     aoi_geojson = build_aoi_geojson(CFG)
-
     hidden = {"display": "none"}
 
     if not sst_data or "frames" not in sst_data:
-        return "", [[0, 0], [0, 0]], aoi_geojson, build_poi_markers(selected=selected_pois), "", dash.no_update
+        return aoi_geojson, build_poi_markers(selected=selected_pois), "", dash.no_update
 
-    frame_idx = frame_idx or 0
-    num_frames = len(sst_data["frames"])
-    if frame_idx >= num_frames:
-        frame_idx = num_frames - 1
-
-    # Pre-rendered PNG for this frame
-    overlay_url = sst_data["frames"][frame_idx]
-    bounds = sst_data["bounds"]
-
-    # Raw data for POI temperature lookups
-    arrF = np.array(sst_data["raw_days"][frame_idx]["arrF"], dtype=np.float64)
-    lats = np.array(sst_data["lats"], dtype=np.float64)
-    lons = np.array(sst_data["lons"], dtype=np.float64)
-
-    # Unified color bounds
     vmin = sst_data["vmin"]
     vmax = sst_data["vmax"]
     res_km = sst_data.get("res_km")
 
     legend = build_legend_component(vmin, vmax, res_km=res_km)
-    poi_markers = build_poi_markers(arrF, lats, lons, selected=selected_pois)
+    poi_markers = build_poi_markers(selected=selected_pois)
 
-    return overlay_url, bounds, aoi_geojson, poi_markers, legend, hidden
+    return aoi_geojson, poi_markers, legend, hidden
+
+
+# ---- Clientside: Swap overlay PNG by frame index (instant, no server trip) ----
+app.clientside_callback(
+    """
+    function(frame_idx, sst_data) {
+        if (!sst_data || !sst_data.frames) {
+            return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+        }
+        var idx = frame_idx || 0;
+        if (idx >= sst_data.frames.length) idx = sst_data.frames.length - 1;
+        return [sst_data.frames[idx], sst_data.bounds];
+    }
+    """,
+    Output("sst-overlay", "url"),
+    Output("sst-overlay", "bounds"),
+    Input("frame-slider", "value"),
+    Input("sst-store", "data"),
+)
+
+
+# ---- Clientside: Play/Pause toggle (no server trip) ----
+app.clientside_callback(
+    """
+    function(n_clicks, currently_disabled) {
+        if (currently_disabled) return [false, 'Pause'];
+        return [true, 'Play'];
+    }
+    """,
+    Output("anim-interval", "disabled"),
+    Output("play-pause-btn", "children"),
+    Input("play-pause-btn", "n_clicks"),
+    State("anim-interval", "disabled"),
+    prevent_initial_call=True,
+)
+
+
+# ---- Clientside: Auto-advance frame on interval tick (no server trip) ----
+app.clientside_callback(
+    """
+    function(n_intervals, current_val, max_val) {
+        if (current_val == null || max_val == null) return window.dash_clientside.no_update;
+        var next_val = current_val + 1;
+        if (next_val > max_val) next_val = 0;
+        return next_val;
+    }
+    """,
+    Output("frame-slider", "value", allow_duplicate=True),
+    Input("anim-interval", "n_intervals"),
+    State("frame-slider", "value"),
+    State("frame-slider", "max"),
+    prevent_initial_call=True,
+)
+
+
+# ---- Clientside: Step forward/back buttons (no server trip) ----
+app.clientside_callback(
+    """
+    function(back_clicks, fwd_clicks, current_val, max_val) {
+        if (current_val == null || max_val == null) return window.dash_clientside.no_update;
+        var ctx = window.dash_clientside.callback_context;
+        if (!ctx.triggered.length) return window.dash_clientside.no_update;
+        var triggered_id = ctx.triggered[0].prop_id.split('.')[0];
+        if (triggered_id === 'step-back-btn') return Math.max(0, current_val - 1);
+        if (triggered_id === 'step-fwd-btn') return Math.min(max_val, current_val + 1);
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("frame-slider", "value", allow_duplicate=True),
+    Input("step-back-btn", "n_clicks"),
+    Input("step-fwd-btn", "n_clicks"),
+    State("frame-slider", "value"),
+    State("frame-slider", "max"),
+    prevent_initial_call=True,
+)
+
+
+# ---- Clientside: Day indicator text (no server trip) ----
+app.clientside_callback(
+    """
+    function(frame_idx, sst_data) {
+        if (!sst_data || !sst_data.raw_days) return '';
+        var idx = frame_idx || 0;
+        var num_days = sst_data.raw_days.length;
+        if (idx >= num_days) idx = num_days - 1;
+        var day_date = sst_data.raw_days[idx].date;
+        var d = new Date(day_date + 'T12:00:00');
+        var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        var label = months[d.getMonth()] + ' ' +
+                    String(d.getDate()).padStart(2, '0') + ', ' +
+                    d.getFullYear();
+        return label + '  (Day ' + (idx + 1) + ' of ' + num_days + ')';
+    }
+    """,
+    Output("day-indicator", "children"),
+    Input("frame-slider", "value"),
+    State("sst-store", "data"),
+)
 
 
 # ---- Callback 3a: Route map clicks (SST reading vs measure vs POI) ----
@@ -507,77 +588,6 @@ def render_click_marker(click_pos, sst_data, frame_idx):
             ],
         )
     ]
-
-
-# ---- Callback 4: Play/Pause toggle ----
-@app.callback(
-    Output("anim-interval", "disabled"),
-    Output("play-pause-btn", "children"),
-    Input("play-pause-btn", "n_clicks"),
-    State("anim-interval", "disabled"),
-    prevent_initial_call=True,
-)
-def toggle_play_pause(n_clicks, currently_disabled):
-    if currently_disabled:
-        return False, "Pause"
-    else:
-        return True, "Play"
-
-
-# ---- Callback 5: Auto-advance frame on interval tick ----
-@app.callback(
-    Output("frame-slider", "value", allow_duplicate=True),
-    Input("anim-interval", "n_intervals"),
-    State("frame-slider", "value"),
-    State("frame-slider", "max"),
-    prevent_initial_call=True,
-)
-def auto_advance_frame(n_intervals, current_val, max_val):
-    if current_val is None or max_val is None:
-        return dash.no_update
-    next_val = current_val + 1
-    if next_val > max_val:
-        next_val = 0
-    return next_val
-
-
-# ---- Callback 6: Step forward/back buttons ----
-@app.callback(
-    Output("frame-slider", "value", allow_duplicate=True),
-    Input("step-back-btn", "n_clicks"),
-    Input("step-fwd-btn", "n_clicks"),
-    State("frame-slider", "value"),
-    State("frame-slider", "max"),
-    prevent_initial_call=True,
-)
-def step_frame(back_clicks, fwd_clicks, current_val, max_val):
-    if current_val is None or max_val is None:
-        return dash.no_update
-    triggered = ctx.triggered_id
-    if triggered == "step-back-btn":
-        return max(0, current_val - 1)
-    elif triggered == "step-fwd-btn":
-        return min(max_val, current_val + 1)
-    return dash.no_update
-
-
-# ---- Callback 7: Day indicator text ----
-@app.callback(
-    Output("day-indicator", "children"),
-    Input("frame-slider", "value"),
-    State("sst-store", "data"),
-)
-def update_day_indicator(frame_idx, sst_data):
-    if not sst_data or "raw_days" not in sst_data:
-        return ""
-    frame_idx = frame_idx or 0
-    num_days = len(sst_data["raw_days"])
-    if frame_idx >= num_days:
-        frame_idx = num_days - 1
-    day_date = sst_data["raw_days"][frame_idx]["date"]
-    d = datetime.strptime(day_date, "%Y-%m-%d")
-    label = d.strftime("%b %d, %Y")
-    return f"{label}  (Day {frame_idx + 1} of {num_days})"
 
 
 # ---- Callback 8: Measure toggle ----
