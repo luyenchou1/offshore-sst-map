@@ -131,6 +131,21 @@ body {
 .gotone-sidebar .dash-dropdown-value-tag {
     display: none !important;
 }
+/* Dropdown options list — dark text on white */
+.gotone-sidebar .dash-dropdown-options,
+.gotone-sidebar .dash-options-list,
+.gotone-sidebar .dash-options-list-option,
+.gotone-sidebar .dash-options-list-option-text,
+.gotone-sidebar .dash-dropdown-option {
+    color: #0a1628 !important;
+    background-color: white !important;
+}
+.gotone-sidebar .dash-dropdown-content {
+    background-color: white !important;
+}
+.gotone-sidebar .dash-dropdown-search {
+    color: #0a1628 !important;
+}
 
 /* --- Sidebar slider on dark bg --- */
 .gotone-sidebar .rc-slider-rail {
