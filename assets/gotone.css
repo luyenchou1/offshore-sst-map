@@ -99,6 +99,23 @@ body {
     background: white !important;
     border-radius: 8px !important;
 }
+/* Calendar popup — force dark text throughout */
+.gotone-sidebar .dash-datepicker-calendar,
+.gotone-sidebar .dash-datepicker-calendar * {
+    color: #0a1628 !important;
+}
+.gotone-sidebar .dash-datepicker-calendar {
+    background: white !important;
+}
+.gotone-sidebar .dash-datepicker-controls {
+    color: #0a1628 !important;
+}
+.gotone-sidebar .dash-datepicker-month-sizer {
+    color: #0a1628 !important;
+}
+.gotone-sidebar .dash-datepicker-calendar-date-outside {
+    color: #94a3b8 !important;
+}
 
 /* --- Sidebar dropdown on dark bg --- */
 /* Dash 4 uses .dash-dropdown, .dash-dropdown-value */
