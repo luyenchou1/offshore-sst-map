@@ -124,10 +124,10 @@ def build_sidebar():
             dcc.Store(id="measure-state", data={"mode": "off", "a": None, "b": None}),
         ],
         width=2,
+        className="gotone-sidebar",
         style={
             "padding": "1rem 1.25rem",
-            "backgroundColor": "#f8f9fa",
-            "height": "calc(100vh - 90px)",
+            "height": "calc(100vh - 56px)",
             "overflowY": "auto",
         },
     )

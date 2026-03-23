@@ -40,38 +40,42 @@ with open("config.json") as f:
 app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.FLATLY],
-    title="Offshore SST Analyzer",
+    title="GotOne Offshore SST Analyzer",
 )
 server = app.server  # for gunicorn
 
-app.layout = dbc.Container(
+app.layout = html.Div(
     [
-        dbc.Row(
-            dbc.Col(
-                [
-                    html.H4(
-                        "Offshore SST Analyzer",
-                        className="mt-2 mb-0",
-                    ),
-                    html.P(
-                        "7-day sea-surface temperatures (°F). "
-                        "Click map to read temps. Click spots for details.",
-                        className="text-muted mb-1",
-                        style={"fontSize": "0.8rem"},
-                    ),
-                ]
-            )
+        # GotOne branded header
+        html.Div(
+            [
+                html.Img(src=app.get_asset_url("gotone-logo.png")),
+                html.Div(
+                    [
+                        html.H1("Offshore SST Analyzer"),
+                        html.P(
+                            "7-day sea-surface temperatures. "
+                            "Click map to read temps. Click spots for details.",
+                            className="subtitle",
+                        ),
+                    ]
+                ),
+            ],
+            className="gotone-header",
         ),
-        dbc.Row([build_sidebar(), build_map()]),
+        dbc.Container(
+            [
+                dbc.Row([build_sidebar(), build_map()]),
         dcc.Store(id="sst-store"),
         dcc.Store(id="click-pos"),
-        html.Div(id="fetch-spinner-target", style={"display": "none"}),
-        # Auto-fetch SST on page load (fires once after 500ms)
-        dcc.Interval(id="auto-fetch", interval=500, max_intervals=1),
-    ],
-    fluid=True,
-    style={"padding": "0 0.5rem"},
-)
+            html.Div(id="fetch-spinner-target", style={"display": "none"}),
+            # Auto-fetch SST on page load (fires once after 500ms)
+            dcc.Interval(id="auto-fetch", interval=500, max_intervals=1),
+        ],
+        fluid=True,
+        style={"padding": "0"},
+    ),
+])
 
 
 # ---- Show loading overlay immediately when Fetch is clicked ----
@@ -315,14 +319,14 @@ def handle_map_click(click_data, measure, selected_pois, sst_data, frame_idx):
                     "fontWeight": "600", "color": "#334155",
                 }),
                 html.Div("Click point B", style={
-                    "fontSize": "0.8rem", "color": "#6366f1", "marginTop": "2px",
+                    "fontSize": "0.8rem", "color": "#0183fe", "marginTop": "2px",
                 }),
             ]
         )
         marker = [
             dl.CircleMarker(
                 center=[click_lat, click_lng], radius=5,
-                pathOptions={"color": "#6366f1", "weight": 2, "fillOpacity": 0.4},
+                pathOptions={"color": "#0183fe", "weight": 2, "fillOpacity": 0.4},
                 children=[dl.Tooltip(
                     f"A: {label_a}" if poi else "A",
                     permanent=True, direction="top",
@@ -355,18 +359,18 @@ def handle_map_click(click_data, measure, selected_pois, sst_data, frame_idx):
         marker = [
             dl.Polyline(
                 positions=[[a["lat"], a["lng"]], [click_lat, click_lng]],
-                pathOptions={"color": "#6366f1", "weight": 2, "dashArray": "6 4"},
+                pathOptions={"color": "#0183fe", "weight": 2, "dashArray": "6 4"},
             ),
             dl.CircleMarker(
                 center=[a["lat"], a["lng"]], radius=5,
-                pathOptions={"color": "#6366f1", "weight": 2, "fillOpacity": 0.4},
+                pathOptions={"color": "#0183fe", "weight": 2, "fillOpacity": 0.4},
                 children=[dl.Tooltip(
                     f"A: {a.get('label', 'A')}", permanent=True, direction="top",
                     offset=[0, -8], pane="tooltipPane")],
             ),
             dl.CircleMarker(
                 center=[click_lat, click_lng], radius=5,
-                pathOptions={"color": "#6366f1", "weight": 2, "fillOpacity": 0.4},
+                pathOptions={"color": "#0183fe", "weight": 2, "fillOpacity": 0.4},
                 children=[dl.Tooltip(
                     f"B: {label_b}", permanent=True, direction="top",
                     offset=[0, -8], pane="tooltipPane")],
@@ -598,7 +602,7 @@ def toggle_measure(n_clicks, measure):
             "primary",
             False,
             html.Div("Click point A on the map", style={
-                "fontWeight": "500", "color": "#6366f1", "fontSize": "0.8rem",
+                "fontWeight": "500", "color": "#0183fe", "fontSize": "0.8rem",
             }),
             [],  # clear any existing markers
         )

@@ -1,0 +1,109 @@
+/* ============================================
+   GotOne Brand Styles
+   Primary: #0183fe  (bright blue)
+   Dark:    #0a1628  (navy, matches logo bg)
+   ============================================ */
+
+/* --- Global --- */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    color: #1e293b;
+}
+
+/* --- Header bar --- */
+.gotone-header {
+    background: #0a1628;
+    padding: 0.5rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+.gotone-header img {
+    height: 36px;
+    width: 36px;
+    border-radius: 50%;
+}
+.gotone-header h1 {
+    color: white;
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: 0.02em;
+}
+.gotone-header .subtitle {
+    color: #94a3b8;
+    font-size: 0.75rem;
+    margin: 0;
+}
+
+/* --- Buttons: GotOne pill style --- */
+.btn-primary,
+.btn-primary:hover,
+.btn-primary:focus,
+.btn-primary:active {
+    background-color: #0183fe !important;
+    border-color: #0183fe !important;
+    border-radius: 100px !important;
+}
+.btn-outline-secondary {
+    border-radius: 100px !important;
+}
+.btn-primary:hover {
+    background-color: #006fd6 !important;
+    border-color: #006fd6 !important;
+}
+
+/* --- Sidebar --- */
+.gotone-sidebar {
+    background-color: #f8fafc !important;
+    border-right: 1px solid #e2e8f0;
+}
+.gotone-sidebar .fw-bold {
+    color: #334155;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.gotone-sidebar hr {
+    border-color: #e2e8f0;
+    opacity: 0.6;
+}
+
+/* --- Spinner --- */
+.spinner-border.text-primary {
+    color: #0183fe !important;
+}
+
+/* --- Date picker accent --- */
+.SingleDatePickerInput {
+    border-radius: 8px !important;
+}
+.CalendarDay__selected {
+    background: #0183fe !important;
+    border-color: #0183fe !important;
+}
+
+/* --- Slider track --- */
+.rc-slider-track {
+    background-color: #0183fe !important;
+}
+.rc-slider-handle {
+    border-color: #0183fe !important;
+}
+.rc-slider-handle:active,
+.rc-slider-handle:focus {
+    border-color: #0183fe !important;
+    box-shadow: 0 0 0 3px rgba(1, 131, 254, 0.2) !important;
+}
+.rc-slider-dot-active {
+    border-color: #0183fe !important;
+}
+
+/* --- Measure tool: use brand blue instead of indigo --- */
+.measure-tooltip .leaflet-tooltip {
+    background: rgba(1, 131, 254, 0.9) !important;
+}
+.measure-tooltip .leaflet-tooltip::before {
+    border-top-color: rgba(1, 131, 254, 0.9) !important;
+}
