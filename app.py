@@ -515,9 +515,9 @@ def render_click_marker(click_pos, sst_data, frame_idx):
 )
 def toggle_play_pause(n_clicks, currently_disabled):
     if currently_disabled:
-        return False, "\u23F8"  # pause icon
+        return False, "\u275A\u275A"  # ❚❚ pause
     else:
-        return True, "\u25B6 Play"
+        return True, "\u25B6"  # ▶ play
 
 
 # ---- Callback 5: Auto-advance frame on interval tick ----
