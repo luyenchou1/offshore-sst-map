@@ -20,9 +20,8 @@ body {
     gap: 0.75rem;
 }
 .gotone-header img {
-    height: 36px;
+    height: 44px;
     width: auto;
-    border-radius: 50%;
     object-fit: contain;
 }
 .gotone-header h1 {
