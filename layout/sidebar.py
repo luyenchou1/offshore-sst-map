@@ -135,7 +135,7 @@ def build_sidebar():
         className="gotone-sidebar",
         style={
             "padding": "1rem 1.25rem",
-            "height": "calc(100vh - 56px)",
+            "height": "calc(100vh - 72px)",
             "overflowY": "auto",
         },
     )

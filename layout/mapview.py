@@ -4,7 +4,7 @@ import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 from dash import html
 
-MAP_HEIGHT = "calc(100vh - 56px)"
+MAP_HEIGHT = "calc(100vh - 72px)"
 
 
 def build_map():
