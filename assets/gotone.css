@@ -73,6 +73,24 @@ body {
     background-color: #e2e8f0 !important;
     border-color: #e2e8f0 !important;
 }
+
+/* --- Fetch button: brand blue CTA --- */
+.gotone-sidebar .fetch-btn-cta,
+.gotone-sidebar .fetch-btn-cta:hover,
+.gotone-sidebar .fetch-btn-cta:focus,
+.gotone-sidebar .fetch-btn-cta:active {
+    background-color: #0183fe !important;
+    border-color: #0183fe !important;
+    color: white !important;
+    font-weight: 700;
+    font-size: 0.9rem;
+    letter-spacing: 0.02em;
+    padding: 0.5rem 1rem;
+}
+.gotone-sidebar .fetch-btn-cta:hover {
+    background-color: #0070e0 !important;
+    border-color: #0070e0 !important;
+}
 .gotone-sidebar .btn-outline-secondary,
 .gotone-sidebar .btn-outline-secondary:hover {
     border-radius: 100px !important;
@@ -102,7 +120,8 @@ body {
 .gotone-sidebar .dash-datepicker-input {
     color: #0a1628 !important;
     background: white !important;
-    font-weight: 600 !important;
+    font-weight: 400 !important;
+    font-size: 0.85rem !important;
 }
 .gotone-sidebar .dash-datepicker {
     background: white !important;

@@ -8,7 +8,7 @@ from dash import dcc, html
 from map.pois import get_all_poi_names, get_poi_options
 
 
-def _section_label(text):
+def _section_label(text, first=False):
     """Muted uppercase section label for sidebar grouping."""
     return html.Div(
         text,
@@ -20,16 +20,18 @@ def _section_label(text):
             "textTransform": "uppercase",
             "letterSpacing": "0.08em",
             "marginBottom": "0.5rem",
+            "marginTop": "0" if first else "0.25rem",
         },
     )
 
 
 def _divider():
-    """Subtle section divider."""
+    """Visible section divider on dark bg."""
     return html.Hr(
         style={
-            "borderColor": "#1e293b",
-            "opacity": "0.5",
+            "borderColor": "#334155",
+            "borderWidth": "1px",
+            "opacity": "1",
             "margin": "0.75rem 0",
         }
     )
@@ -42,7 +44,7 @@ def build_sidebar():
     return dbc.Col(
         [
             # ── Section 1: Data Selection ──
-            _section_label("Data"),
+            _section_label("Data", first=True),
             dcc.DatePickerSingle(
                 id="end-date-picker",
                 date=default_end,
@@ -55,7 +57,7 @@ def build_sidebar():
                 "Fetch SST",
                 id="fetch-btn",
                 color="primary",
-                className="w-100 mt-2",
+                className="w-100 mt-2 fetch-btn-cta",
             ),
             html.Div(
                 id="fetch-status",
