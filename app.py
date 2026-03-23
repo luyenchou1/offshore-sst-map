@@ -26,7 +26,10 @@ from layout.sidebar import build_sidebar
 from map.colorscale import build_legend_component, compute_color_bounds
 from map.measure import format_measurement
 from map.overlay import sst_to_base64_png
-from map.pois import build_aoi_geojson, build_poi_markers
+from map.pois import (
+    build_aoi_geojson, build_poi_markers, build_poi_tooltip,
+    find_nearest_poi, _lookup_temp,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -275,7 +278,7 @@ def render_map_layers(sst_data, frame_idx, lock_scale, selected_pois):
     return overlay_url, bounds, aoi_geojson, poi_markers, legend, hidden
 
 
-# ---- Callback 3a: Route map clicks (SST reading vs measure) ----
+# ---- Callback 3a: Route map clicks (SST reading vs measure vs POI) ----
 @app.callback(
     Output("click-pos", "data"),
     Output("measure-state", "data"),
@@ -283,35 +286,47 @@ def render_map_layers(sst_data, frame_idx, lock_scale, selected_pois):
     Output("click-marker", "children", allow_duplicate=True),
     Input("sst-map", "clickData"),
     State("measure-state", "data"),
+    State("poi-picker", "value"),
+    State("sst-store", "data"),
+    State("frame-slider", "value"),
     prevent_initial_call=True,
 )
-def handle_map_click(click_data, measure):
+def handle_map_click(click_data, measure, selected_pois, sst_data, frame_idx):
     if not click_data:
         return dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
     lat = click_data["latlng"]["lat"]
     lng = click_data["latlng"]["lng"]
 
+    # Check if click is near a POI
+    poi = find_nearest_poi(lat, lng, selected=selected_pois)
+
+    # In measure mode, use POI coordinates if clicked near one
+    click_lat = poi[1] if poi else lat
+    click_lng = poi[2] if poi else lng
+
     if measure and measure.get("mode") == "a":
         # Set point A, wait for B
-        new_state = {"mode": "b", "a": {"lat": lat, "lng": lng}, "b": None}
+        label_a = poi[0] if poi else f"{click_lat:.3f}°N, {abs(click_lng):.3f}°W"
+        new_state = {"mode": "b", "a": {"lat": click_lat, "lng": click_lng, "label": label_a}, "b": None}
         readout = html.Div(
             [
-                html.Div("A set — click point B", style={
+                html.Div(f"A: {label_a}", style={
                     "fontWeight": "600", "color": "#334155",
                 }),
-                html.Div(f"{lat:.3f}°N, {abs(lng):.3f}°W", style={
-                    "fontSize": "0.75rem", "color": "#64748b",
+                html.Div("Click point B", style={
+                    "fontSize": "0.8rem", "color": "#6366f1", "marginTop": "2px",
                 }),
             ]
         )
-        # Show point A marker
         marker = [
             dl.CircleMarker(
-                center=[lat, lng], radius=5,
+                center=[click_lat, click_lng], radius=5,
                 pathOptions={"color": "#6366f1", "weight": 2, "fillOpacity": 0.4},
-                children=[dl.Tooltip("A", permanent=True, direction="top",
-                                     offset=[0, -8], pane="tooltipPane")],
+                children=[dl.Tooltip(
+                    f"A: {label_a}" if poi else "A",
+                    permanent=True, direction="top",
+                    offset=[0, -8], pane="tooltipPane")],
             )
         ]
         return dash.no_update, new_state, readout, marker
@@ -319,44 +334,45 @@ def handle_map_click(click_data, measure):
     elif measure and measure.get("mode") == "b":
         # Set point B, compute distance
         a = measure["a"]
-        m = format_measurement(a["lat"], a["lng"], lat, lng)
-        new_state = {"mode": "done", "a": a, "b": {"lat": lat, "lng": lng}}
+        label_b = poi[0] if poi else f"{click_lat:.3f}°N, {abs(click_lng):.3f}°W"
+        m = format_measurement(a["lat"], a["lng"], click_lat, click_lng)
+        new_state = {"mode": "done", "a": a, "b": {"lat": click_lat, "lng": click_lng, "label": label_b}}
         readout = html.Div(
             [
                 html.Div(m["label"], style={
                     "fontWeight": "700", "fontSize": "0.9rem", "color": "#1e293b",
                 }),
                 html.Div(
-                    f"A: {a['lat']:.3f}°N, {abs(a['lng']):.3f}°W",
+                    f"A: {a.get('label', '')}",
                     style={"fontSize": "0.7rem", "color": "#64748b", "marginTop": "4px"},
                 ),
                 html.Div(
-                    f"B: {lat:.3f}°N, {abs(lng):.3f}°W",
+                    f"B: {label_b}",
                     style={"fontSize": "0.7rem", "color": "#64748b"},
                 ),
             ]
         )
-        # Draw line + both markers
         marker = [
             dl.Polyline(
-                positions=[[a["lat"], a["lng"]], [lat, lng]],
+                positions=[[a["lat"], a["lng"]], [click_lat, click_lng]],
                 pathOptions={"color": "#6366f1", "weight": 2, "dashArray": "6 4"},
             ),
             dl.CircleMarker(
                 center=[a["lat"], a["lng"]], radius=5,
                 pathOptions={"color": "#6366f1", "weight": 2, "fillOpacity": 0.4},
-                children=[dl.Tooltip("A", permanent=True, direction="top",
-                                     offset=[0, -8], pane="tooltipPane")],
+                children=[dl.Tooltip(
+                    f"A: {a.get('label', 'A')}", permanent=True, direction="top",
+                    offset=[0, -8], pane="tooltipPane")],
             ),
             dl.CircleMarker(
-                center=[lat, lng], radius=5,
+                center=[click_lat, click_lng], radius=5,
                 pathOptions={"color": "#6366f1", "weight": 2, "fillOpacity": 0.4},
-                children=[dl.Tooltip("B", permanent=True, direction="top",
-                                     offset=[0, -8], pane="tooltipPane")],
+                children=[dl.Tooltip(
+                    f"B: {label_b}", permanent=True, direction="top",
+                    offset=[0, -8], pane="tooltipPane")],
             ),
-            # Distance label at midpoint
             dl.CircleMarker(
-                center=[(a["lat"] + lat) / 2, (a["lng"] + lng) / 2],
+                center=[(a["lat"] + click_lat) / 2, (a["lng"] + click_lng) / 2],
                 radius=0,
                 pathOptions={"opacity": 0},
                 children=[dl.Tooltip(
@@ -369,9 +385,38 @@ def handle_map_click(click_data, measure):
         return dash.no_update, new_state, readout, marker
 
     else:
-        # Normal SST reading mode
-        pos = {"lat": lat, "lng": lng}
-        return pos, dash.no_update, dash.no_update, dash.no_update
+        # Normal mode — show POI info or SST reading
+        if poi:
+            # Clicked near a POI — show POI tooltip in click-marker layer
+            poi_name, poi_lat, poi_lon = poi
+            temp = None
+            if sst_data and "raw_days" in sst_data:
+                fi = min(frame_idx or 0, len(sst_data["raw_days"]) - 1)
+                arrF = np.array(sst_data["raw_days"][fi]["arrF"], dtype=np.float64)
+                lats_arr = np.array(sst_data["lats"], dtype=np.float64)
+                lons_arr = np.array(sst_data["lons"], dtype=np.float64)
+                temp = _lookup_temp(poi_lat, poi_lon, arrF, lats_arr, lons_arr)
+
+            tooltip_content = build_poi_tooltip(poi_name, poi_lat, poi_lon, temp)
+            marker = [
+                dl.CircleMarker(
+                    center=[poi_lat, poi_lon],
+                    radius=6,
+                    pathOptions={"color": "#475569", "weight": 2, "fillOpacity": 0.3},
+                    children=[
+                        dl.Tooltip(
+                            tooltip_content,
+                            permanent=True, direction="top",
+                            offset=[0, -10], pane="tooltipPane",
+                        )
+                    ],
+                )
+            ]
+            return dash.no_update, dash.no_update, dash.no_update, marker
+        else:
+            # SST reading — pass to click-pos store (triggers render_click_marker)
+            pos = {"lat": lat, "lng": lng}
+            return pos, dash.no_update, dash.no_update, dash.no_update
 
 
 # ---- Callback 3b: Render click marker (fires on click, frame change, or data change) ----
