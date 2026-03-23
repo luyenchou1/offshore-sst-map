@@ -29,3 +29,19 @@
 .poi-tooltip .leaflet-tooltip::before {
     border-top-color: #86efac;
 }
+
+/* Measure tool distance label */
+.measure-tooltip .leaflet-tooltip {
+    background: rgba(99, 102, 241, 0.9);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-weight: 600;
+    font-size: 0.8rem;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    white-space: nowrap;
+}
+.measure-tooltip .leaflet-tooltip::before {
+    border-top-color: rgba(99, 102, 241, 0.9);
+}

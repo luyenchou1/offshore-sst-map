@@ -24,6 +24,7 @@ from data.geo import mask_aoi_rasterized, mask_land_rasterized, orient_to_leafle
 from layout.mapview import build_map
 from layout.sidebar import build_sidebar
 from map.colorscale import build_legend_component, compute_color_bounds
+from map.measure import format_measurement
 from map.overlay import sst_to_base64_png
 from map.pois import build_aoi_geojson, build_poi_markers
 
@@ -274,16 +275,103 @@ def render_map_layers(sst_data, frame_idx, lock_scale, selected_pois):
     return overlay_url, bounds, aoi_geojson, poi_markers, legend, hidden
 
 
-# ---- Callback 3a: Save clicked position ----
+# ---- Callback 3a: Route map clicks (SST reading vs measure) ----
 @app.callback(
     Output("click-pos", "data"),
+    Output("measure-state", "data"),
+    Output("measure-readout", "children"),
+    Output("click-marker", "children", allow_duplicate=True),
     Input("sst-map", "clickData"),
+    State("measure-state", "data"),
     prevent_initial_call=True,
 )
-def save_click_pos(click_data):
+def handle_map_click(click_data, measure):
     if not click_data:
-        return dash.no_update
-    return {"lat": click_data["latlng"]["lat"], "lng": click_data["latlng"]["lng"]}
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+    lat = click_data["latlng"]["lat"]
+    lng = click_data["latlng"]["lng"]
+
+    if measure and measure.get("mode") == "a":
+        # Set point A, wait for B
+        new_state = {"mode": "b", "a": {"lat": lat, "lng": lng}, "b": None}
+        readout = html.Div(
+            [
+                html.Div("A set — click point B", style={
+                    "fontWeight": "600", "color": "#334155",
+                }),
+                html.Div(f"{lat:.3f}°N, {abs(lng):.3f}°W", style={
+                    "fontSize": "0.75rem", "color": "#64748b",
+                }),
+            ]
+        )
+        # Show point A marker
+        marker = [
+            dl.CircleMarker(
+                center=[lat, lng], radius=5,
+                pathOptions={"color": "#6366f1", "weight": 2, "fillOpacity": 0.4},
+                children=[dl.Tooltip("A", permanent=True, direction="top",
+                                     offset=[0, -8], pane="tooltipPane")],
+            )
+        ]
+        return dash.no_update, new_state, readout, marker
+
+    elif measure and measure.get("mode") == "b":
+        # Set point B, compute distance
+        a = measure["a"]
+        m = format_measurement(a["lat"], a["lng"], lat, lng)
+        new_state = {"mode": "done", "a": a, "b": {"lat": lat, "lng": lng}}
+        readout = html.Div(
+            [
+                html.Div(m["label"], style={
+                    "fontWeight": "700", "fontSize": "0.9rem", "color": "#1e293b",
+                }),
+                html.Div(
+                    f"A: {a['lat']:.3f}°N, {abs(a['lng']):.3f}°W",
+                    style={"fontSize": "0.7rem", "color": "#64748b", "marginTop": "4px"},
+                ),
+                html.Div(
+                    f"B: {lat:.3f}°N, {abs(lng):.3f}°W",
+                    style={"fontSize": "0.7rem", "color": "#64748b"},
+                ),
+            ]
+        )
+        # Draw line + both markers
+        marker = [
+            dl.Polyline(
+                positions=[[a["lat"], a["lng"]], [lat, lng]],
+                pathOptions={"color": "#6366f1", "weight": 2, "dashArray": "6 4"},
+            ),
+            dl.CircleMarker(
+                center=[a["lat"], a["lng"]], radius=5,
+                pathOptions={"color": "#6366f1", "weight": 2, "fillOpacity": 0.4},
+                children=[dl.Tooltip("A", permanent=True, direction="top",
+                                     offset=[0, -8], pane="tooltipPane")],
+            ),
+            dl.CircleMarker(
+                center=[lat, lng], radius=5,
+                pathOptions={"color": "#6366f1", "weight": 2, "fillOpacity": 0.4},
+                children=[dl.Tooltip("B", permanent=True, direction="top",
+                                     offset=[0, -8], pane="tooltipPane")],
+            ),
+            # Distance label at midpoint
+            dl.CircleMarker(
+                center=[(a["lat"] + lat) / 2, (a["lng"] + lng) / 2],
+                radius=0,
+                pathOptions={"opacity": 0},
+                children=[dl.Tooltip(
+                    m["label"], permanent=True, direction="top",
+                    offset=[0, -12], pane="tooltipPane",
+                    className="measure-tooltip",
+                )],
+            ),
+        ]
+        return dash.no_update, new_state, readout, marker
+
+    else:
+        # Normal SST reading mode
+        pos = {"lat": lat, "lng": lng}
+        return pos, dash.no_update, dash.no_update, dash.no_update
 
 
 # ---- Callback 3b: Render click marker (fires on click, frame change, or data change) ----
@@ -441,6 +529,44 @@ def update_day_indicator(frame_idx, sst_data):
     d = datetime.strptime(day_date, "%Y-%m-%d")
     label = d.strftime("%b %d, %Y")
     return f"{label}  (Day {frame_idx + 1} of {num_days})"
+
+
+# ---- Callback 8: Measure toggle ----
+@app.callback(
+    Output("measure-state", "data", allow_duplicate=True),
+    Output("measure-btn", "children"),
+    Output("measure-btn", "color"),
+    Output("measure-btn", "outline"),
+    Output("measure-readout", "children", allow_duplicate=True),
+    Output("click-marker", "children", allow_duplicate=True),
+    Input("measure-btn", "n_clicks"),
+    State("measure-state", "data"),
+    prevent_initial_call=True,
+)
+def toggle_measure(n_clicks, measure):
+    mode = measure.get("mode", "off") if measure else "off"
+    if mode == "off":
+        # Activate — waiting for point A
+        return (
+            {"mode": "a", "a": None, "b": None},
+            "\U0001F4CF Measuring...",
+            "primary",
+            False,
+            html.Div("Click point A on the map", style={
+                "fontWeight": "500", "color": "#6366f1", "fontSize": "0.8rem",
+            }),
+            [],  # clear any existing markers
+        )
+    else:
+        # Deactivate
+        return (
+            {"mode": "off", "a": None, "b": None},
+            "\U0001F4CF Measure",
+            "secondary",
+            True,
+            "",
+            [],
+        )
 
 
 if __name__ == "__main__":

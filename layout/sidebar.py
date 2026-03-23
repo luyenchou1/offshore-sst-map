@@ -106,6 +106,22 @@ def build_sidebar():
                 value=[],
                 style={"fontSize": "0.85rem"},
             ),
+            html.Hr(className="my-2"),
+            # Ruler / measure tool
+            dbc.Button(
+                "\U0001F4CF Measure",
+                id="measure-btn",
+                outline=True,
+                color="secondary",
+                size="sm",
+                className="w-100",
+            ),
+            html.Div(
+                id="measure-readout",
+                className="mt-2",
+                style={"fontSize": "0.8rem"},
+            ),
+            dcc.Store(id="measure-state", data={"mode": "off", "a": None, "b": None}),
         ],
         width=2,
         style={
