@@ -91,13 +91,14 @@ body {
 
 /* --- Sidebar date picker on dark bg --- */
 .gotone-sidebar .SingleDatePickerInput {
-    background: #1e293b !important;
-    border-color: #334155 !important;
+    background: white !important;
+    border-color: #cbd5e1 !important;
     border-radius: 8px !important;
 }
 .gotone-sidebar .DateInput_input {
-    background: #1e293b !important;
-    color: #e2e8f0 !important;
+    background: white !important;
+    color: #1e293b !important;
+    font-weight: 500;
     font-size: 0.85rem;
 }
 
@@ -114,14 +115,14 @@ body {
 
 /* --- Sidebar slider on dark bg --- */
 .gotone-sidebar .rc-slider-rail {
-    background-color: #334155 !important;
+    background-color: #475569 !important;
 }
 .gotone-sidebar .rc-slider-mark-text {
-    color: #94a3b8 !important;
+    color: #cbd5e1 !important;
 }
 .gotone-sidebar .rc-slider-dot {
-    border-color: #475569 !important;
-    background-color: #1e293b !important;
+    border-color: #64748b !important;
+    background-color: #334155 !important;
 }
 
 /* --- Spinner --- */

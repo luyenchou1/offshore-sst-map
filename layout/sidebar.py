@@ -67,7 +67,7 @@ def build_sidebar():
                                 color="primary",
                                 size="sm",
                                 className="me-1",
-                                style={"minWidth": "50px"},
+                                style={"width": "56px"},
                             ),
                             dbc.Button(
                                 "\u25B6",
