@@ -43,7 +43,6 @@ app = dash.Dash(
     title="GotOne Offshore SST Analyzer",
 )
 server = app.server  # for gunicorn
-app.config.callback_timeout = 120_000  # 120s — needed for Render free tier (slower CPU/network)
 
 app.layout = html.Div(
     [
