@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-03-23 — Production Deployment
+
+### Added
+- **Render deployment**: App live at https://offshore-sst-map.onrender.com
+- Gunicorn Procfile tuned for Render (1 worker, 180s timeout)
+
+### Fixed
+- Removed invalid `callback_timeout` config (not supported in Dash 4)
+- Increased timeouts for Render free tier (slower CPU/network)
+
 ## 2026-03-23 — Sidebar Polish
 
 ### Changed
