@@ -37,6 +37,27 @@ body {
     margin: 0;
 }
 
+/* --- Sidebar: dark navy --- */
+.gotone-sidebar {
+    background-color: #0a1628 !important;
+    color: #e2e8f0;
+}
+.gotone-sidebar hr {
+    border-color: #1e293b;
+    opacity: 0.5;
+}
+.gotone-sidebar .text-success {
+    color: #4ade80 !important;
+}
+.gotone-sidebar .text-muted {
+    color: #64748b !important;
+}
+.gotone-sidebar .form-check-label,
+.gotone-sidebar label {
+    color: #cbd5e1 !important;
+    font-size: 0.8rem;
+}
+
 /* --- Buttons: white pill on dark sidebar --- */
 .gotone-sidebar .btn-primary,
 .gotone-sidebar .btn-primary:hover,
@@ -62,34 +83,22 @@ body {
     background-color: #1e293b !important;
 }
 
-/* --- Sidebar: dark navy --- */
-.gotone-sidebar {
-    background-color: #0a1628 !important;
-    color: #e2e8f0;
+/* --- Playback buttons: consistent sizing --- */
+.gotone-sidebar .playback-btn {
+    width: 36px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
 }
-.gotone-sidebar .fw-bold {
-    color: #94a3b8;
+.gotone-sidebar .playback-btn-main {
+    width: 56px;
     font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-}
-.gotone-sidebar hr {
-    border-color: #1e293b;
-    opacity: 0.8;
-}
-.gotone-sidebar .text-success {
-    color: #4ade80 !important;
-}
-.gotone-sidebar .text-muted {
-    color: #64748b !important;
-}
-.gotone-sidebar .form-check-label,
-.gotone-sidebar label {
-    color: #cbd5e1 !important;
 }
 
 /* --- Sidebar date picker on dark bg --- */
-/* Dash 4 uses .dash-datepicker-input */
 .gotone-sidebar .dash-datepicker-input {
     color: #0a1628 !important;
     background: white !important;
@@ -118,7 +127,6 @@ body {
 }
 
 /* --- Sidebar dropdown on dark bg --- */
-/* Dash 4 uses .dash-dropdown, .dash-dropdown-value */
 .gotone-sidebar .dash-dropdown-value,
 .gotone-sidebar .dash-dropdown-value span {
     color: #0a1628 !important;
@@ -149,14 +157,14 @@ body {
 
 /* --- Sidebar slider on dark bg --- */
 .gotone-sidebar .rc-slider-rail {
-    background-color: #475569 !important;
+    background-color: #334155 !important;
 }
 .gotone-sidebar .rc-slider-mark-text {
-    color: #cbd5e1 !important;
+    color: #94a3b8 !important;
+    font-size: 0.65rem !important;
 }
 .gotone-sidebar .rc-slider-dot {
-    border-color: #64748b !important;
-    background-color: #334155 !important;
+    display: none !important;
 }
 
 /* --- Spinner --- */
