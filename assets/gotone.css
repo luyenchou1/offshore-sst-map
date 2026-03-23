@@ -89,51 +89,30 @@ body {
 }
 
 /* --- Sidebar date picker on dark bg --- */
-.gotone-sidebar .SingleDatePickerInput,
-.gotone-sidebar .DateInput {
-    background: white !important;
-    border-color: #cbd5e1 !important;
-    border-radius: 8px !important;
-}
-.gotone-sidebar .DateInput_input,
-.gotone-sidebar input.DateInput_input,
-.gotone-sidebar .DateInput_input__focused {
-    background: white !important;
+/* Dash 4 uses .dash-datepicker-input */
+.gotone-sidebar .dash-datepicker-input {
     color: #0a1628 !important;
+    background: white !important;
     font-weight: 600 !important;
-    font-size: 0.85rem !important;
+}
+.gotone-sidebar .dash-datepicker {
+    background: white !important;
+    border-radius: 8px !important;
 }
 
 /* --- Sidebar dropdown on dark bg --- */
-.gotone-sidebar .Select-control,
-.gotone-sidebar .Select--multi .Select-control,
-.gotone-sidebar .Select--single .Select-control {
-    background-color: white !important;
-    border-color: #cbd5e1 !important;
-    border-radius: 8px !important;
-}
-.gotone-sidebar .Select-value-label,
-.gotone-sidebar .Select--multi .Select-value-label,
-.gotone-sidebar .Select-value .Select-value-label {
+/* Dash 4 uses .dash-dropdown, .dash-dropdown-value */
+.gotone-sidebar .dash-dropdown-value,
+.gotone-sidebar .dash-dropdown-value span {
     color: #0a1628 !important;
     font-weight: 500 !important;
 }
-.gotone-sidebar .Select-placeholder {
+.gotone-sidebar .dash-dropdown input {
     color: #0a1628 !important;
-    font-weight: 500 !important;
-}
-.gotone-sidebar .Select-input input {
-    color: #0a1628 !important;
-}
-.gotone-sidebar .Select-arrow {
-    border-color: #475569 transparent transparent !important;
 }
 /* Hide the truncated tag previews — just show count */
-.gotone-sidebar .Select--multi .Select-value {
+.gotone-sidebar .dash-dropdown-value-tag {
     display: none !important;
-}
-.gotone-sidebar .Select--multi .Select-input {
-    margin-left: 0 !important;
 }
 
 /* --- Sidebar slider on dark bg --- */
