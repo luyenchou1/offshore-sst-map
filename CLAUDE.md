@@ -9,8 +9,8 @@ Dash 4.0 web app ("GotOne Offshore SST Analyzer") branded for [gotoneapp.com](ht
 - Data available from 2002-06-01 to ~2 days ago (MUR has ~2-day latency)
 - Python 3.12, venv at `.venv/`
 - Dev server: `.venv/bin/python -c "from app import app; app.run(...)"`  (port 8050)
-- Production: **Render** (https://offshore-sst-map.onrender.com) — gunicorn, 1 worker, 180s timeout
-- Future: custom domain `sst.gotoneapp.com` (requires Render paid tier + Squarespace CNAME)
+- Production: **Render Starter** ($7/month) at https://offshore-sst-map.onrender.com — gunicorn, 1 worker, 180s timeout
+- Future: custom domain `sst.gotoneapp.com` (requires Squarespace CNAME → Render)
 
 ## GotOne Branding
 - **Primary blue**: `#0183fe` (buttons active states, slider, spinner, measure tool)

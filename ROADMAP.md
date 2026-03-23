@@ -21,8 +21,20 @@
 - Dark text on white inputs (date picker, POI dropdown, calendar popup)
 - Custom CSS overrides for Dash 4 component class names
 
+## Phase 2b: Production Deployment & Performance
+*Status: Deployed on Render Starter ($7/month) — performance optimization in progress*
+
+- Live at https://offshore-sst-map.onrender.com
+- Gunicorn with 1 worker, 180s timeout
+- **Known issue**: Browser callback timeout (~30s) causes re-fetches to fail on Render's slower CPU
+- **Next**: Disk-based cache + Dash long_callback to fix timeout and make repeat fetches instant
+  - `data/cache.py`: gzip-compressed JSON cache on Render persistent disk
+  - `@app.long_callback` with DiskcacheManager for timeout-proof fetching
+  - Startup pre-warm thread for instant first-visitor experience
+  - Cache invalidation: permanent for dates >3 days old, 12hr TTL for recent dates
+
 ## Phase 3: Responsive / Mobile
-*Status: Planned — next up*
+*Status: Planned
 
 - Stacked layout on mobile (controls above map, or collapsible drawer)
 - Full-width map on small screens

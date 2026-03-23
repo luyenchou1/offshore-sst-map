@@ -1,14 +1,17 @@
 # Changelog
 
-## 2026-03-23 — Production Deployment
+## 2026-03-23 — Production Deployment (v1.0)
 
 ### Added
 - **Render deployment**: App live at https://offshore-sst-map.onrender.com
+- Render Starter tier ($7/month): 0.5 CPU, 512MB RAM, always-on
 - Gunicorn Procfile tuned for Render (1 worker, 180s timeout)
 
 ### Fixed
 - Removed invalid `callback_timeout` config (not supported in Dash 4)
-- Increased timeouts for Render free tier (slower CPU/network)
+
+### Known Issues
+- **Re-fetch timeout on Render**: Browser-side ~30s callback timeout causes Fetch to fail when ERDDAP is slow. Initial auto-fetch works, but user-triggered re-fetches for different dates often hang. Fix planned: disk cache + Dash long_callback (see Phase 2b in ROADMAP.md).
 
 ## 2026-03-23 — Sidebar Polish
 
