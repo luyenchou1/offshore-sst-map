@@ -8,16 +8,26 @@ Supports 7-day animated windows: pick any end date back to 2002 and
 step or auto-play through the week's SST evolution.
 """
 
+import os
+
+# macOS fork safety: DiskcacheManager uses multiprocess which forks.
+# Must be set before any other imports.
+os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
+
 import json
 import logging
+import threading
+import time
 from datetime import date, datetime, timedelta, timezone
 
 import dash
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
+import diskcache
 import numpy as np
-from dash import Input, Output, State, ctx, dcc, html
+from dash import DiskcacheManager, Input, Output, State, ctx, dcc, html
 
+from data.cache import get_cached, is_stale, put_cache
 from data.convert import upsample_visual
 from data.erddap import get_sst_multiday
 from data.geo import mask_aoi_rasterized, mask_land_rasterized, orient_to_leaflet
@@ -37,12 +47,91 @@ logger = logging.getLogger(__name__)
 with open("config.json") as f:
     CFG = json.load(f)
 
+# Long-callback manager (prevents browser-side timeouts)
+_lcb_cache = diskcache.Cache("./cache/long_callback")
+long_callback_manager = DiskcacheManager(_lcb_cache)
+
 app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.FLATLY],
     title="GotOne Offshore SST Analyzer",
+    background_callback_manager=long_callback_manager,
 )
 server = app.server  # for gunicorn
+
+
+# ---- Shared helper: build SST payload from raw ERDDAP result ----
+def _build_payload(sst: dict, locked: bool) -> dict:
+    """Process raw ERDDAP result into the full dcc.Store payload.
+
+    Runs orient → mask_aoi → mask_land → color bounds → pre-render PNGs.
+    Returns the payload dict ready for JSON serialization.
+    """
+    lats_raw = sst["lats"]
+    lons_raw = sst["lons"]
+
+    processed_days = []
+    all_finite = []
+
+    for day_data in sst["days"]:
+        arrF = day_data["arrF"]
+        arrF, lats, lons = orient_to_leaflet(arrF, lats_raw.copy(), lons_raw.copy())
+        arrF = mask_aoi_rasterized(arrF, lats, lons, CFG)
+        arrF = mask_land_rasterized(arrF, lats, lons)
+        processed_days.append({"arrF": arrF, "date": day_data["date"]})
+        finite = arrF[np.isfinite(arrF)]
+        if finite.size > 0:
+            all_finite.append(finite)
+
+    # Re-orient once to get correct lat/lon arrays
+    _, lats, lons = orient_to_leaflet(
+        sst["days"][0]["arrF"], lats_raw.copy(), lons_raw.copy()
+    )
+
+    # Compute resolution
+    res_km = abs(float(lats[1] - lats[0])) * 111.0 if len(lats) > 1 else None
+
+    # Unified color bounds across all days
+    if locked:
+        vmin, vmax = 30.0, 90.0
+    elif all_finite:
+        stacked = np.concatenate(all_finite)
+        vmin, vmax = compute_color_bounds(
+            np.array(stacked, dtype=np.float64), locked=False
+        )
+    else:
+        vmin, vmax = 30.0, 90.0
+
+    # Pre-render each day's PNG
+    frames = []
+    raw_days = []
+    for pd_item in processed_days:
+        arrF_vis = upsample_visual(pd_item["arrF"], 2)
+        png_url = sst_to_base64_png(arrF_vis, vmin, vmax)
+        frames.append(png_url)
+        raw_days.append({
+            "arrF": pd_item["arrF"].tolist(),
+            "date": pd_item["date"],
+        })
+
+    bounds = [
+        [float(np.min(lats)), float(np.min(lons))],
+        [float(np.max(lats)), float(np.max(lons))],
+    ]
+
+    return {
+        "frames": frames,
+        "raw_days": raw_days,
+        "lats": lats.tolist(),
+        "lons": lons.tolist(),
+        "bounds": bounds,
+        "vmin": float(vmin),
+        "vmax": float(vmax),
+        "res_km": res_km,
+        "server": sst["server"],
+        "dataset_id": sst["dataset_id"],
+        "dataset_title": sst["dataset_title"],
+    }
 
 app.layout = html.Div(
     [
@@ -78,37 +167,44 @@ app.layout = html.Div(
 ])
 
 
-# ---- Show loading overlay immediately when Fetch is clicked ----
-@app.callback(
-    Output("map-loading-overlay", "style"),
-    Input("fetch-btn", "n_clicks"),
-    prevent_initial_call=True,
-)
-def show_loading_on_fetch(n_clicks):
-    return {
-        "position": "absolute",
-        "top": 0, "left": 0, "right": 0, "bottom": 0,
-        "backgroundColor": "rgba(255,255,255,0.7)",
-        "display": "flex",
-        "alignItems": "center",
-        "justifyContent": "center",
-        "zIndex": 1000,
-    }
+_LOADING_OVERLAY_VISIBLE = {
+    "position": "absolute",
+    "top": 0, "left": 0, "right": 0, "bottom": 0,
+    "backgroundColor": "rgba(255,255,255,0.7)",
+    "display": "flex",
+    "alignItems": "center",
+    "justifyContent": "center",
+    "zIndex": 1000,
+}
+_LOADING_OVERLAY_HIDDEN = {"display": "none"}
 
 
-# ---- Callback 1: Fetch 7-day SST data ----
-@app.callback(
-    Output("sst-store", "data"),
-    Output("fetch-status", "children"),
-    Output("frame-slider", "marks"),
-    Output("frame-slider", "value"),
-    Output("frame-slider", "max"),
-    Output("anim-controls", "style"),
-    Output("fetch-spinner-target", "children"),
-    Input("fetch-btn", "n_clicks"),
-    Input("auto-fetch", "n_intervals"),
-    State("end-date-picker", "date"),
-    State("lock-scale", "value"),
+# ---- Callback 1: Fetch 7-day SST data (long_callback — no browser timeout) ----
+@dash.callback(
+    output=[
+        Output("sst-store", "data"),
+        Output("fetch-status", "children"),
+        Output("frame-slider", "marks"),
+        Output("frame-slider", "value"),
+        Output("frame-slider", "max"),
+        Output("anim-controls", "style"),
+        Output("fetch-spinner-target", "children"),
+    ],
+    inputs=[
+        Input("fetch-btn", "n_clicks"),
+        Input("auto-fetch", "n_intervals"),
+    ],
+    state=[
+        State("end-date-picker", "date"),
+        State("lock-scale", "value"),
+    ],
+    running=[
+        (Output("fetch-btn", "disabled"), True, False),
+        (Output("fetch-btn", "children"), "Loading...", "Fetch SST"),
+        (Output("map-loading-overlay", "style"),
+         _LOADING_OVERLAY_VISIBLE, _LOADING_OVERLAY_HIDDEN),
+    ],
+    background=True,
     prevent_initial_call=True,
 )
 def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
@@ -119,88 +215,30 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
     else:
         end_date = date.today() - timedelta(days=4)
 
+    locked = "lock" in (lock_scale or [])
+
     try:
-        sst = get_sst_multiday(end_date, CFG)
-
-        # Process each day's 2D slice: orient, mask, convert to PNG
-        lats_raw = sst["lats"]
-        lons_raw = sst["lons"]
-
-        processed_days = []
-        all_finite = []
-
-        for day_data in sst["days"]:
-            arrF = day_data["arrF"]
-            arrF, lats, lons = orient_to_leaflet(arrF, lats_raw.copy(), lons_raw.copy())
-            arrF = mask_aoi_rasterized(arrF, lats, lons, CFG)
-            arrF = mask_land_rasterized(arrF, lats, lons)
-            processed_days.append({"arrF": arrF, "date": day_data["date"]})
-            finite = arrF[np.isfinite(arrF)]
-            if finite.size > 0:
-                all_finite.append(finite)
-
-        # Use the oriented lats/lons (same for all days)
-        # (orient_to_leaflet may flip them, but result is same for every slice)
-        lats = processed_days[0]["arrF"]  # dummy — we need the oriented coords
-        # Re-orient once to get the correct lat/lon arrays
-        _, lats, lons = orient_to_leaflet(
-            sst["days"][0]["arrF"], lats_raw.copy(), lons_raw.copy()
-        )
-
-        # Compute resolution
-        if len(lats) > 1:
-            res_km = abs(float(lats[1] - lats[0])) * 111.0
+        # Check disk cache first
+        cached = get_cached(end_date, locked)
+        if cached and not is_stale(end_date):
+            payload = cached
+            logger.info("Serving from cache: %s", end_date)
         else:
-            res_km = None
+            # Cache miss — fetch from ERDDAP
+            logger.info("Cache miss, fetching from ERDDAP: %s", end_date)
+            sst = get_sst_multiday(end_date, CFG)
+            payload = _build_payload(sst, locked)
 
-        # Unified color bounds across all days
-        locked = "lock" in (lock_scale or [])
-        if locked:
-            vmin, vmax = 30.0, 90.0
-        elif all_finite:
-            stacked = np.concatenate(all_finite)
-            vmin, vmax = compute_color_bounds(
-                np.array(stacked, dtype=np.float64), locked=False
-            )
-        else:
-            vmin, vmax = 30.0, 90.0
+            # Write to cache (fire-and-forget)
+            try:
+                put_cache(end_date, locked, payload)
+            except Exception:
+                logger.warning("Cache write failed", exc_info=True)
 
-        # Pre-render each day's PNG and prepare payload
-        frames = []
-        raw_days = []
-        for pd_item in processed_days:
-            arrF_vis = upsample_visual(pd_item["arrF"], 2)
-            png_url = sst_to_base64_png(arrF_vis, vmin, vmax)
-            frames.append(png_url)
-            raw_days.append({
-                "arrF": pd_item["arrF"].tolist(),
-                "date": pd_item["date"],
-            })
+        num_days = len(payload["frames"])
+        raw_days = payload["raw_days"]
 
-        bounds = [
-            [float(np.min(lats)), float(np.min(lons))],
-            [float(np.max(lats)), float(np.max(lons))],
-        ]
-
-        payload = {
-            "frames": frames,
-            "raw_days": raw_days,
-            "lats": lats.tolist(),
-            "lons": lons.tolist(),
-            "bounds": bounds,
-            "vmin": vmin,
-            "vmax": vmax,
-            "res_km": res_km,
-            "server": sst["server"],
-            "dataset_id": sst["dataset_id"],
-            "dataset_title": sst["dataset_title"],
-        }
-
-        num_days = len(frames)
-        date_start = raw_days[0]["date"]
-        date_end = raw_days[-1]["date"]
-
-        # Build slider marks — just day-of-month to avoid overlap
+        # Build slider marks — just day-of-month
         marks = {}
         for i, rd in enumerate(raw_days):
             d = datetime.strptime(rd["date"], "%Y-%m-%d")
@@ -637,6 +675,30 @@ def update_poi_count(selected):
     n = len(selected) if selected else 0
     total = len(get_all_poi_names())
     return f"({n}/{total})"
+
+
+# ---- Startup pre-warm: cache the current week so first visitor gets instant load ----
+def _prewarm_cache():
+    time.sleep(5)  # Let gunicorn finish startup
+    end_date = date.today() - timedelta(days=2)
+    for locked in [False, True]:
+        cached = get_cached(end_date, locked)
+        if cached and not is_stale(end_date):
+            logger.info("Pre-warm: cache hit for %s (locked=%s)", end_date, locked)
+            continue
+        logger.info("Pre-warm: fetching %s (locked=%s)", end_date, locked)
+        try:
+            sst = get_sst_multiday(end_date, CFG)
+            payload = _build_payload(sst, locked)
+            put_cache(end_date, locked, payload)
+            logger.info("Pre-warm: cached %s (locked=%s)", end_date, locked)
+        except Exception:
+            logger.warning("Pre-warm failed for %s", end_date, exc_info=True)
+
+
+if not os.environ.get("_SST_PREWARM_STARTED"):
+    os.environ["_SST_PREWARM_STARTED"] = "1"
+    threading.Thread(target=_prewarm_cache, daemon=True).start()
 
 
 if __name__ == "__main__":

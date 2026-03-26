@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "dev",
-      "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": ["-c", "from app import app; app.run(debug=False, port=8050, threaded=True)"],
+      "runtimeExecutable": "/usr/bin/env",
+      "runtimeArgs": ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES", ".venv/bin/python", "-c", "from app import app; app.run(debug=False, port=8050, threaded=True)"],
       "port": 8050
     }
   ]
