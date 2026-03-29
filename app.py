@@ -766,43 +766,27 @@ def update_poi_count(selected):
     return f"({n}/{total})"
 
 
-# ---- Startup pre-warm: cache the current week so first visitor gets instant load ----
+# ---- Startup pre-warm: populate server-side cache from disk ----
+# Only loads from DISK cache (fast, no ERDDAP). Heavy ERDDAP fetches happen
+# on first user request. This keeps startup lightweight so Render's health
+# check passes quickly.
 def _prewarm_cache():
-    time.sleep(5)  # Let gunicorn finish startup
-    # Pre-warm the DEFAULT date (today - 4 days) so auto-fetch hits cache
+    time.sleep(15)  # Let gunicorn fully start and pass health check
     end_date = date.today() - timedelta(days=4)
     for locked in [False, True]:
+        data_key = _cache_key(end_date, locked)
+        if data_key in _raw_data_cache:
+            continue
         cached = get_cached(end_date, locked)
         if cached and not is_stale(end_date):
-            # Populate server-side raw data cache from disk cache
-            data_key = _cache_key(end_date, locked)
-            if data_key not in _raw_data_cache:
+            try:
                 _, raw_data = _build_payload_from_disk_cache(cached)
                 _raw_data_cache[data_key] = raw_data
-            logger.info("Pre-warm: cache hit for %s (locked=%s)", end_date, locked)
-            continue
-        logger.info("Pre-warm: fetching %s (locked=%s)", end_date, locked)
-        try:
-            sst = get_sst_multiday(end_date, CFG)
-            store_payload, raw_data = _build_payload(sst, locked)
-
-            # Write full payload to disk cache
-            disk_payload = dict(store_payload)
-            disk_payload["raw_days"] = [
-                {"arrF": rd["arrF"].tolist(), "date": rd["date"]}
-                for rd in raw_data["raw_days"]
-            ]
-            disk_payload["lats"] = raw_data["lats"].tolist()
-            disk_payload["lons"] = raw_data["lons"].tolist()
-            put_cache(end_date, locked, disk_payload)
-
-            # Also populate server-side raw data cache
-            data_key = _cache_key(end_date, locked)
-            _raw_data_cache[data_key] = raw_data
-
-            logger.info("Pre-warm: cached %s (locked=%s)", end_date, locked)
-        except Exception:
-            logger.warning("Pre-warm failed for %s", end_date, exc_info=True)
+                logger.info("Pre-warm: loaded from disk cache %s (locked=%s)", end_date, locked)
+            except Exception:
+                logger.warning("Pre-warm: disk cache parse failed for %s", end_date, exc_info=True)
+        else:
+            logger.info("Pre-warm: no disk cache for %s (locked=%s), will fetch on first request", end_date, locked)
 
 
 if not os.environ.get("_SST_PREWARM_STARTED"):
