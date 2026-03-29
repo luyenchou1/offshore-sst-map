@@ -11,7 +11,7 @@ ALL_POIS = [
     # Original spots
     ("Haabs Ledge",         40.868250, -71.838200),
     ("Butterfish Hole",     40.836467, -71.674900),
-    ("July2025",            40.895550, -71.830817),
+    ("Rachel's Whales",     40.895550, -71.830817),
     ("CIA",                 40.933433, -71.716667),
     ("Gully",               41.020483, -71.416950),
     ("Wind Farm SW Corner", 40.973983, -71.273300),
@@ -41,19 +41,19 @@ DUMP_BOX = {
 
 # Marker style: subtle hollow rings in muted slate
 _MARKER_STYLE = {
-    "color": "#475569",
-    "weight": 1.5,
+    "color": "#0a1628",
+    "weight": 2,
     "fill": True,
-    "fillColor": "#475569",
-    "fillOpacity": 0.15,
+    "fillColor": "#ffffff",
+    "fillOpacity": 0.9,
 }
 
 _DUMP_STYLE = {
-    "color": "#475569",
-    "weight": 1.5,
+    "color": "#0a1628",
+    "weight": 2,
     "fill": True,
-    "fillColor": "#475569",
-    "fillOpacity": 0.06,
+    "fillColor": "#ffffff",
+    "fillOpacity": 0.15,
     "dashArray": "6 4",
 }
 

@@ -51,6 +51,17 @@
 - Daemon thread on startup (15s delay) loads current week from disk cache only
 - No ERDDAP fetches during startup — avoids starving gunicorn and failing Render health checks
 
+## Phase 2c: Nautical Chart & Bathymetry Layers
+*Status: Complete*
+
+- NOAA ENC nautical chart (WMS) — depth contour lines, soundings, navigation aids
+- GEBCO bathymetry (WMS) — ocean depth shading, continental shelf visualization
+- Sidebar toggles for each chart layer (on/off)
+- SST opacity slider (0.1–1.0) — fade SST to reveal chart detail underneath
+- Z-index stack: GEBCO (390) → NOAA contours (400) → SST (410) → POIs (450) → clicks (500)
+- POI markers restyled: solid white fill + dark navy border for visibility over busy layers
+- Sidebar padding/spacing polish for better readability
+
 ## Phase 3: Responsive / Mobile
 *Status: Planned*
 

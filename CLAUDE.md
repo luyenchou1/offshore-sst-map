@@ -134,12 +134,17 @@ render_static_layers sets initial overlay + POIs + legend
 
 ### Leaflet Z-Index
 Map layer panes and their z-index values matter enormously:
-- **overlayPane**: 400 (SST ImageOverlay lives here)
-- **poi-pane**: 450 (custom — above overlay, below tooltips)
+- **tilePane**: 200 (CARTO basemap)
+- **gebco-pane**: 390 (custom — GEBCO bathymetry WMS)
+- **contours-pane**: 400 (custom — NOAA ENC nautical chart WMS)
+- **sst-pane**: 410 (custom — SST ImageOverlay, opacity controlled by sidebar slider)
+- **poi-pane**: 450 (custom — above SST, below tooltips)
 - **click-pane**: 500 (custom — above POIs, below tooltips)
 - **tooltipPane**: 650 (Leaflet default — tooltips render here)
 - **popupPane**: 700 (Leaflet default — POI click popups render here)
 - **Loading overlay**: 1000 (HTML div above everything)
+
+Chart layers render BELOW the SST overlay. SST uses semi-transparent RGBA PNGs, so chart features show through. The SST opacity slider lets users fade SST to reveal more chart detail.
 
 If POI markers and tooltipPane have the same z-index, the markers render ON TOP of their own tooltips. The fix: put markers in custom panes below 650.
 
@@ -176,7 +181,7 @@ All clicks route through a single `handle_map_click` callback. Only one tooltip 
 Original:
   Haabs Ledge          40.868, -71.838
   Butterfish Hole      40.836, -71.675
-  July2025             40.896, -71.831
+  Rachel's Whales      40.896, -71.831
   CIA                  40.933, -71.717
   Gully                41.020, -71.417
   Wind Farm SW Corner  40.974, -71.273

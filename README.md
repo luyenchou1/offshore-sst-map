@@ -14,6 +14,9 @@ Data: **NOAA CoastWatch ERDDAP** — MUR GHRSST 1km (preferred), OISST 25km (fal
 - **20 fishing spots + The Dump** — Named POIs with click-to-read SST at each location
 - **Click-to-read** — Click anywhere on the map for an instant temperature reading
 - **Measure tool** — Two-click distance/bearing (nautical miles, statute miles, compass heading)
+- **Nautical chart overlay** — NOAA ENC charts with depth contours, soundings, and nav aids
+- **Bathymetry overlay** — GEBCO ocean depth shading (continental shelf, canyons)
+- **SST opacity control** — Fade SST colors to reveal chart features underneath
 - **Disk cache** — Repeat fetches return instantly from gzip-compressed cache files
 - **Adaptive or locked color scale** — Toggle between percentile-based or fixed 30–90°F range
 - **GotOne branding** — Dark navy UI with brand blue (#0183fe) accents

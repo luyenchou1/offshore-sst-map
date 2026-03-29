@@ -39,14 +39,50 @@ def build_map():
                                     }
                                 },
                             ),
-                            dl.ImageOverlay(
-                                id="sst-overlay",
-                                url="",
-                                bounds=[[0, 0], [0, 0]],
-                                opacity=0.78,
-                                interactive=False,
+                            # Chart layers render BELOW the SST overlay.
+                            # SST is semi-transparent (RGBA PNGs) so chart
+                            # features show through, and the SST opacity
+                            # slider lets users fade SST to reveal more.
+                            dl.Pane(
+                                dl.WMSTileLayer(
+                                    id="gebco-layer",
+                                    url="https://wms.gebco.net/mapserv?",
+                                    layers="GEBCO_LATEST",
+                                    format="image/png",
+                                    transparent=True,
+                                    opacity=0,
+                                    attribution='&copy; <a href="https://www.gebco.net">GEBCO</a>',
+                                ),
+                                name="gebco-pane",
+                                style={"zIndex": 390},
                             ),
-                            # Custom panes: above overlayPane (400) but below
+                            dl.Pane(
+                                dl.WMSTileLayer(
+                                    id="contours-layer",
+                                    url="https://gis.charttools.noaa.gov/arcgis/rest/services/MCS/NOAAChartDisplay/MapServer/exts/MaritimeChartService/WMSServer",
+                                    layers="0,1,2,3,4,5,6,7",
+                                    format="image/png",
+                                    transparent=True,
+                                    opacity=0,
+                                    version="1.1.1",
+                                    attribution='&copy; <a href="https://www.charts.noaa.gov">NOAA</a>',
+                                ),
+                                name="contours-pane",
+                                style={"zIndex": 400},
+                            ),
+                            # SST overlay on top of chart layers
+                            dl.Pane(
+                                dl.ImageOverlay(
+                                    id="sst-overlay",
+                                    url="",
+                                    bounds=[[0, 0], [0, 0]],
+                                    opacity=0.7,
+                                    interactive=False,
+                                ),
+                                name="sst-pane",
+                                style={"zIndex": 410},
+                            ),
+                            # Custom panes: above chart layers but below
                             # Leaflet's tooltipPane (650) so tooltips render
                             # on top of the markers, not behind them.
                             dl.Pane(

@@ -20,7 +20,7 @@ def _section_label(text, first=False):
             "textTransform": "uppercase",
             "letterSpacing": "0.08em",
             "marginBottom": "0.5rem",
-            "marginTop": "0" if first else "0.25rem",
+            "marginTop": "0" if first else "0.5rem",
         },
     )
 
@@ -32,7 +32,7 @@ def _divider():
             "borderColor": "#334155",
             "borderWidth": "1px",
             "opacity": "1",
-            "margin": "0.75rem 0",
+            "margin": "1rem 0",
         }
     )
 
@@ -186,12 +186,48 @@ def build_sidebar():
                 style={"fontSize": "0.75rem"},
             ),
 
+            _divider(),
+
+            # ── Section 4: Chart Layers ──
+            _section_label("Layers"),
+            dbc.Checklist(
+                id="layer-toggles",
+                options=[
+                    {"label": " Nautical chart", "value": "contours"},
+                    {"label": " Bathymetry", "value": "gebco"},
+                ],
+                value=[],
+                style={"fontSize": "0.8rem"},
+                className="mb-2",
+            ),
+            html.Div(
+                [
+                    html.Span(
+                        "SST opacity",
+                        style={
+                            "fontSize": "0.75rem",
+                            "color": "#94a3b8",
+                        },
+                    ),
+                    dcc.Slider(
+                        id="sst-opacity",
+                        min=0.1,
+                        max=1.0,
+                        step=0.1,
+                        value=0.7,
+                        marks=None,
+                        tooltip={"placement": "bottom"},
+                    ),
+                ],
+                className="mt-2",
+            ),
+
             dcc.Store(id="measure-state", data={"mode": "off", "a": None, "b": None}),
         ],
         width=2,
         className="gotone-sidebar",
         style={
-            "padding": "0.75rem 1rem",
+            "padding": "1rem 1.25rem",
             "height": "calc(100vh - 72px)",
             "overflowY": "auto",
         },

@@ -855,6 +855,30 @@ def update_poi_count(selected):
     return f"({n}/{total})"
 
 
+# ---- Chart layer toggles ----
+
+
+@app.callback(
+    Output("contours-layer", "opacity"),
+    Output("gebco-layer", "opacity"),
+    Input("layer-toggles", "value"),
+)
+def toggle_layers(active_layers):
+    """Show/hide nautical chart and bathymetry layers."""
+    active = active_layers or []
+    return (0.6 if "contours" in active else 0,
+            0.5 if "gebco" in active else 0)
+
+
+@app.callback(
+    Output("sst-overlay", "opacity"),
+    Input("sst-opacity", "value"),
+)
+def update_sst_opacity(opacity):
+    """Adjust SST overlay transparency via sidebar slider."""
+    return opacity
+
+
 # ---- Startup pre-warm: populate server-side cache from disk ----
 # Only loads from DISK cache (fast, no ERDDAP). Heavy ERDDAP fetches happen
 # on first user request. This keeps startup lightweight so Render's health

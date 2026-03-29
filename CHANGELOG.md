@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-03-29 — Nautical Chart & Bathymetry Layers (v1.2)
+
+### Added
+- **NOAA ENC nautical chart layer**: Toggleable WMS overlay showing depth contour lines, soundings, navigation aids, and chart features. Source: NOAA Maritime Chart Service.
+- **GEBCO bathymetry layer**: Toggleable WMS overlay showing ocean depth shading (continental shelf, canyons, underwater terrain). Source: GEBCO 2024 grid.
+- **SST opacity slider**: Adjustable SST overlay transparency (0.1–1.0) so users can fade SST colors to reveal chart features underneath.
+- **Layers sidebar section**: New "Layers" section with checkboxes for Nautical chart / Bathymetry and the SST opacity slider.
+
+### Changed
+- **POI markers restyled**: Solid white fill with dark navy border (`#0a1628`) — pops against any background (SST, charts, bathymetry). Replaces previous hollow slate-gray rings that were invisible over busy map layers.
+- **Z-index restructure**: Chart layers render below SST overlay (GEBCO z=390, NOAA z=400, SST z=410). SST opacity slider controls how much chart detail shows through.
+- **Sidebar spacing**: Increased horizontal padding (`1rem 1.25rem`), wider section divider margins (`1rem`), and more space above section labels for better readability.
+- **POI rename**: "July2025" → "Rachel's Whales"
+
 ## 2026-03-29 — Custom Domain & Squarespace Integration
 
 ### Added
