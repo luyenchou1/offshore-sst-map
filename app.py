@@ -49,12 +49,30 @@ app = dash.Dash(
 server = app.server  # for gunicorn
 
 
+# ---- Server-side raw data cache ----
+# Raw float arrays are too large (~18 MB) for dcc.Store / browser transport.
+# Keep them server-side; click callbacks read from here instead.
+_raw_data_cache = {}  # key → {"raw_days": [...], "lats": np.array, "lons": np.array}
+
+
+def _cache_key(end_date, locked):
+    mode = "locked" if locked else "adaptive"
+    return f"{end_date}_{mode}"
+
+
+def _get_raw_data(data_key):
+    """Retrieve raw grid data from server-side cache."""
+    return _raw_data_cache.get(data_key)
+
+
 # ---- Shared helper: build SST payload from raw ERDDAP result ----
 def _build_payload(sst: dict, locked: bool) -> dict:
-    """Process raw ERDDAP result into the full dcc.Store payload.
+    """Process raw ERDDAP result into the full payload.
 
     Runs orient → mask_aoi → mask_land → color bounds → pre-render PNGs.
-    Returns the payload dict ready for JSON serialization.
+    Returns (store_payload, raw_data) where:
+      - store_payload goes to dcc.Store (frames + metadata, ~7 MB)
+      - raw_data stays server-side (float arrays for click lookups, ~18 MB)
     """
     lats_raw = sst["lats"]
     lons_raw = sst["lons"]
@@ -93,26 +111,22 @@ def _build_payload(sst: dict, locked: bool) -> dict:
 
     # Pre-render each day's PNG
     frames = []
-    raw_days = []
+    dates = []
     for pd_item in processed_days:
         arrF_vis = upsample_visual(pd_item["arrF"], 2)
         png_url = sst_to_base64_png(arrF_vis, vmin, vmax)
         frames.append(png_url)
-        raw_days.append({
-            "arrF": pd_item["arrF"].tolist(),
-            "date": pd_item["date"],
-        })
+        dates.append(pd_item["date"])
 
     bounds = [
         [float(np.min(lats)), float(np.min(lons))],
         [float(np.max(lats)), float(np.max(lons))],
     ]
 
-    return {
+    # Store payload — goes to browser via dcc.Store (~7 MB)
+    store_payload = {
         "frames": frames,
-        "raw_days": raw_days,
-        "lats": lats.tolist(),
-        "lons": lons.tolist(),
+        "dates": dates,
         "bounds": bounds,
         "vmin": float(vmin),
         "vmax": float(vmax),
@@ -121,6 +135,50 @@ def _build_payload(sst: dict, locked: bool) -> dict:
         "dataset_id": sst["dataset_id"],
         "dataset_title": sst["dataset_title"],
     }
+
+    # Raw data — stays server-side for click lookups
+    raw_data = {
+        "raw_days": processed_days,  # list of {"arrF": np.array, "date": str}
+        "lats": lats,
+        "lons": lons,
+    }
+
+    return store_payload, raw_data
+
+
+def _build_payload_from_disk_cache(cached: dict):
+    """Split a disk-cached payload (old format with raw_days) into
+    store_payload + raw_data for server-side cache."""
+    # Extract raw arrays from the cached dict
+    raw_days = []
+    dates = []
+    for rd in cached["raw_days"]:
+        raw_days.append({
+            "arrF": np.array(rd["arrF"], dtype=np.float64),
+            "date": rd["date"],
+        })
+        dates.append(rd["date"])
+
+    raw_data = {
+        "raw_days": raw_days,
+        "lats": np.array(cached["lats"], dtype=np.float64),
+        "lons": np.array(cached["lons"], dtype=np.float64),
+    }
+
+    store_payload = {
+        "frames": cached["frames"],
+        "dates": dates,
+        "bounds": cached["bounds"],
+        "vmin": cached["vmin"],
+        "vmax": cached["vmax"],
+        "res_km": cached.get("res_km"),
+        "server": cached.get("server", ""),
+        "dataset_id": cached.get("dataset_id", ""),
+        "dataset_title": cached.get("dataset_title", ""),
+    }
+
+    return store_payload, raw_data
+
 
 app.layout = html.Div(
     [
@@ -144,16 +202,17 @@ app.layout = html.Div(
         dbc.Container(
             [
                 dbc.Row([build_sidebar(), build_map()]),
-        dcc.Store(id="sst-store"),
-        dcc.Store(id="click-pos"),
-            html.Div(id="fetch-spinner-target", style={"display": "none"}),
-            # Auto-fetch SST on page load (fires once after 500ms)
-            dcc.Interval(id="auto-fetch", interval=500, max_intervals=1),
-        ],
-        fluid=True,
-        style={"padding": "0"},
-    ),
-])
+                dcc.Store(id="sst-store"),
+                dcc.Store(id="click-pos"),
+                html.Div(id="fetch-spinner-target", style={"display": "none"}),
+                # Auto-fetch SST on page load (fires once after 500ms)
+                dcc.Interval(id="auto-fetch", interval=500, max_intervals=1),
+            ],
+            fluid=True,
+            style={"padding": "0"},
+        ),
+    ]
+)
 
 
 _LOADING_OVERLAY_VISIBLE = {
@@ -213,32 +272,45 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
         end_date = date.today() - timedelta(days=4)
 
     locked = "lock" in (lock_scale or [])
+    data_key = _cache_key(end_date, locked)
 
     try:
         # Check disk cache first
         cached = get_cached(end_date, locked)
         if cached and not is_stale(end_date):
-            payload = cached
             logger.info("Serving from cache: %s", end_date)
+            store_payload, raw_data = _build_payload_from_disk_cache(cached)
         else:
             # Cache miss — fetch from ERDDAP
             logger.info("Cache miss, fetching from ERDDAP: %s", end_date)
             sst = get_sst_multiday(end_date, CFG)
-            payload = _build_payload(sst, locked)
+            store_payload, raw_data = _build_payload(sst, locked)
 
-            # Write to cache (fire-and-forget)
+            # Write full payload to disk cache (includes raw arrays for future loads)
             try:
-                put_cache(end_date, locked, payload)
+                disk_payload = dict(store_payload)
+                disk_payload["raw_days"] = [
+                    {"arrF": rd["arrF"].tolist(), "date": rd["date"]}
+                    for rd in raw_data["raw_days"]
+                ]
+                disk_payload["lats"] = raw_data["lats"].tolist()
+                disk_payload["lons"] = raw_data["lons"].tolist()
+                put_cache(end_date, locked, disk_payload)
             except Exception:
                 logger.warning("Cache write failed", exc_info=True)
 
-        num_days = len(payload["frames"])
-        raw_days = payload["raw_days"]
+        # Store raw data server-side for click callbacks
+        _raw_data_cache[data_key] = raw_data
+
+        # Add data_key to store payload so click callbacks can look up raw data
+        store_payload["data_key"] = data_key
+
+        num_days = len(store_payload["frames"])
 
         # Build slider marks — just day-of-month
         marks = {}
-        for i, rd in enumerate(raw_days):
-            d = datetime.strptime(rd["date"], "%Y-%m-%d")
+        for i, d_str in enumerate(store_payload["dates"]):
+            d = datetime.strptime(d_str, "%Y-%m-%d")
             marks[i] = str(d.day)
 
         status = html.Div(
@@ -250,7 +322,7 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
         anim_visible = {"display": "block"}
 
         return (
-            payload, status,
+            store_payload, status,
             marks, num_days - 1, num_days - 1,
             anim_visible, "",
             False, "Fetch SST",
@@ -394,11 +466,11 @@ app.clientside_callback(
 app.clientside_callback(
     """
     function(frame_idx, sst_data) {
-        if (!sst_data || !sst_data.raw_days) return '';
+        if (!sst_data || !sst_data.dates) return '';
         var idx = frame_idx || 0;
-        var num_days = sst_data.raw_days.length;
+        var num_days = sst_data.dates.length;
         if (idx >= num_days) idx = num_days - 1;
-        var day_date = sst_data.raw_days[idx].date;
+        var day_date = sst_data.dates[idx];
         var d = new Date(day_date + 'T12:00:00');
         var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -443,7 +515,7 @@ def handle_map_click(click_data, measure, selected_pois, sst_data, frame_idx):
 
     if measure and measure.get("mode") == "a":
         # Set point A, wait for B
-        label_a = poi[0] if poi else f"{click_lat:.3f}°N, {abs(click_lng):.3f}°W"
+        label_a = poi[0] if poi else f"{click_lat:.3f}\u00b0N, {abs(click_lng):.3f}\u00b0W"
         new_state = {"mode": "b", "a": {"lat": click_lat, "lng": click_lng, "label": label_a}, "b": None}
         readout = html.Div(
             [
@@ -470,7 +542,7 @@ def handle_map_click(click_data, measure, selected_pois, sst_data, frame_idx):
     elif measure and measure.get("mode") == "b":
         # Set point B, compute distance
         a = measure["a"]
-        label_b = poi[0] if poi else f"{click_lat:.3f}°N, {abs(click_lng):.3f}°W"
+        label_b = poi[0] if poi else f"{click_lat:.3f}\u00b0N, {abs(click_lng):.3f}\u00b0W"
         m = format_measurement(a["lat"], a["lng"], click_lat, click_lng)
         new_state = {"mode": "done", "a": a, "b": {"lat": click_lat, "lng": click_lng, "label": label_b}}
         readout = html.Div(
@@ -526,12 +598,12 @@ def handle_map_click(click_data, measure, selected_pois, sst_data, frame_idx):
             # Clicked near a POI — show POI tooltip in click-marker layer
             poi_name, poi_lat, poi_lon = poi
             temp = None
-            if sst_data and "raw_days" in sst_data:
-                fi = min(frame_idx or 0, len(sst_data["raw_days"]) - 1)
-                arrF = np.array(sst_data["raw_days"][fi]["arrF"], dtype=np.float64)
-                lats_arr = np.array(sst_data["lats"], dtype=np.float64)
-                lons_arr = np.array(sst_data["lons"], dtype=np.float64)
-                temp = _lookup_temp(poi_lat, poi_lon, arrF, lats_arr, lons_arr)
+            data_key = sst_data.get("data_key") if sst_data else None
+            raw = _get_raw_data(data_key) if data_key else None
+            if raw:
+                fi = min(frame_idx or 0, len(raw["raw_days"]) - 1)
+                arrF = raw["raw_days"][fi]["arrF"]
+                temp = _lookup_temp(poi_lat, poi_lon, arrF, raw["lats"], raw["lons"])
 
             tooltip_content = build_poi_tooltip(poi_name, poi_lat, poi_lon, temp)
             marker = [
@@ -564,26 +636,30 @@ def handle_map_click(click_data, measure, selected_pois, sst_data, frame_idx):
     prevent_initial_call=True,
 )
 def render_click_marker(click_pos, sst_data, frame_idx):
-    if not click_pos or not sst_data or "raw_days" not in sst_data:
+    if not click_pos or not sst_data:
+        return []
+
+    data_key = sst_data.get("data_key")
+    raw = _get_raw_data(data_key) if data_key else None
+    if not raw:
         return []
 
     frame_idx = frame_idx or 0
-    num_frames = len(sst_data["raw_days"])
+    num_frames = len(raw["raw_days"])
     if frame_idx >= num_frames:
         frame_idx = num_frames - 1
 
     lat = click_pos["lat"]
     lng = click_pos["lng"]
-    arrF = np.array(sst_data["raw_days"][frame_idx]["arrF"], dtype=np.float64)
-    lats = np.array(sst_data["lats"], dtype=np.float64)
-    lons = np.array(sst_data["lons"], dtype=np.float64)
+    arrF = raw["raw_days"][frame_idx]["arrF"]
+    lats = raw["lats"]
+    lons = raw["lons"]
 
     # Find nearest grid point
     lat_idx = np.argmin(np.abs(lats - lat))
     lon_idx = np.argmin(np.abs(lons - lng))
 
     temp = arrF[lat_idx, lon_idx]
-    day_date = sst_data["raw_days"][frame_idx]["date"]
 
     if not np.isfinite(temp):
         return [
@@ -599,7 +675,7 @@ def render_click_marker(click_pos, sst_data, frame_idx):
                                     "fontSize": "0.95rem", "fontWeight": "600",
                                     "color": "#888",
                                 }),
-                                html.Div(f"{lat:.3f}°N, {abs(lng):.3f}°W", style={
+                                html.Div(f"{lat:.3f}\u00b0N, {abs(lng):.3f}\u00b0W", style={
                                     "fontSize": "0.7rem", "color": "#999",
                                     "marginTop": "2px",
                                 }),
@@ -622,11 +698,11 @@ def render_click_marker(click_pos, sst_data, frame_idx):
                 dl.Tooltip(
                     html.Div(
                         [
-                            html.Div(f"{temp:.1f}°F", style={
+                            html.Div(f"{temp:.1f}\u00b0F", style={
                                 "fontSize": "1.15rem", "fontWeight": "700",
                                 "color": "#1e293b", "lineHeight": "1.2",
                             }),
-                            html.Div(f"{lat:.3f}°N, {abs(lng):.3f}°W", style={
+                            html.Div(f"{lat:.3f}\u00b0N, {abs(lng):.3f}\u00b0W", style={
                                 "fontSize": "0.7rem", "color": "#94a3b8",
                                 "marginTop": "2px",
                             }),
@@ -693,17 +769,37 @@ def update_poi_count(selected):
 # ---- Startup pre-warm: cache the current week so first visitor gets instant load ----
 def _prewarm_cache():
     time.sleep(5)  # Let gunicorn finish startup
-    end_date = date.today() - timedelta(days=2)
+    # Pre-warm the DEFAULT date (today - 4 days) so auto-fetch hits cache
+    end_date = date.today() - timedelta(days=4)
     for locked in [False, True]:
         cached = get_cached(end_date, locked)
         if cached and not is_stale(end_date):
+            # Populate server-side raw data cache from disk cache
+            data_key = _cache_key(end_date, locked)
+            if data_key not in _raw_data_cache:
+                _, raw_data = _build_payload_from_disk_cache(cached)
+                _raw_data_cache[data_key] = raw_data
             logger.info("Pre-warm: cache hit for %s (locked=%s)", end_date, locked)
             continue
         logger.info("Pre-warm: fetching %s (locked=%s)", end_date, locked)
         try:
             sst = get_sst_multiday(end_date, CFG)
-            payload = _build_payload(sst, locked)
-            put_cache(end_date, locked, payload)
+            store_payload, raw_data = _build_payload(sst, locked)
+
+            # Write full payload to disk cache
+            disk_payload = dict(store_payload)
+            disk_payload["raw_days"] = [
+                {"arrF": rd["arrF"].tolist(), "date": rd["date"]}
+                for rd in raw_data["raw_days"]
+            ]
+            disk_payload["lats"] = raw_data["lats"].tolist()
+            disk_payload["lons"] = raw_data["lons"].tolist()
+            put_cache(end_date, locked, disk_payload)
+
+            # Also populate server-side raw data cache
+            data_key = _cache_key(end_date, locked)
+            _raw_data_cache[data_key] = raw_data
+
             logger.info("Pre-warm: cached %s (locked=%s)", end_date, locked)
         except Exception:
             logger.warning("Pre-warm failed for %s", end_date, exc_info=True)
