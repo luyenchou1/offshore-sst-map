@@ -273,24 +273,28 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
         )
 
 
-# ---- Callback 2: Render static layers (POIs, legend, AOI) ----
-# Only fires on data load or POI selection change — NOT on frame changes.
+# ---- Callback 2: Render static layers (POIs, legend, AOI, initial overlay) ----
+# Fires on data load or POI selection change. Also sets the SST overlay
+# on initial data load (clientside callback handles frame changes only).
 @app.callback(
     Output("aoi-outline", "data"),
     Output("poi-layer", "children"),
     Output("legend-container", "children"),
     Output("map-loading-overlay", "style", allow_duplicate=True),
+    Output("sst-overlay", "url"),
+    Output("sst-overlay", "bounds"),
     Input("sst-store", "data"),
     Input("poi-picker", "value"),
     Input("lock-scale", "value"),
+    State("frame-slider", "value"),
     prevent_initial_call="initial_duplicate",
 )
-def render_static_layers(sst_data, selected_pois, lock_scale):
+def render_static_layers(sst_data, selected_pois, lock_scale, frame_idx):
     aoi_geojson = build_aoi_geojson(CFG)
     hidden = {"display": "none"}
 
     if not sst_data or "frames" not in sst_data:
-        return aoi_geojson, build_poi_markers(selected=selected_pois), "", dash.no_update
+        return aoi_geojson, build_poi_markers(selected=selected_pois), "", dash.no_update, "", [[0, 0], [0, 0]]
 
     vmin = sst_data["vmin"]
     vmax = sst_data["vmax"]
@@ -299,10 +303,19 @@ def render_static_layers(sst_data, selected_pois, lock_scale):
     legend = build_legend_component(vmin, vmax, res_km=res_km)
     poi_markers = build_poi_markers(selected=selected_pois)
 
-    return aoi_geojson, poi_markers, legend, hidden
+    # Set overlay for current frame
+    idx = frame_idx if frame_idx is not None else len(sst_data["frames"]) - 1
+    if idx >= len(sst_data["frames"]):
+        idx = len(sst_data["frames"]) - 1
+    overlay_url = sst_data["frames"][idx]
+    overlay_bounds = sst_data["bounds"]
+
+    return aoi_geojson, poi_markers, legend, hidden, overlay_url, overlay_bounds
 
 
 # ---- Clientside: Swap overlay PNG by frame index (instant, no server trip) ----
+# sst-store is State (not Input) — initial overlay is set by render_static_layers.
+# This callback only fires on frame slider changes (user interaction / animation).
 app.clientside_callback(
     """
     function(frame_idx, sst_data) {
@@ -314,10 +327,11 @@ app.clientside_callback(
         return [sst_data.frames[idx], sst_data.bounds];
     }
     """,
-    Output("sst-overlay", "url"),
-    Output("sst-overlay", "bounds"),
+    Output("sst-overlay", "url", allow_duplicate=True),
+    Output("sst-overlay", "bounds", allow_duplicate=True),
     Input("frame-slider", "value"),
-    Input("sst-store", "data"),
+    State("sst-store", "data"),
+    prevent_initial_call=True,
 )
 
 
