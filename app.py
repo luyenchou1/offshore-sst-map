@@ -9,11 +9,6 @@ step or auto-play through the week's SST evolution.
 """
 
 import os
-
-# macOS fork safety: DiskcacheManager uses multiprocess which forks.
-# Must be set before any other imports.
-os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
-
 import json
 import logging
 import threading
@@ -23,9 +18,8 @@ from datetime import date, datetime, timedelta, timezone
 import dash
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
-import diskcache
 import numpy as np
-from dash import DiskcacheManager, Input, Output, State, ctx, dcc, html
+from dash import Input, Output, State, ctx, dcc, html
 
 from data.cache import get_cached, is_stale, put_cache
 from data.convert import upsample_visual
@@ -47,15 +41,10 @@ logger = logging.getLogger(__name__)
 with open("config.json") as f:
     CFG = json.load(f)
 
-# Long-callback manager (prevents browser-side timeouts)
-_lcb_cache = diskcache.Cache("./cache/long_callback")
-long_callback_manager = DiskcacheManager(_lcb_cache)
-
 app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.FLATLY],
     title="GotOne Offshore SST Analyzer",
-    background_callback_manager=long_callback_manager,
 )
 server = app.server  # for gunicorn
 
@@ -179,8 +168,21 @@ _LOADING_OVERLAY_VISIBLE = {
 _LOADING_OVERLAY_HIDDEN = {"display": "none"}
 
 
-# ---- Callback 1: Fetch 7-day SST data (long_callback — no browser timeout) ----
-@dash.callback(
+# ---- Callback 1a: Show loading overlay immediately on fetch ----
+@app.callback(
+    Output("fetch-btn", "disabled"),
+    Output("fetch-btn", "children"),
+    Output("map-loading-overlay", "style"),
+    Input("fetch-btn", "n_clicks"),
+    Input("auto-fetch", "n_intervals"),
+    prevent_initial_call=True,
+)
+def show_loading_on_fetch(n_clicks, n_intervals):
+    return True, "Loading...", _LOADING_OVERLAY_VISIBLE
+
+
+# ---- Callback 1b: Fetch 7-day SST data ----
+@app.callback(
     output=[
         Output("sst-store", "data"),
         Output("fetch-status", "children"),
@@ -189,6 +191,8 @@ _LOADING_OVERLAY_HIDDEN = {"display": "none"}
         Output("frame-slider", "max"),
         Output("anim-controls", "style"),
         Output("fetch-spinner-target", "children"),
+        Output("fetch-btn", "disabled", allow_duplicate=True),
+        Output("fetch-btn", "children", allow_duplicate=True),
     ],
     inputs=[
         Input("fetch-btn", "n_clicks"),
@@ -198,13 +202,6 @@ _LOADING_OVERLAY_HIDDEN = {"display": "none"}
         State("end-date-picker", "date"),
         State("lock-scale", "value"),
     ],
-    running=[
-        (Output("fetch-btn", "disabled"), True, False),
-        (Output("fetch-btn", "children"), "Loading...", "Fetch SST"),
-        (Output("map-loading-overlay", "style"),
-         _LOADING_OVERLAY_VISIBLE, _LOADING_OVERLAY_HIDDEN),
-    ],
-    background=True,
     prevent_initial_call=True,
 )
 def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
@@ -256,6 +253,7 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
             payload, status,
             marks, num_days - 1, num_days - 1,
             anim_visible, "",
+            False, "Fetch SST",
         )
 
     except Exception as e:
@@ -270,6 +268,7 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
             ),
             dash.no_update, dash.no_update, dash.no_update,
             dash.no_update, "",
+            False, "Fetch SST",
         )
 
 
