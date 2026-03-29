@@ -74,19 +74,24 @@ def _get_raw_data(data_key):
 
     # Fall back to disk cache — parse key to get end_date and locked
     # data_key format: "2026-03-25_adaptive" or "2026-03-25_locked"
+    logger.info("_get_raw_data: memory miss for %s, trying disk cache", data_key)
     try:
         parts = data_key.rsplit("_", 1)
         if len(parts) != 2:
+            logger.warning("_get_raw_data: invalid key format: %s", data_key)
             return None
         end_date_str, mode = parts
         end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
         locked = mode == "locked"
         cached = get_cached(end_date, locked)
         if cached:
+            logger.info("_get_raw_data: disk cache HIT for %s, rebuilding raw data", data_key)
             _, raw_data = _build_payload_from_disk_cache(cached)
             _raw_data_cache[data_key] = raw_data
             logger.info("Raw data loaded from disk cache: %s", data_key)
             return raw_data
+        else:
+            logger.warning("_get_raw_data: disk cache MISS for %s", data_key)
     except Exception:
         logger.warning("Failed to load raw data from disk for %s", data_key, exc_info=True)
 
@@ -627,6 +632,9 @@ def handle_map_click(click_data, measure, selected_pois, sst_data, frame_idx):
             poi_name, poi_lat, poi_lon = poi
             temp = None
             data_key = sst_data.get("data_key") if sst_data else None
+            logger.info("handle_map_click POI: data_key=%s, in_cache=%s, cache_keys=%s",
+                        data_key, data_key in _raw_data_cache if data_key else False,
+                        list(_raw_data_cache.keys()))
             raw = _get_raw_data(data_key) if data_key else None
             if raw:
                 fi = min(frame_idx or 0, len(raw["raw_days"]) - 1)
@@ -665,11 +673,17 @@ def handle_map_click(click_data, measure, selected_pois, sst_data, frame_idx):
 )
 def render_click_marker(click_pos, sst_data, frame_idx):
     if not click_pos or not sst_data:
+        logger.warning("render_click_marker: no click_pos=%s or no sst_data=%s",
+                       bool(click_pos), bool(sst_data))
         return []
 
     data_key = sst_data.get("data_key")
+    logger.info("render_click_marker: data_key=%s, in_cache=%s, cache_keys=%s",
+                data_key, data_key in _raw_data_cache if data_key else False,
+                list(_raw_data_cache.keys()))
     raw = _get_raw_data(data_key) if data_key else None
     if not raw:
+        logger.warning("render_click_marker: raw data is None for key=%s", data_key)
         return []
 
     frame_idx = frame_idx or 0
