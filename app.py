@@ -61,8 +61,36 @@ def _cache_key(end_date, locked):
 
 
 def _get_raw_data(data_key):
-    """Retrieve raw grid data from server-side cache."""
-    return _raw_data_cache.get(data_key)
+    """Retrieve raw grid data, falling back to disk cache if needed.
+
+    This handles multi-worker gunicorn (each worker has its own memory),
+    server restarts, and any other case where in-memory cache is empty.
+    """
+    if data_key and data_key in _raw_data_cache:
+        return _raw_data_cache[data_key]
+
+    if not data_key:
+        return None
+
+    # Fall back to disk cache — parse key to get end_date and locked
+    # data_key format: "2026-03-25_adaptive" or "2026-03-25_locked"
+    try:
+        parts = data_key.rsplit("_", 1)
+        if len(parts) != 2:
+            return None
+        end_date_str, mode = parts
+        end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+        locked = mode == "locked"
+        cached = get_cached(end_date, locked)
+        if cached:
+            _, raw_data = _build_payload_from_disk_cache(cached)
+            _raw_data_cache[data_key] = raw_data
+            logger.info("Raw data loaded from disk cache: %s", data_key)
+            return raw_data
+    except Exception:
+        logger.warning("Failed to load raw data from disk for %s", data_key, exc_info=True)
+
+    return None
 
 
 # ---- Shared helper: build SST payload from raw ERDDAP result ----
