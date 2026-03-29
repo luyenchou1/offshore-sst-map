@@ -25,9 +25,11 @@
 *Status: Complete*
 
 ### Deployed
-- Live at https://offshore-sst-map.onrender.com
+- Live at https://sst.gotoneapp.com (custom domain) and https://offshore-sst-map.onrender.com
+- Embedded on Squarespace at https://www.gotoneapp.com/offshore-sst (iframe)
 - Render Starter ($7/month): 0.5 CPU, 512 MB RAM, 1 GB persistent disk ($0.30/month)
 - Gunicorn: 1 worker, 180s timeout (must be 1 worker — in-memory cache is per-process)
+- Custom domain: CNAME `sst` → Render in Squarespace DNS, SSL auto-provisioned
 
 ### Disk Cache
 - `data/cache.py`: gzip-compressed JSON cache (~500 KB–1 MB per 7-day window)

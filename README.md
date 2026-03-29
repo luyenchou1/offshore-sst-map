@@ -4,7 +4,8 @@ Daily sea-surface temperature (SST) visualization for the NJ-to-MA offshore fish
 
 Data: **NOAA CoastWatch ERDDAP** — MUR GHRSST 1km (preferred), OISST 25km (fallback). Temperatures in **°F**.
 
-**Live**: https://offshore-sst-map.onrender.com
+**Live**: https://sst.gotoneapp.com (also at https://offshore-sst-map.onrender.com)
+**Embedded**: https://www.gotoneapp.com/offshore-sst
 
 ## Features
 
@@ -36,6 +37,18 @@ Open http://localhost:8050
 5. Start command: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --timeout 180`
 
 **Important**: Must use 1 worker — the in-memory raw data cache is per-process.
+
+## Custom Domain & Squarespace Embed
+
+The app is served at `sst.gotoneapp.com` via a CNAME pointing to Render, and embedded on the GotOne Squarespace site at `gotoneapp.com/offshore-sst`.
+
+**Custom domain setup:**
+1. Squarespace DNS: CNAME record `sst` → `offshore-sst-map.onrender.com`
+2. Render: Add `sst.gotoneapp.com` as custom domain (auto-provisions SSL)
+
+**Squarespace embed:**
+- Page at `/offshore-sst` contains an Embed Block with an iframe pointing to `https://sst.gotoneapp.com`
+- `app.py` sets `Content-Security-Policy: frame-ancestors` to allow embedding from `gotoneapp.com`
 
 ## Controls
 

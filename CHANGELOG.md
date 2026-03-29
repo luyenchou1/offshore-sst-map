@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-03-29 — Custom Domain & Squarespace Integration
+
+### Added
+- **Custom domain**: App now served at `sst.gotoneapp.com` via CNAME to Render. SSL auto-provisioned.
+- **Squarespace embed**: iframe on `gotoneapp.com/offshore-sst` loads the full SST analyzer inline on the GotOne website.
+- **iframe security headers**: `Content-Security-Policy: frame-ancestors` allows embedding from `gotoneapp.com` and related domains. Set via Flask `after_request` hook in `app.py`.
+
 ## 2026-03-29 — Disk Cache & Render Performance Fix (v1.1)
 
 ### Added

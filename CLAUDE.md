@@ -10,10 +10,13 @@ Dash 4.0 web app ("GotOne Offshore SST Analyzer") branded for [gotoneapp.com](ht
 - Python 3.12, venv at `.venv/`
 - Dev server: `python app.py` (port 8050)
 - Production: **Render Starter** ($7/month) at https://offshore-sst-map.onrender.com
+  - Custom domain: `sst.gotoneapp.com` (CNAME → Render, SSL auto-provisioned)
   - Start command: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --timeout 180`
   - Must be 1 worker (raw data cache is in-memory per process)
   - Auto-deploy is OFF — use Manual Deploy in Render dashboard
-- Future: custom domain `sst.gotoneapp.com` (requires Squarespace CNAME → Render)
+- **Squarespace embed**: iframe on `gotoneapp.com/offshore-sst` loads the app inline
+  - `Content-Security-Policy: frame-ancestors` header allows embedding from gotoneapp.com
+  - Embed Block with `<iframe src="https://sst.gotoneapp.com" ...>`
 
 ## GotOne Branding
 - **Primary blue**: `#0183fe` (buttons active states, slider, spinner, measure tool)
@@ -115,6 +118,12 @@ render_static_layers sets initial overlay + POIs + legend
 - **Auto-deploy is currently OFF.** Use Manual Deploy after pushing to `main`.
 - **Pre-warm thread** runs 15s after startup. Only loads from disk cache (no ERDDAP). Heavy ERDDAP fetches during startup starve the gunicorn worker and cause Render's health check to fail, hanging the deploy indefinitely.
 - **Disk cache persists across deploys** (Render Starter has persistent filesystem). Previously fetched dates load instantly from cache.
+
+### Custom Domain & Squarespace Integration
+- **Custom domain**: `sst.gotoneapp.com` — CNAME in Squarespace DNS pointing to `offshore-sst-map.onrender.com`. Added as custom domain in Render dashboard; SSL auto-provisioned by Render.
+- **Squarespace embed**: iframe on `gotoneapp.com/offshore-sst` page. Uses Squarespace Embed Block with `<iframe src="https://sst.gotoneapp.com">`.
+- **iframe headers**: `@server.after_request` hook sets `Content-Security-Policy: frame-ancestors` to allow embedding from `gotoneapp.com`, `sst.gotoneapp.com`, and the Render domain. Also removes `X-Frame-Options` if set by middleware.
+- **To update the embed URL**: change `src` in the Squarespace Embed Block. To change allowed embedding origins, update `set_iframe_headers()` in `app.py`.
 
 ### ERDDAP Behavior
 - **MUR data latency**: ~2 days behind. Always try `end_date - 0`, then `-1`, then `-2`.
