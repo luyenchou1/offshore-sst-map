@@ -1,18 +1,24 @@
-# Offshore SST Map — NJ→MA AOI
+# GotOne Offshore SST Analyzer
 
-Daily sea-surface temperature (SST) for the offshore corridor from New York Harbor to Massachusetts (coastline → ~80 nm).
-Data comes from NOAA CoastWatch ERDDAP (prefers **MUR GHRSST 1km**; falls back to **OISST**). Temperatures are shown in **°F (whole degrees)**.
+Daily sea-surface temperature (SST) visualization for the NJ-to-MA offshore fishing corridor. Pick any 7-day window (back to June 2002) and animate through daily SST maps to spot warm eddies, temperature breaks, and thermoclines.
 
-## What's new (v1.0 — Dash Migration)
-- **Migrated from Streamlit to Dash + Dash Leaflet** — smooth pan/zoom with no page reloads
-- **Fixed MUR dataset selection** — now correctly fetches 1km MUR data instead of 5km BLENDED
-- **Fixed winter/spring color scale** — temperatures below 48°F now show proper color differentiation
-- **Improved error handling** — server failures fall through to next server instead of crashing
-- **Auto date retry** — if latest date has no data (MUR latency), automatically tries older dates
-- **Faster rendering** — vectorized color mapping (~100x faster than per-pixel loop)
-- **Deployable** — ready for Render, Railway, or any WSGI host
+Data: **NOAA CoastWatch ERDDAP** — MUR GHRSST 1km (preferred), OISST 25km (fallback). Temperatures in **°F**.
+
+**Live**: https://offshore-sst-map.onrender.com
+
+## Features
+
+- **7-day SST animation** — Play/pause, step, or scrub through a week of daily SST maps
+- **Date picker** — Any date from June 2002 to ~2 days ago (MUR latency)
+- **20 fishing spots + The Dump** — Named POIs with click-to-read SST at each location
+- **Click-to-read** — Click anywhere on the map for an instant temperature reading
+- **Measure tool** — Two-click distance/bearing (nautical miles, statute miles, compass heading)
+- **Disk cache** — Repeat fetches return instantly from gzip-compressed cache files
+- **Adaptive or locked color scale** — Toggle between percentile-based or fixed 30–90°F range
+- **GotOne branding** — Dark navy UI with brand blue (#0183fe) accents
 
 ## Setup (Local)
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
@@ -22,13 +28,36 @@ python app.py
 Open http://localhost:8050
 
 ## Deploy to Render
-1. Push this repo to GitHub
-2. Connect the repo on [render.com](https://render.com)
-3. Render auto-detects the `Procfile` and deploys
+
+1. Push repo to GitHub
+2. Connect the repo on [render.com](https://render.com) — Render auto-detects the `Procfile`
+3. Add a **persistent disk** (1 GB, mount at `/opt/render/project/src/cache`)
+4. Set env var `SST_CACHE_DIR=/opt/render/project/src/cache`
+5. Start command: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --timeout 180`
+
+**Important**: Must use 1 worker — the in-memory raw data cache is per-process.
 
 ## Controls
-- **Days back**: Select 1-7 days back from today (UTC)
-- **Lock color scale**: Toggle between adaptive (percentile-based) or fixed (30-90°F) scale
-- **Visual resolution**: 1x native, 2x or 3x upsampled for smoother gradients
-- **Tooltip density**: Sparse/Normal/Dense hover grid
-- **Fetch SST**: Click to load data for the selected date
+
+- **Date picker** — Select end date for the 7-day window
+- **Fetch SST** — Load SST data (cached dates return instantly)
+- **Playback** — Play/Pause, step forward/back, slider to scrub through days
+- **Spots dropdown** — Multi-select which fishing POIs to show on the map
+- **Lock scale** — Toggle fixed 30–90°F color range vs adaptive scaling
+- **Measure** — Two-click distance and bearing measurement tool
+
+## Architecture
+
+Two-part storage keeps browser payloads small (~7 MB) while preserving full-resolution data for click readings:
+
+- **Browser (dcc.Store)**: 7 pre-rendered base64 PNG frames + metadata (~7 MB)
+- **Server (memory dict)**: Raw float arrays for temperature lookups (~18 MB, with disk cache fallback)
+
+See `CLAUDE.md` for full architecture details, callback structure, and lessons learned.
+
+## Tech Stack
+
+- Dash 4.0 + dash-leaflet + dash-bootstrap-components
+- NOAA CoastWatch ERDDAP (MUR GHRSST 1km / OISST 25km)
+- Render Starter ($7/month): 0.5 CPU, 512 MB RAM, 1 GB persistent disk
+- Python 3.12

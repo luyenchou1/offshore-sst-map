@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-03-29 — Disk Cache & Render Performance Fix (v1.1)
+
+### Added
+- **Disk-based SST cache** (`data/cache.py`): Gzip-compressed JSON files (~500 KB–1 MB each) keyed by `{end_date}_{adaptive|locked}`. Cached dates return in ~50 ms instead of 30–90s ERDDAP fetches.
+- **Cache invalidation**: Dates >3 days old cached permanently (MUR data is finalized). Recent dates re-fetched if cache >12 hours old. LRU eviction at 200 entries.
+- **Two-part storage architecture**: Browser receives only PNG frames + metadata (~7 MB via dcc.Store). Raw float arrays (~18 MB) stored server-side in `_raw_data_cache` dict with disk cache fallback.
+- **Pre-warm on startup**: Daemon thread loads current week from disk cache (no ERDDAP) so first visitor gets instant results if previously cached.
+- **Disk cache fallback for click readings**: If server memory cache misses (restart, eviction), raw data is rebuilt from disk cache automatically.
+
+### Fixed
+- **Render 502 errors**: Original ~26 MB payload (raw arrays + PNGs + metadata in single dcc.Store) exceeded Render's proxy limits. Splitting into browser-side PNGs and server-side raw data resolved this.
+- **Browser callback timeout**: Cached dates now return instantly. Cache misses still take 30–90s but data gets cached for subsequent requests.
+- **Deploy hanging on Render**: Pre-warm thread was doing heavy ERDDAP fetches during startup, starving gunicorn so health checks failed. Changed to disk-cache-only pre-warm with 15s delay.
+- **Inconsistent POI/SST click readings**: Caused by `--workers 2` in Render start command (worker 2 had empty memory cache). Fixed by enforcing 1 worker + adding disk cache fallback in `_get_raw_data()`.
+- **Overlay not rendering after fetch**: Clientside callback fired before dcc.Store data propagated. Fixed by having server callback set initial overlay, with clientside callback only handling frame changes.
+- **Click callbacks returning no data on Render**: `_raw_data_cache` was populated AFTER the disk cache write. If the disk write OOMed (`.tolist()` triples memory), the worker crashed before the memory cache was set. Fixed by populating memory cache FIRST, using memory-efficient base64 numpy serialization, and writing disk cache in a background thread.
+
+### Changed
+- **Removed Dash background callbacks**: `background=True` with `DiskcacheManager` caused 502s on Render due to large polling responses. Reverted to synchronous callbacks with separate loading-overlay callback for UI feedback.
+- **Render deployment**: Added 1 GB persistent disk ($0.30/month) for SST cache. Env var `SST_CACHE_DIR` points to persistent mount.
+- **Disk cache serialization**: Switched from `.tolist()` + JSON (3x memory overhead) to base64-encoded numpy `.npy` format (1.3x overhead). Backward-compatible with old v1 caches. Disk write now runs in a background thread.
+
+### Removed
+- `diskcache` dependency (was used for `DiskcacheManager`, no longer needed)
+
 ## 2026-03-23 — Production Deployment (v1.0)
 
 ### Added
@@ -9,9 +34,6 @@
 
 ### Fixed
 - Removed invalid `callback_timeout` config (not supported in Dash 4)
-
-### Known Issues
-- **Re-fetch timeout on Render**: Browser-side ~30s callback timeout causes Fetch to fail when ERDDAP is slow. Initial auto-fetch works, but user-triggered re-fetches for different dates often hang. Fix planned: disk cache + Dash long_callback (see Phase 2b in ROADMAP.md).
 
 ## 2026-03-23 — Sidebar Polish
 

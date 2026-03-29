@@ -22,19 +22,35 @@
 - Custom CSS overrides for Dash 4 component class names
 
 ## Phase 2b: Production Deployment & Performance
-*Status: Deployed on Render Starter ($7/month) — performance optimization in progress*
+*Status: Complete*
 
+### Deployed
 - Live at https://offshore-sst-map.onrender.com
-- Gunicorn with 1 worker, 180s timeout
-- **Known issue**: Browser callback timeout (~30s) causes re-fetches to fail on Render's slower CPU
-- **Next**: Disk-based cache + Dash long_callback to fix timeout and make repeat fetches instant
-  - `data/cache.py`: gzip-compressed JSON cache on Render persistent disk
-  - `@app.long_callback` with DiskcacheManager for timeout-proof fetching
-  - Startup pre-warm thread for instant first-visitor experience
-  - Cache invalidation: permanent for dates >3 days old, 12hr TTL for recent dates
+- Render Starter ($7/month): 0.5 CPU, 512 MB RAM, 1 GB persistent disk ($0.30/month)
+- Gunicorn: 1 worker, 180s timeout (must be 1 worker — in-memory cache is per-process)
+
+### Disk Cache
+- `data/cache.py`: gzip-compressed JSON cache (~500 KB–1 MB per 7-day window)
+- Cache key: `{end_date}_{adaptive|locked}` — locked vs adaptive produce different PNGs
+- Invalidation: permanent for dates >3 days old (MUR finalized), 12-hour TTL for recent dates
+- LRU eviction at 200 entries (~200 MB max)
+- Render persistent disk mounted at `/opt/render/project/src/cache`
+- v2 serialization: base64-encoded numpy `.npy` format (1.3x memory vs 3x for `.tolist()`)
+- Disk write runs in background thread (non-blocking)
+
+### Two-Part Storage Architecture
+- **Browser (dcc.Store)**: ~7 MB — 7 pre-rendered base64 PNG frames + dates + metadata
+- **Server (`_raw_data_cache` dict)**: ~18 MB — raw float arrays for click-to-read temperature lookups
+- Memory cache populated **before** disk write (memory-first for reliability on 512 MB Render)
+- Disk cache fallback: if memory cache misses (restart, eviction), raw data is rebuilt from disk cache
+- Solved: original ~26 MB single payload caused Render 502 errors and browser timeouts
+
+### Pre-Warm
+- Daemon thread on startup (15s delay) loads current week from disk cache only
+- No ERDDAP fetches during startup — avoids starving gunicorn and failing Render health checks
 
 ## Phase 3: Responsive / Mobile
-*Status: Planned
+*Status: Planned*
 
 - Stacked layout on mobile (controls above map, or collapsible drawer)
 - Full-width map on small screens
