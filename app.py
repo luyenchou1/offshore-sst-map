@@ -8,6 +8,8 @@ Supports 7-day animated windows: pick any end date back to 2002 and
 step or auto-play through the week's SST evolution.
 """
 
+import base64
+import io
 import os
 import json
 import logging
@@ -179,23 +181,45 @@ def _build_payload(sst: dict, locked: bool) -> dict:
     return store_payload, raw_data
 
 
+def _serialize_array(arr: np.ndarray) -> str:
+    """Serialize numpy array to base64 string (memory-efficient)."""
+    buf = io.BytesIO()
+    np.save(buf, arr)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _deserialize_array(s: str) -> np.ndarray:
+    """Deserialize base64 string to numpy array."""
+    buf = io.BytesIO(base64.b64decode(s))
+    return np.load(buf)
+
+
 def _build_payload_from_disk_cache(cached: dict):
-    """Split a disk-cached payload (old format with raw_days) into
-    store_payload + raw_data for server-side cache."""
-    # Extract raw arrays from the cached dict
+    """Split a disk-cached payload into store_payload + raw_data.
+
+    Supports two formats:
+      - New (v2): raw_days[i]["arrF"] is a base64-encoded numpy string
+      - Old (v1): raw_days[i]["arrF"] is a nested JSON list of floats
+    """
     raw_days = []
     dates = []
     for rd in cached["raw_days"]:
-        raw_days.append({
-            "arrF": np.array(rd["arrF"], dtype=np.float64),
-            "date": rd["date"],
-        })
+        arr_data = rd["arrF"]
+        if isinstance(arr_data, str):
+            # v2 format: base64-encoded numpy array
+            arrF = _deserialize_array(arr_data)
+        else:
+            # v1 format: JSON list of floats
+            arrF = np.array(arr_data, dtype=np.float64)
+        raw_days.append({"arrF": arrF, "date": rd["date"]})
         dates.append(rd["date"])
 
+    lats_data = cached["lats"]
+    lons_data = cached["lons"]
     raw_data = {
         "raw_days": raw_days,
-        "lats": np.array(cached["lats"], dtype=np.float64),
-        "lons": np.array(cached["lons"], dtype=np.float64),
+        "lats": _deserialize_array(lats_data) if isinstance(lats_data, str) else np.array(lats_data, dtype=np.float64),
+        "lons": _deserialize_array(lons_data) if isinstance(lons_data, str) else np.array(lons_data, dtype=np.float64),
     }
 
     store_payload = {
@@ -309,31 +333,45 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
 
     try:
         # Check disk cache first
+        cached_hit = False
         cached = get_cached(end_date, locked)
         if cached and not is_stale(end_date):
             logger.info("Serving from cache: %s", end_date)
             store_payload, raw_data = _build_payload_from_disk_cache(cached)
+            cached_hit = True
         else:
             # Cache miss — fetch from ERDDAP
             logger.info("Cache miss, fetching from ERDDAP: %s", end_date)
             sst = get_sst_multiday(end_date, CFG)
             store_payload, raw_data = _build_payload(sst, locked)
 
-            # Write full payload to disk cache (includes raw arrays for future loads)
-            try:
-                disk_payload = dict(store_payload)
-                disk_payload["raw_days"] = [
-                    {"arrF": rd["arrF"].tolist(), "date": rd["date"]}
-                    for rd in raw_data["raw_days"]
-                ]
-                disk_payload["lats"] = raw_data["lats"].tolist()
-                disk_payload["lons"] = raw_data["lons"].tolist()
-                put_cache(end_date, locked, disk_payload)
-            except Exception:
-                logger.warning("Cache write failed", exc_info=True)
-
-        # Store raw data server-side for click callbacks
+        # Store raw data server-side FIRST — must happen before disk write
+        # so click callbacks work even if the disk write crashes or OOMs
         _raw_data_cache[data_key] = raw_data
+
+        if not cached_hit:
+            # Write to disk cache in background thread to avoid blocking
+            # the callback response. Uses base64-encoded numpy arrays
+            # instead of .tolist() to avoid 3x memory spike from Python
+            # float objects (critical on Render's 512MB RAM).
+            def _write_disk_cache(sp, rd, ed, lk):
+                try:
+                    disk_payload = dict(sp)
+                    disk_payload["raw_days"] = [
+                        {"arrF": _serialize_array(day["arrF"]), "date": day["date"]}
+                        for day in rd["raw_days"]
+                    ]
+                    disk_payload["lats"] = _serialize_array(rd["lats"])
+                    disk_payload["lons"] = _serialize_array(rd["lons"])
+                    put_cache(ed, lk, disk_payload)
+                except Exception:
+                    logger.warning("Background cache write failed", exc_info=True)
+
+            threading.Thread(
+                target=_write_disk_cache,
+                args=(store_payload, raw_data, end_date, locked),
+                daemon=True,
+            ).start()
 
         # Add data_key to store payload so click callbacks can look up raw data
         store_payload["data_key"] = data_key
@@ -632,9 +670,6 @@ def handle_map_click(click_data, measure, selected_pois, sst_data, frame_idx):
             poi_name, poi_lat, poi_lon = poi
             temp = None
             data_key = sst_data.get("data_key") if sst_data else None
-            logger.info("handle_map_click POI: data_key=%s, in_cache=%s, cache_keys=%s",
-                        data_key, data_key in _raw_data_cache if data_key else False,
-                        list(_raw_data_cache.keys()))
             raw = _get_raw_data(data_key) if data_key else None
             if raw:
                 fi = min(frame_idx or 0, len(raw["raw_days"]) - 1)
@@ -673,17 +708,16 @@ def handle_map_click(click_data, measure, selected_pois, sst_data, frame_idx):
 )
 def render_click_marker(click_pos, sst_data, frame_idx):
     if not click_pos or not sst_data:
-        logger.warning("render_click_marker: no click_pos=%s or no sst_data=%s",
-                       bool(click_pos), bool(sst_data))
         return []
 
     data_key = sst_data.get("data_key")
-    logger.info("render_click_marker: data_key=%s, in_cache=%s, cache_keys=%s",
-                data_key, data_key in _raw_data_cache if data_key else False,
-                list(_raw_data_cache.keys()))
     raw = _get_raw_data(data_key) if data_key else None
     if not raw:
-        logger.warning("render_click_marker: raw data is None for key=%s", data_key)
+        logger.warning("render_click_marker: raw data unavailable for key=%s "
+                       "(in_memory=%s, cache_keys=%s)",
+                       data_key,
+                       data_key in _raw_data_cache if data_key else False,
+                       list(_raw_data_cache.keys()))
         return []
 
     frame_idx = frame_idx or 0
