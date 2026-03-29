@@ -51,6 +51,19 @@ app = dash.Dash(
 server = app.server  # for gunicorn
 
 
+# ---- Allow iframe embedding from GotOne website ----
+@server.after_request
+def set_iframe_headers(response):
+    # Allow embedding on gotoneapp.com (Squarespace) and the Render domain
+    response.headers["Content-Security-Policy"] = (
+        "frame-ancestors 'self' https://www.gotoneapp.com https://gotoneapp.com "
+        "https://sst.gotoneapp.com https://offshore-sst-map.onrender.com"
+    )
+    # Remove X-Frame-Options if set by any middleware (CSP takes precedence)
+    response.headers.pop("X-Frame-Options", None)
+    return response
+
+
 # ---- Server-side raw data cache ----
 # Raw float arrays are too large (~18 MB) for dcc.Store / browser transport.
 # Keep them server-side; click callbacks read from here instead.
