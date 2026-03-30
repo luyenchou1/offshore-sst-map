@@ -7,6 +7,8 @@
 /* --- Global --- */
 html, body {
     overscroll-behavior: none;           /* prevent iOS pull-to-refresh / bounce */
+    overflow: hidden;                    /* prevent page-level scroll */
+    height: 100%;
 }
 body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
@@ -233,14 +235,6 @@ body {
    ============================================ */
 @media (max-width: 767.98px), (max-height: 500px) {
 
-    /* --- Prevent viewport dragging on iOS --- */
-    html, body {
-        position: fixed;
-        width: 100%;
-        height: 100%;
-        overflow: hidden;
-    }
-
     /* --- Header: compact, respect notch safe area --- */
     .gotone-header {
         padding: 0.5rem 0.75rem;
@@ -263,6 +257,7 @@ body {
         left: -300px;
         width: 280px !important;
         height: 100vh !important;
+        height: 100dvh !important;        /* dynamic viewport height — excludes iOS toolbar */
         max-width: 85vw !important;
         z-index: 2000;
         transition: left 0.3s ease;
@@ -274,11 +269,17 @@ body {
         -webkit-overflow-scrolling: touch;
     }
 
-    /* --- Date picker calendar popup: above the map layer --- */
+    /* --- Date picker calendar: break out of sidebar overflow --- */
     .gotone-sidebar .dash-datepicker-calendar {
+        position: fixed !important;
         z-index: 2100 !important;
-        position: relative;
+        left: env(safe-area-inset-left, 0px);
+        margin-left: 1rem;
+        width: min(320px, 85vw) !important;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        border-radius: 8px;
     }
+
     .gotone-sidebar.drawer-open {
         left: 0;
         box-shadow: 4px 0 20px rgba(0, 0, 0, 0.3);
@@ -296,6 +297,7 @@ body {
     /* --- Map: full viewport --- */
     .map-wrapper {
         height: calc(100vh - 52px) !important;
+        height: calc(100dvh - 52px) !important;
     }
 
     /* --- Map column: full width on mobile --- */
@@ -304,7 +306,7 @@ body {
         max-width: 100% !important;
     }
 
-    /* --- Hamburger button (top-right, clear of Leaflet zoom controls) --- */
+    /* --- Hamburger button (top-right, above loading overlay) --- */
     .hamburger-btn {
         position: absolute;
         top: 10px;
@@ -318,7 +320,7 @@ body {
         font-size: 1.4rem;
         cursor: pointer;
         box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-        display: block;
+        display: block !important;
         color: #0a1628;
     }
 
