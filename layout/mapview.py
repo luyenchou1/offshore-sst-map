@@ -12,6 +12,12 @@ def build_map():
         [
             html.Div(
                 [
+                    # Hamburger menu button (mobile only, hidden on desktop via CSS)
+                    html.Button(
+                        "\u2630",
+                        id="sidebar-open",
+                        className="hamburger-btn",
+                    ),
                     dl.Map(
                         id="sst-map",
                         center=[40.9, -71.5],
@@ -149,7 +155,7 @@ def build_map():
                         },
                     ),
                 ],
-                # Wrapper: fixed height, clips everything inside
+                className="map-wrapper",
                 style={
                     "position": "relative",
                     "height": MAP_HEIGHT,
@@ -158,5 +164,6 @@ def build_map():
             )
         ],
         width=10,
+        className="map-col",
         style={"padding": "0"},
     )

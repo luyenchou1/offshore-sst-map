@@ -272,6 +272,8 @@ app.layout = html.Div(
         dbc.Container(
             [
                 dbc.Row([build_sidebar(), build_map()]),
+                # Backdrop overlay for mobile drawer (hidden on desktop via CSS)
+                html.Div(id="sidebar-backdrop", className="sidebar-backdrop"),
                 dcc.Store(id="sst-store"),
                 dcc.Store(id="click-pos"),
                 html.Div(id="fetch-spinner-target", style={"display": "none"}),
@@ -303,7 +305,7 @@ _LOADING_OVERLAY_HIDDEN = {"display": "none"}
 # the slow fetch callback, leaving the user with no visual feedback.
 app.clientside_callback(
     """
-    function(n_clicks, n_intervals) {
+    function(n_clicks, n_intervals, lock_scale) {
         return [
             true,
             "Loading...",
@@ -324,6 +326,7 @@ app.clientside_callback(
     Output("map-loading-overlay", "style"),
     Input("fetch-btn", "n_clicks"),
     Input("auto-fetch", "n_intervals"),
+    Input("lock-scale", "value"),
     prevent_initial_call=True,
 )
 
@@ -340,18 +343,20 @@ app.clientside_callback(
         Output("fetch-spinner-target", "children"),
         Output("fetch-btn", "disabled", allow_duplicate=True),
         Output("fetch-btn", "children", allow_duplicate=True),
+        Output("sidebar-col", "className", allow_duplicate=True),
+        Output("sidebar-backdrop", "style", allow_duplicate=True),
     ],
     inputs=[
         Input("fetch-btn", "n_clicks"),
         Input("auto-fetch", "n_intervals"),
+        Input("lock-scale", "value"),
     ],
     state=[
         State("end-date-picker", "date"),
-        State("lock-scale", "value"),
     ],
     prevent_initial_call=True,
 )
-def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
+def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
 
     # Parse the date string from the date picker
     if end_date_str:
@@ -428,6 +433,7 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
             marks, num_days - 1, num_days - 1,
             anim_visible, "",
             False, "Fetch SST",
+            "gotone-sidebar", {"display": "none"},
         )
 
     except Exception as e:
@@ -443,6 +449,7 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
             dash.no_update, dash.no_update, dash.no_update,
             dash.no_update, "",
             False, "Fetch SST",
+            "gotone-sidebar", {"display": "none"},
         )
 
 
@@ -458,11 +465,10 @@ def fetch_sst_data(n_clicks, n_intervals, end_date_str, lock_scale):
     Output("sst-overlay", "bounds"),
     Input("sst-store", "data"),
     Input("poi-picker", "value"),
-    Input("lock-scale", "value"),
     State("frame-slider", "value"),
     prevent_initial_call="initial_duplicate",
 )
-def render_static_layers(sst_data, selected_pois, lock_scale, frame_idx):
+def render_static_layers(sst_data, selected_pois, frame_idx):
     aoi_geojson = build_aoi_geojson(CFG)
     hidden = {"display": "none"}
 
@@ -870,7 +876,37 @@ def toggle_measure(n_clicks, measure):
 def update_poi_count(selected):
     n = len(selected) if selected else 0
     total = len(get_all_poi_names())
-    return f"({n}/{total})"
+    if n == total:
+        return "All"
+    return f"{n}/{total}"
+
+
+# ---- POI checklist: collapse toggle ----
+app.clientside_callback(
+    """
+    function(n_clicks, is_open) {
+        return [!is_open, is_open ? '\\u25BE' : '\\u25B4'];
+    }
+    """,
+    Output("poi-collapse", "is_open"),
+    Output("poi-chevron", "children"),
+    Input("poi-collapse-toggle", "n_clicks"),
+    State("poi-collapse", "is_open"),
+    prevent_initial_call=True,
+)
+
+
+# ---- POI checklist: select all / deselect all ----
+@app.callback(
+    Output("poi-picker", "value"),
+    Input("poi-select-all", "n_clicks"),
+    Input("poi-deselect-all", "n_clicks"),
+    prevent_initial_call=True,
+)
+def poi_select_deselect(select_clicks, deselect_clicks):
+    if ctx.triggered_id == "poi-select-all":
+        return get_all_poi_names()
+    return []
 
 
 # ---- Chart layer toggles ----
@@ -895,6 +931,27 @@ def toggle_layers(active_layers):
 def update_sst_opacity(opacity):
     """Adjust SST overlay transparency via sidebar slider."""
     return opacity
+
+
+# ---- Mobile drawer toggle (clientside — no server round-trip) ----
+app.clientside_callback(
+    """
+    function(open_clicks, close_clicks, backdrop_clicks) {
+        var trigger = dash_clientside.callback_context.triggered[0];
+        if (!trigger) return [dash_clientside.no_update, dash_clientside.no_update];
+        if (trigger.prop_id === "sidebar-open.n_clicks") {
+            return ["gotone-sidebar drawer-open", {"display": "block"}];
+        }
+        return ["gotone-sidebar", {"display": "none"}];
+    }
+    """,
+    Output("sidebar-col", "className"),
+    Output("sidebar-backdrop", "style"),
+    Input("sidebar-open", "n_clicks"),
+    Input("sidebar-close", "n_clicks"),
+    Input("sidebar-backdrop", "n_clicks"),
+    prevent_initial_call=True,
+)
 
 
 # ---- Startup pre-warm: populate server-side cache from disk ----

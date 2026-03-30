@@ -45,3 +45,13 @@
 .measure-tooltip .leaflet-tooltip::before {
     border-top-color: rgba(99, 102, 241, 0.9);
 }
+
+/* Mobile: tooltips can wrap */
+@media (max-width: 767.98px) {
+    .sst-tooltip .leaflet-tooltip,
+    .poi-tooltip .leaflet-tooltip,
+    .measure-tooltip .leaflet-tooltip {
+        white-space: normal !important;
+        max-width: 200px;
+    }
+}

@@ -43,6 +43,24 @@ def build_sidebar():
 
     return dbc.Col(
         [
+            # Mobile: close drawer button (hidden on desktop via CSS)
+            html.Button(
+                "\u2715",
+                id="sidebar-close",
+                className="sidebar-close-btn",
+                style={
+                    "background": "none",
+                    "border": "none",
+                    "color": "#94a3b8",
+                    "fontSize": "1.5rem",
+                    "position": "absolute",
+                    "top": "0.5rem",
+                    "right": "0.75rem",
+                    "cursor": "pointer",
+                    "padding": "0.25rem",
+                    "lineHeight": "1",
+                },
+            ),
             # ── Section 1: Data Selection ──
             _section_label("Data", first=True),
             dcc.DatePickerSingle(
@@ -132,53 +150,106 @@ def build_sidebar():
             # ── Section 3: Map Tools ──
             _section_label("Map tools"),
 
-            # Fishing spot picker
+            # Fishing spot picker (collapsible checklist)
             html.Div(
                 [
-                    html.Span(
-                        "Spots",
-                        style={
-                            "fontSize": "0.8rem",
-                            "fontWeight": "500",
-                            "color": "#cbd5e1",
-                        },
+                    html.Div(
+                        [
+                            html.Span(
+                                "Spots",
+                                style={
+                                    "fontSize": "0.8rem",
+                                    "fontWeight": "500",
+                                    "color": "#cbd5e1",
+                                },
+                            ),
+                            html.Span(
+                                " \u00b7 ",
+                                style={"color": "#475569"},
+                            ),
+                            html.Span(
+                                id="poi-count",
+                                style={
+                                    "fontSize": "0.8rem",
+                                    "color": "#94a3b8",
+                                },
+                            ),
+                        ],
                     ),
                     html.Span(
-                        id="poi-count",
+                        "\u25BE",
+                        id="poi-chevron",
                         style={
-                            "fontSize": "0.7rem",
-                            "color": "#64748b",
-                            "marginLeft": "0.4rem",
+                            "color": "#94a3b8",
+                            "fontSize": "1.4rem",
+                            "lineHeight": "1",
                         },
                     ),
                 ],
-                className="mb-1",
-            ),
-            dcc.Dropdown(
-                id="poi-picker",
-                options=get_poi_options(),
-                value=get_all_poi_names(),
-                multi=True,
-                placeholder="Select spots...",
-                style={"fontSize": "0.8rem"},
+                id="poi-collapse-toggle",
+                style={
+                    "cursor": "pointer",
+                    "userSelect": "none",
+                    "display": "flex",
+                    "justifyContent": "space-between",
+                    "alignItems": "center",
+                    "padding": "0.35rem 0.5rem",
+                    "borderRadius": "6px",
+                    "border": "1px solid #334155",
+                    "backgroundColor": "#0f1d32",
+                },
                 className="mb-2",
+            ),
+            dbc.Collapse(
+                id="poi-collapse",
+                is_open=False,
+                children=[
+                    html.Div(
+                        [
+                            html.Span(
+                                "Select all",
+                                id="poi-select-all",
+                                style={
+                                    "fontSize": "0.7rem",
+                                    "color": "#0183fe",
+                                    "cursor": "pointer",
+                                    "textDecoration": "underline",
+                                },
+                            ),
+                            html.Span(
+                                " \u00b7 ",
+                                style={"color": "#475569", "fontSize": "0.7rem"},
+                            ),
+                            html.Span(
+                                "Deselect all",
+                                id="poi-deselect-all",
+                                style={
+                                    "fontSize": "0.7rem",
+                                    "color": "#0183fe",
+                                    "cursor": "pointer",
+                                    "textDecoration": "underline",
+                                },
+                            ),
+                        ],
+                        className="mb-1",
+                    ),
+                    dbc.Checklist(
+                        id="poi-picker",
+                        options=get_poi_options(),
+                        value=get_all_poi_names(),
+                        style={"fontSize": "0.75rem", "maxHeight": "200px", "overflowY": "auto"},
+                        className="poi-checklist",
+                    ),
+                ],
             ),
 
-            # Lock scale + Measure — compact row
-            dbc.Checklist(
-                id="lock-scale",
-                options=[{"label": " Lock scale (30-90\u00b0F)", "value": "lock"}],
-                value=[],
-                style={"fontSize": "0.8rem"},
-                className="mb-2",
-            ),
             dbc.Button(
                 "Measure",
                 id="measure-btn",
                 outline=True,
                 color="secondary",
                 size="sm",
-                className="w-100",
+                className="w-100 mt-2",
             ),
             html.Div(
                 id="measure-readout",
@@ -188,7 +259,7 @@ def build_sidebar():
 
             _divider(),
 
-            # ── Section 4: Chart Layers ──
+            # ── Section 4: Layers & Visualization ──
             _section_label("Layers"),
             dbc.Checklist(
                 id="layer-toggles",
@@ -196,6 +267,13 @@ def build_sidebar():
                     {"label": " Nautical chart", "value": "contours"},
                     {"label": " Bathymetry", "value": "gebco"},
                 ],
+                value=[],
+                style={"fontSize": "0.8rem"},
+                className="mb-2",
+            ),
+            dbc.Checklist(
+                id="lock-scale",
+                options=[{"label": " Lock scale (30-90\u00b0F)", "value": "lock"}],
                 value=[],
                 style={"fontSize": "0.8rem"},
                 className="mb-2",
@@ -224,11 +302,13 @@ def build_sidebar():
 
             dcc.Store(id="measure-state", data={"mode": "off", "a": None, "b": None}),
         ],
+        id="sidebar-col",
         width=2,
         className="gotone-sidebar",
         style={
             "padding": "1rem 1.25rem",
             "height": "calc(100vh - 72px)",
             "overflowY": "auto",
+            "position": "relative",
         },
     )

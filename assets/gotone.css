@@ -120,7 +120,7 @@ body {
 .gotone-sidebar .dash-datepicker-input {
     color: #0a1628 !important;
     background: white !important;
-    font-weight: 400 !important;
+    font-weight: 600 !important;
     font-size: 0.85rem !important;
 }
 .gotone-sidebar .dash-datepicker {
@@ -145,22 +145,12 @@ body {
     color: #94a3b8 !important;
 }
 
-/* --- Sidebar dropdown on dark bg --- */
+/* --- Calendar month/year dropdown on dark sidebar --- */
 .gotone-sidebar .dash-dropdown-value,
 .gotone-sidebar .dash-dropdown-value span {
     color: #0a1628 !important;
-    font-weight: 500 !important;
+    font-weight: 600 !important;
 }
-.gotone-sidebar .dash-dropdown input {
-    color: #0a1628 !important;
-}
-/* Hide the truncated tag previews — just show count */
-.gotone-sidebar .dash-dropdown-value-tag {
-    display: none !important;
-}
-/* Dropdown options list — dark text on white */
-.gotone-sidebar .dash-dropdown-options,
-.gotone-sidebar .dash-options-list,
 .gotone-sidebar .dash-options-list-option,
 .gotone-sidebar .dash-options-list-option-text,
 .gotone-sidebar .dash-dropdown-option {
@@ -170,8 +160,11 @@ body {
 .gotone-sidebar .dash-dropdown-content {
     background-color: white !important;
 }
-.gotone-sidebar .dash-dropdown-search {
-    color: #0a1628 !important;
+
+/* --- POI checklist on dark sidebar --- */
+.gotone-sidebar .poi-checklist .form-check {
+    padding-top: 0.15rem;
+    padding-bottom: 0.15rem;
 }
 
 /* --- Sidebar slider on dark bg --- */
@@ -184,6 +177,11 @@ body {
 }
 .gotone-sidebar .rc-slider-dot {
     display: none !important;
+}
+/* Slider tooltip: dark text on white bg (inherits sidebar light text otherwise) */
+.gotone-sidebar .dash-slider-tooltip {
+    color: #0a1628 !important;
+    font-weight: 600 !important;
 }
 
 /* --- Spinner --- */
@@ -222,4 +220,102 @@ body {
 }
 .measure-tooltip .leaflet-tooltip::before {
     border-top-color: rgba(1, 131, 254, 0.9) !important;
+}
+
+/* ============================================
+   Mobile Responsive (< 768px)
+   ============================================ */
+@media (max-width: 767.98px) {
+
+    /* --- Header: compact --- */
+    .gotone-header {
+        padding: 0.5rem 0.75rem;
+    }
+    .gotone-header img {
+        height: 36px;
+    }
+    .gotone-header h1 {
+        font-size: 0.95rem;
+    }
+    .gotone-header .subtitle {
+        display: none;
+    }
+
+    /* --- Sidebar: CSS drawer (slides in from left) --- */
+    .gotone-sidebar {
+        position: fixed !important;
+        top: 0;
+        left: -300px;
+        width: 280px !important;
+        height: 100vh !important;
+        max-width: 85vw !important;
+        z-index: 2000;
+        transition: left 0.3s ease;
+        flex: none !important;
+        box-shadow: none;
+        padding-top: 2.5rem !important;
+    }
+    .gotone-sidebar.drawer-open {
+        left: 0;
+        box-shadow: 4px 0 20px rgba(0, 0, 0, 0.3);
+    }
+
+    /* Backdrop overlay when drawer is open */
+    .sidebar-backdrop {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0, 0, 0, 0.4);
+        z-index: 1999;
+    }
+
+    /* --- Map: full viewport --- */
+    .map-wrapper {
+        height: calc(100vh - 52px) !important;
+    }
+
+    /* --- Map column: full width on mobile --- */
+    .map-col {
+        flex: 0 0 100% !important;
+        max-width: 100% !important;
+    }
+
+    /* --- Hamburger button (top-right, clear of Leaflet zoom controls) --- */
+    .hamburger-btn {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        z-index: 1100;
+        background: rgba(255, 255, 255, 0.95);
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        width: 44px;
+        height: 44px;
+        font-size: 1.4rem;
+        cursor: pointer;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+        display: block;
+        color: #0a1628;
+    }
+
+    /* --- Touch targets: 44px minimum (Apple HIG) --- */
+    .playback-btn {
+        width: 44px !important;
+        height: 44px !important;
+    }
+    .playback-btn-main {
+        width: 64px !important;
+    }
+    .rc-slider-handle {
+        width: 24px !important;
+        height: 24px !important;
+        margin-top: -10px !important;
+    }
+}
+
+/* Hide mobile-only elements on desktop */
+@media (min-width: 768px) {
+    .hamburger-btn { display: none !important; }
+    .sidebar-close-btn { display: none !important; }
+    .sidebar-backdrop { display: none !important; }
 }
