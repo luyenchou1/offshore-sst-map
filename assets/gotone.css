@@ -5,6 +5,9 @@
    ============================================ */
 
 /* --- Global --- */
+html, body {
+    overscroll-behavior: none;           /* prevent iOS pull-to-refresh / bounce */
+}
 body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
                  "Helvetica Neue", Arial, sans-serif;
@@ -230,9 +233,18 @@ body {
    ============================================ */
 @media (max-width: 767.98px), (max-height: 500px) {
 
-    /* --- Header: compact --- */
+    /* --- Prevent viewport dragging on iOS --- */
+    html, body {
+        position: fixed;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+    }
+
+    /* --- Header: compact, respect notch safe area --- */
     .gotone-header {
         padding: 0.5rem 0.75rem;
+        padding-left: max(0.75rem, env(safe-area-inset-left));
     }
     .gotone-header img {
         height: 36px;
@@ -257,6 +269,15 @@ body {
         flex: none !important;
         box-shadow: none;
         padding-top: 2.5rem !important;
+        padding-left: max(1.25rem, env(safe-area-inset-left)) !important;
+        touch-action: pan-y;             /* allow vertical scroll, block horizontal drag */
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* --- Date picker calendar popup: above the map layer --- */
+    .gotone-sidebar .dash-datepicker-calendar {
+        z-index: 2100 !important;
+        position: relative;
     }
     .gotone-sidebar.drawer-open {
         left: 0;
