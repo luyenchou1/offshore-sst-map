@@ -166,6 +166,8 @@ body {
 }
 .gotone-sidebar .dash-dropdown-content {
     background-color: white !important;
+    position: absolute !important;
+    z-index: 10 !important;
 }
 
 /* --- POI checklist on dark sidebar --- */
