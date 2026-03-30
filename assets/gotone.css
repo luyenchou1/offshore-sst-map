@@ -153,18 +153,22 @@ body {
 }
 
 /* --- Calendar month/year dropdown on dark sidebar --- */
-.gotone-sidebar .dash-dropdown-value,
-.gotone-sidebar .dash-dropdown-value span {
+.dash-datepicker-controls .dash-dropdown-value,
+.dash-datepicker-controls .dash-dropdown-value span {
     color: #0a1628 !important;
     font-weight: 600 !important;
 }
-.gotone-sidebar .dash-options-list-option,
-.gotone-sidebar .dash-options-list-option-text,
-.gotone-sidebar .dash-dropdown-option {
+.dash-datepicker-controls .dash-dropdown-option,
+.dash-datepicker-controls .dash-options-list-option-wrapper {
     color: #0a1628 !important;
     background-color: white !important;
 }
-.gotone-sidebar .dash-dropdown-content {
+.dash-datepicker-controls .dash-dropdown-option:hover,
+.dash-datepicker-controls .dash-dropdown-option:focus {
+    background-color: #e8f0fe !important;
+    color: #0a1628 !important;
+}
+.dash-datepicker-controls .dash-dropdown-content {
     background-color: white !important;
 }
 
