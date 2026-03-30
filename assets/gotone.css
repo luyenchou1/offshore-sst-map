@@ -47,7 +47,14 @@ body {
 .gotone-sidebar {
     background-color: #0a1628 !important;
     color: #e2e8f0;
-    overflow-y: auto;
+    overflow: visible;
+    z-index: 2;  /* above map column so calendar popup isn't clipped */
+}
+/* Isolate Leaflet's internal z-indexes (up to 700) within the map column
+   so they don't compete with the sidebar's calendar popup */
+.map-col {
+    position: relative;
+    z-index: 1;
 }
 .gotone-sidebar hr {
     border-color: #1e293b;
