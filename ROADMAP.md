@@ -63,14 +63,20 @@
 - Sidebar padding/spacing polish for better readability
 
 ## Phase 3: Responsive / Mobile
-*Status: Planned*
+*Status: Complete*
 
-- Stacked layout on mobile (controls above map, or collapsible drawer)
-- Full-width map on small screens
-- Touch-friendly animation controls (larger tap targets)
-- Legend and day indicator repositioned for mobile
-- Date picker mobile UX
-- Test on iOS Safari and Android Chrome
+- **CSS drawer pattern**: Sidebar transforms into a fixed slide-out drawer on mobile (280px, slides from left). Hamburger button (top-right of map) opens it, backdrop overlay closes it. Avoids duplicate Dash component IDs.
+- **Media query**: `(max-width: 767.98px), (max-height: 500px)` — catches portrait phones (narrow) and landscape phones (short viewport) without affecting tablets/desktops.
+- **Full-viewport map**: Map fills 100vw × calc(100vh - 52px) on mobile. Compact header (36px logo, hidden subtitle).
+- **Collapsible POI spot picker**: Replaced multi-select dropdown with bordered toggle row ("Spots · All ▾") + `dbc.Collapse` containing `dbc.Checklist` with Select all / Deselect all links.
+- **Touch-friendly controls**: 44px playback buttons, 24px slider handles (Apple HIG minimum).
+- **iPhone landscape**: `max-height: 500px` media query forces drawer mode even on wide landscape phones (844px+).
+- **iOS safe area**: `viewport-fit=cover` meta tag + dark navy body background eliminates white letterboxing from notch insets.
+- **Lock Scale fix**: Changed from `State` to `Input` in fetch callback so toggling triggers re-render. Moved to Layers section.
+- **Calendar month picker fix**: Radix portal z-index/stacking context fixes for both mobile and desktop. Sidebar z-index:2, map column z-index:1 to isolate Leaflet pane stacking.
+- **Mobile tooltip wrapping**: `white-space: normal; max-width: 200px` on small screens.
+- Auto-close drawer after data fetch.
+- Tested on iOS Safari and desktop Chrome.
 
 ## Phase 4: AI Fishing Analysis
 *Status: Planned — most complex, highest user value*

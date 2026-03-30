@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-03-30 — Mobile-Responsive UI (v2.1)
+
+### Added
+- **Mobile-responsive CSS drawer sidebar**: Fixed slide-out drawer (280px) triggered by hamburger button. Backdrop overlay dismisses on tap. Auto-closes after data fetch. Uses clientside callback to toggle `drawer-open` class — safe pattern per Dash 4 rules.
+- **Collapsible POI spot picker**: Bordered toggle row ("Spots · All ▾") expands a `dbc.Collapse` with `dbc.Checklist` and Select all / Deselect all links. Replaces the cramped multi-select `dcc.Dropdown`.
+- **iPhone landscape support**: Added `(max-height: 500px)` to mobile media query so landscape phones (844px+ wide but short viewport) still use drawer mode instead of desktop sidebar.
+- **iOS safe area handling**: `viewport-fit=cover` meta tag + dark navy body background (`#0a1628`) eliminates white letterboxing from notch insets.
+- **Touch-friendly controls**: 44px playback buttons, 24px slider handles per Apple HIG minimum touch targets.
+- **Mobile tooltip wrapping**: `white-space: normal; max-width: 200px` prevents tooltips from overflowing the viewport.
+- **Sidebar header/body split** (mobile): `.sidebar-header` is non-scrolling (date picker + fetch button), `.sidebar-body` is scrollable. Calendar popup floats above both via z-index.
+
+### Fixed
+- **Lock Scale toggle not working**: Was `State` in `fetch_sst_data` — toggling didn't trigger re-fetch. Changed to `Input` so toggling re-renders PNGs with locked/adaptive scale. Also added as `Input` to loading overlay callback.
+- **Calendar month picker hidden behind date grid**: Radix renders the month dropdown as a `position: fixed` portal, but CSS transforms on ancestor elements (mobile drawer, calendar popper) break fixed positioning. Fixed by forcing the popper wrapper to `position: absolute`, giving `.dash-datepicker-controls` z-index 10, and `.dash-datepicker-calendar-container` z-index 1.
+- **Calendar popup clipped by map on desktop**: Leaflet panes have z-indexes up to 700 that leaked into the row's stacking context, painting over the sidebar's calendar. Fixed by adding `z-index: 1` on `.map-col` (isolates Leaflet) and `z-index: 2` on sidebar.
+- **Calendar month picker text unreadable**: CSS was scoped to `.gotone-sidebar` but Radix portal renders outside that context. Re-scoped to `.dash-datepicker-controls .dash-dropdown-option`.
+- **Slider tooltip white-on-white**: Inherited sidebar's light text color. Fixed with `.gotone-sidebar .dash-slider-tooltip { color: #0a1628 }`.
+- **Date picker text too light**: Changed `font-weight` from 400 to 600.
+
+### Changed
+- **POI picker UX**: `dcc.Dropdown` (multi-select) → collapsible `dbc.Checklist` with chevron toggle (▾/▴).
+- **Lock Scale moved to Layers section** (from Map Tools). More logical grouping with other display options.
+- **Sidebar overflow**: Changed from `overflow-y: auto` to `overflow: visible` (desktop) so calendar popup extends beyond sidebar width. Mobile uses flex header/scroll body pattern instead.
+- **POI count format**: Shows "All" when all spots selected, otherwise "n/total" (e.g., "15/20").
+- **Body background**: Set to `#0a1628` (dark navy) to match app chrome and prevent white flashing.
+
+---
+
 ## 2026-03-29 — v2.0 Release
 
 Full feature release combining nautical chart/bathymetry layers, SST opacity control, UI polish, loading spinner fix, and Squarespace integration.

@@ -55,20 +55,21 @@ render_static_layers sets initial overlay + POIs + legend
 | `data/geo.py` | Orient arrays, AOI mask, land mask (all 2D only) |
 | `data/convert.py` | Kelvin→Fahrenheit, 2x visual upsample |
 | `data/cache.py` | Disk-based gzip JSON cache with staleness checks |
-| `layout/sidebar.py` | Date picker, animation controls, POI picker, fetch button |
-| `layout/mapview.py` | dl.Map with custom panes, loading overlay |
+| `layout/sidebar.py` | Date picker, animation controls, collapsible POI checklist, fetch button |
+| `layout/mapview.py` | dl.Map with custom panes, loading overlay, hamburger button |
 | `map/overlay.py` | Array → RGBA → base64 PNG |
 | `map/colorscale.py` | Legend component, adaptive color bounds |
 | `map/pois.py` | 20 fishing spots + The Dump rectangle, multi-select picker |
 | `map/measure.py` | Haversine distance, initial bearing, compass direction |
 | `config.json` | AOI polygon, ERDDAP servers, search terms |
-| `assets/gotone.css` | GotOne brand CSS overrides (colors, dark sidebar, inputs) |
+| `assets/gotone.css` | GotOne brand CSS overrides (colors, dark sidebar, inputs, mobile responsive) |
+| `assets/tooltips.css` | Tooltip card styles + mobile wrapping |
 | `assets/gotone-logo.png` | White fish logotype on transparent background |
 
 ### Callback Structure
 1. **show_loading_on_fetch** — **Clientside** callback on button click / auto-fetch, shows loading overlay immediately (must be clientside — with 1 gunicorn worker, a server-side version gets blocked behind the slow fetch callback)
-2. **fetch_sst_data** — Synchronous: fetches 7 days (or reads disk cache), processes, pre-renders PNGs, stores raw data server-side (memory-first, then background disk write)
-3. **render_static_layers** — Sets initial overlay PNG + bounds, POIs, legend, hides loading overlay. Also fires on POI picker / lock-scale changes
+2. **fetch_sst_data** — Synchronous: fetches 7 days (or reads disk cache), processes, pre-renders PNGs, stores raw data server-side (memory-first, then background disk write). `lock-scale` is an **Input** (not State) so toggling triggers re-fetch. Also auto-closes mobile drawer.
+3. **render_static_layers** — Sets initial overlay PNG + bounds, POIs, legend, hides loading overlay. Fires on POI picker changes.
 4. **clientside: swap overlay** — Swaps overlay PNG by frame index (sst-store as State, not Input)
 5. **clientside: play/pause** — Toggles dcc.Interval
 6. **clientside: auto-advance** — Increments frame slider on interval tick (wraps 6→0)
@@ -77,9 +78,12 @@ render_static_layers sets initial overlay + POIs + legend
 9. **handle_map_click** — Routes clicks: POI info (reads server-side cache), SST reading (sets click-pos), or measure tool
 10. **render_click_marker** — Shows temp reading at clicked position (reads server-side cache)
 11. **toggle_measure** — Activates/deactivates measure mode
-12. **update_poi_count** — Shows "(19/19)" count next to "Spots" label
+12. **update_poi_count** — Shows "All" or "n/total" count next to "Spots" label
 13. **toggle_layers** — Shows/hides NOAA ENC and GEBCO layers based on sidebar checklist
 14. **update_sst_opacity** — Adjusts SST overlay opacity from sidebar slider
+15. **clientside: drawer toggle** — Opens/closes mobile sidebar drawer + backdrop (toggles `drawer-open` class)
+16. **clientside: POI collapse toggle** — Expands/collapses POI checklist, flips chevron (▾/▴)
+17. **poi_select_all** — Server callback for Select all / Deselect all links in POI checklist
 
 ## Critical Lessons Learned
 
@@ -94,6 +98,22 @@ render_static_layers sets initial overlay + POIs + legend
 - **Dash 4 CSS class names differ from older versions.** Date picker uses `.dash-datepicker-input` (not `.DateInput_input`). Dropdown uses `.dash-dropdown-value`, `.dash-options-list-option-text` (not `.Select-value-label`). Calendar uses `.dash-datepicker-calendar`. Always inspect the actual DOM to find the right selectors — don't guess from docs for older versions.
 - **Dark sidebar + white inputs require aggressive CSS overrides.** Dash components inherit text color from their parent. When the sidebar has light text, every input/dropdown/calendar inside it also gets light text. Must use `!important` on the specific Dash 4 class names for each component.
 - **Initial overlay must be set by a server callback, not clientside.** Clientside callbacks that depend on `dcc.Store` data from background or long-running callbacks can fire before the store data is fully propagated. Use `render_static_layers` (server callback) to set the initial overlay, and clientside callbacks only for frame changes.
+
+### Mobile Responsive Layout
+- **CSS drawer pattern** chosen over `dbc.Collapse` (stacked, wastes vertical space) and `dbc.Offcanvas` (requires duplicate component IDs which Dash prohibits). The drawer transforms the existing `dbc.Col` sidebar via CSS `position: fixed` + a `drawer-open` class toggled by a clientside callback.
+- **Media query**: `@media (max-width: 767.98px), (max-height: 500px)` — the `max-height` clause catches landscape phones (e.g. iPhone 844px wide but only ~390px tall) without affecting tablets or desktops.
+- **Clientside callback for drawer toggle** is safe — it returns a className string, not DOM manipulation. Dash's virtual DOM sees the change. The backdrop is a sibling div toggled in the same callback.
+- **Auto-close drawer after fetch**: `fetch_sst_data` has `Output("sidebar-col", "className", allow_duplicate=True)` to reset the drawer class after data loads.
+- **Sidebar split on mobile**: `.sidebar-header` (date picker, fetch button) is `flex-shrink: 0` with `position: relative; z-index: 10`. `.sidebar-body` (playback, spots, layers) is `flex: 1; overflow-y: auto`. This lets the calendar popup float above the scrollable body.
+- **iOS safe areas**: `viewport-fit=cover` meta tag in `app.py` + `body { background-color: #0a1628 }` eliminates white letterboxing from notch insets in landscape mode.
+- **Hamburger button**: Positioned `top: 10px; right: 10px; z-index: 1100` on the map (above Leaflet zoom controls at z-index 1000).
+
+### Radix / Dash 4 Calendar Stacking Context Gotchas
+- **Radix renders the month dropdown as a `position: fixed` portal** inside the calendar popup. CSS transforms on ancestor elements (mobile drawer's `translate`, calendar popper's `translate`) create new containing blocks that break `position: fixed`, causing the portal to render at 0×0.
+- **Fix**: Force the month dropdown's Radix popper wrapper to `position: absolute` with `[data-radix-popper-content-wrapper]:has(.dash-dropdown-content)`. Give `.dash-datepicker-controls` `z-index: 10` and `.dash-datepicker-calendar-container` `z-index: 1` so the dropdown paints above the date grid.
+- **`.dash-datepicker-content` must have `overflow: visible`** so the month dropdown can escape the calendar popup's bounds.
+- **Sidebar z-index: 2, map column z-index: 1**: Leaflet panes have z-indexes up to 700 (popupPane). Without isolating them in the map column's stacking context, they leak into the row and paint over the sidebar's calendar popup.
+- **Sidebar `overflow: visible`** (desktop): Changed from `overflow-y: auto` so the calendar popup can extend beyond the sidebar's width. On mobile, the drawer uses the flex header/body split instead.
 
 ### Background Callbacks (`background=True`) — Do NOT Use on Render
 - **Dash background callbacks use DiskcacheManager** to poll for results. The full callback return value is serialized and delivered via a polling HTTP response.
@@ -149,6 +169,8 @@ Map layer panes and their z-index values matter enormously:
 Chart layers render BELOW the SST overlay. SST uses semi-transparent RGBA PNGs, so chart features show through. The SST opacity slider lets users fade SST to reveal more chart detail.
 
 If POI markers and tooltipPane have the same z-index, the markers render ON TOP of their own tooltips. The fix: put markers in custom panes below 650.
+
+**Stacking context isolation**: `.map-col` has `z-index: 1` and `.gotone-sidebar` has `z-index: 2`. This isolates Leaflet's internal z-indexes (up to 700) within the map column so they don't compete with the sidebar's calendar popup. Without this, the calendar renders behind the map.
 
 ### ImageOverlay Must Be Non-Interactive
 Set `interactive=False` on `dl.ImageOverlay` AND add `pointer-events: none !important` in CSS (`.leaflet-image-layer`). Otherwise the overlay swallows all mouse events, preventing clicks on POI markers underneath.
