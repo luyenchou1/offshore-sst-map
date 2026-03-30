@@ -166,8 +166,21 @@ body {
 }
 .gotone-sidebar .dash-dropdown-content {
     background-color: white !important;
+}
+
+/* Month/year dropdown inside calendar: must overlay the date grid */
+.dash-datepicker-controls .dash-dropdown {
+    position: relative;
+    z-index: 5;
+}
+.dash-datepicker-controls .dash-dropdown-content {
     position: absolute !important;
     z-index: 10 !important;
+    background: white !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    border-radius: 6px;
+    max-height: 200px;
+    overflow-y: auto;
 }
 
 /* --- POI checklist on dark sidebar --- */
