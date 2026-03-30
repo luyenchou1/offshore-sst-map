@@ -59,245 +59,258 @@ def build_sidebar():
                     "cursor": "pointer",
                     "padding": "0.25rem",
                     "lineHeight": "1",
+                    "zIndex": "10",
                 },
             ),
-            # ── Section 1: Data Selection ──
-            _section_label("Data", first=True),
-            dcc.DatePickerSingle(
-                id="end-date-picker",
-                date=default_end,
-                min_date_allowed=date(2002, 6, 8),
-                max_date_allowed=today - timedelta(days=2),
-                display_format="MMM D, YYYY",
-                style={"width": "100%"},
-            ),
-            dbc.Button(
-                "Fetch SST",
-                id="fetch-btn",
-                color="primary",
-                className="w-100 mt-2 fetch-btn-cta",
-            ),
-            html.Div(
-                id="fetch-status",
-                className="mt-1",
-                style={"fontSize": "0.7rem"},
-            ),
 
-            # ── Section 2: Playback (hidden until data loads) ──
-            html.Div(
-                id="anim-controls",
-                style={"display": "none"},
-                children=[
-                    _divider(),
-                    _section_label("Playback"),
-                    html.Div(
-                        id="day-indicator",
-                        className="text-center",
-                        style={
-                            "fontSize": "0.8rem",
-                            "fontWeight": "600",
-                            "color": "#e2e8f0",
-                            "marginBottom": "0.25rem",
-                        },
-                    ),
-                    dcc.Slider(
-                        id="frame-slider",
-                        min=0,
-                        max=6,
-                        step=1,
-                        value=6,
-                        marks=None,
-                    ),
-                    html.Div(
-                        [
-                            dbc.Button(
-                                "\u25C0",
-                                id="step-back-btn",
-                                outline=True,
-                                color="secondary",
-                                size="sm",
-                                className="me-1 playback-btn",
-                            ),
-                            dbc.Button(
-                                "Play",
-                                id="play-pause-btn",
-                                color="primary",
-                                size="sm",
-                                className="me-1 playback-btn playback-btn-main",
-                            ),
-                            dbc.Button(
-                                "\u25B6",
-                                id="step-fwd-btn",
-                                outline=True,
-                                color="secondary",
-                                size="sm",
-                                className="playback-btn",
-                            ),
-                        ],
-                        className="d-flex justify-content-center",
-                        style={"marginTop": "0.25rem"},
-                    ),
-                    dcc.Interval(
-                        id="anim-interval",
-                        interval=1500,
-                        disabled=True,
-                    ),
-                ],
-            ),
-
-            _divider(),
-
-            # ── Section 3: Map Tools ──
-            _section_label("Map tools"),
-
-            # Fishing spot picker (collapsible checklist)
+            # ── Sidebar header: non-scrolling, allows calendar overflow ──
             html.Div(
                 [
+                    _section_label("Data", first=True),
+                    dcc.DatePickerSingle(
+                        id="end-date-picker",
+                        date=default_end,
+                        min_date_allowed=date(2002, 6, 8),
+                        max_date_allowed=today - timedelta(days=2),
+                        display_format="MMM D, YYYY",
+                        style={"width": "100%"},
+                    ),
+                    dbc.Button(
+                        "Fetch SST",
+                        id="fetch-btn",
+                        color="primary",
+                        className="w-100 mt-2 fetch-btn-cta",
+                    ),
+                    html.Div(
+                        id="fetch-status",
+                        className="mt-1",
+                        style={"fontSize": "0.7rem"},
+                    ),
+                ],
+                className="sidebar-header",
+            ),
+
+            # ── Sidebar body: scrollable area for everything else ──
+            html.Div(
+                [
+                    # ── Section 2: Playback (hidden until data loads) ──
+                    html.Div(
+                        id="anim-controls",
+                        style={"display": "none"},
+                        children=[
+                            _divider(),
+                            _section_label("Playback"),
+                            html.Div(
+                                id="day-indicator",
+                                className="text-center",
+                                style={
+                                    "fontSize": "0.8rem",
+                                    "fontWeight": "600",
+                                    "color": "#e2e8f0",
+                                    "marginBottom": "0.25rem",
+                                },
+                            ),
+                            dcc.Slider(
+                                id="frame-slider",
+                                min=0,
+                                max=6,
+                                step=1,
+                                value=6,
+                                marks=None,
+                            ),
+                            html.Div(
+                                [
+                                    dbc.Button(
+                                        "\u25C0",
+                                        id="step-back-btn",
+                                        outline=True,
+                                        color="secondary",
+                                        size="sm",
+                                        className="me-1 playback-btn",
+                                    ),
+                                    dbc.Button(
+                                        "Play",
+                                        id="play-pause-btn",
+                                        color="primary",
+                                        size="sm",
+                                        className="me-1 playback-btn playback-btn-main",
+                                    ),
+                                    dbc.Button(
+                                        "\u25B6",
+                                        id="step-fwd-btn",
+                                        outline=True,
+                                        color="secondary",
+                                        size="sm",
+                                        className="playback-btn",
+                                    ),
+                                ],
+                                className="d-flex justify-content-center",
+                                style={"marginTop": "0.25rem"},
+                            ),
+                            dcc.Interval(
+                                id="anim-interval",
+                                interval=1500,
+                                disabled=True,
+                            ),
+                        ],
+                    ),
+
+                    _divider(),
+
+                    # ── Section 3: Map Tools ──
+                    _section_label("Map tools"),
+
+                    # Fishing spot picker (collapsible checklist)
+                    html.Div(
+                        [
+                            html.Div(
+                                [
+                                    html.Span(
+                                        "Spots",
+                                        style={
+                                            "fontSize": "0.8rem",
+                                            "fontWeight": "500",
+                                            "color": "#cbd5e1",
+                                        },
+                                    ),
+                                    html.Span(
+                                        " \u00b7 ",
+                                        style={"color": "#475569"},
+                                    ),
+                                    html.Span(
+                                        id="poi-count",
+                                        style={
+                                            "fontSize": "0.8rem",
+                                            "color": "#94a3b8",
+                                        },
+                                    ),
+                                ],
+                            ),
+                            html.Span(
+                                "\u25BE",
+                                id="poi-chevron",
+                                style={
+                                    "color": "#94a3b8",
+                                    "fontSize": "1.4rem",
+                                    "lineHeight": "1",
+                                },
+                            ),
+                        ],
+                        id="poi-collapse-toggle",
+                        style={
+                            "cursor": "pointer",
+                            "userSelect": "none",
+                            "display": "flex",
+                            "justifyContent": "space-between",
+                            "alignItems": "center",
+                            "padding": "0.35rem 0.5rem",
+                            "borderRadius": "6px",
+                            "border": "1px solid #334155",
+                            "backgroundColor": "#0f1d32",
+                        },
+                        className="mb-2",
+                    ),
+                    dbc.Collapse(
+                        id="poi-collapse",
+                        is_open=False,
+                        children=[
+                            html.Div(
+                                [
+                                    html.Span(
+                                        "Select all",
+                                        id="poi-select-all",
+                                        style={
+                                            "fontSize": "0.7rem",
+                                            "color": "#0183fe",
+                                            "cursor": "pointer",
+                                            "textDecoration": "underline",
+                                        },
+                                    ),
+                                    html.Span(
+                                        " \u00b7 ",
+                                        style={"color": "#475569", "fontSize": "0.7rem"},
+                                    ),
+                                    html.Span(
+                                        "Deselect all",
+                                        id="poi-deselect-all",
+                                        style={
+                                            "fontSize": "0.7rem",
+                                            "color": "#0183fe",
+                                            "cursor": "pointer",
+                                            "textDecoration": "underline",
+                                        },
+                                    ),
+                                ],
+                                className="mb-1",
+                            ),
+                            dbc.Checklist(
+                                id="poi-picker",
+                                options=get_poi_options(),
+                                value=get_all_poi_names(),
+                                style={"fontSize": "0.75rem", "maxHeight": "200px", "overflowY": "auto"},
+                                className="poi-checklist",
+                            ),
+                        ],
+                    ),
+
+                    dbc.Button(
+                        "Measure",
+                        id="measure-btn",
+                        outline=True,
+                        color="secondary",
+                        size="sm",
+                        className="w-100 mt-2",
+                    ),
+                    html.Div(
+                        id="measure-readout",
+                        className="mt-2",
+                        style={"fontSize": "0.75rem"},
+                    ),
+
+                    _divider(),
+
+                    # ── Section 4: Layers & Visualization ──
+                    _section_label("Layers"),
+                    dbc.Checklist(
+                        id="layer-toggles",
+                        options=[
+                            {"label": " Nautical chart", "value": "contours"},
+                            {"label": " Bathymetry", "value": "gebco"},
+                        ],
+                        value=[],
+                        style={"fontSize": "0.8rem"},
+                        className="mb-2",
+                    ),
+                    dbc.Checklist(
+                        id="lock-scale",
+                        options=[{"label": " Lock scale (30-90\u00b0F)", "value": "lock"}],
+                        value=[],
+                        style={"fontSize": "0.8rem"},
+                        className="mb-2",
+                    ),
                     html.Div(
                         [
                             html.Span(
-                                "Spots",
+                                "SST opacity",
                                 style={
-                                    "fontSize": "0.8rem",
-                                    "fontWeight": "500",
-                                    "color": "#cbd5e1",
-                                },
-                            ),
-                            html.Span(
-                                " \u00b7 ",
-                                style={"color": "#475569"},
-                            ),
-                            html.Span(
-                                id="poi-count",
-                                style={
-                                    "fontSize": "0.8rem",
+                                    "fontSize": "0.75rem",
                                     "color": "#94a3b8",
                                 },
                             ),
-                        ],
-                    ),
-                    html.Span(
-                        "\u25BE",
-                        id="poi-chevron",
-                        style={
-                            "color": "#94a3b8",
-                            "fontSize": "1.4rem",
-                            "lineHeight": "1",
-                        },
-                    ),
-                ],
-                id="poi-collapse-toggle",
-                style={
-                    "cursor": "pointer",
-                    "userSelect": "none",
-                    "display": "flex",
-                    "justifyContent": "space-between",
-                    "alignItems": "center",
-                    "padding": "0.35rem 0.5rem",
-                    "borderRadius": "6px",
-                    "border": "1px solid #334155",
-                    "backgroundColor": "#0f1d32",
-                },
-                className="mb-2",
-            ),
-            dbc.Collapse(
-                id="poi-collapse",
-                is_open=False,
-                children=[
-                    html.Div(
-                        [
-                            html.Span(
-                                "Select all",
-                                id="poi-select-all",
-                                style={
-                                    "fontSize": "0.7rem",
-                                    "color": "#0183fe",
-                                    "cursor": "pointer",
-                                    "textDecoration": "underline",
-                                },
-                            ),
-                            html.Span(
-                                " \u00b7 ",
-                                style={"color": "#475569", "fontSize": "0.7rem"},
-                            ),
-                            html.Span(
-                                "Deselect all",
-                                id="poi-deselect-all",
-                                style={
-                                    "fontSize": "0.7rem",
-                                    "color": "#0183fe",
-                                    "cursor": "pointer",
-                                    "textDecoration": "underline",
-                                },
+                            dcc.Slider(
+                                id="sst-opacity",
+                                min=0.1,
+                                max=1.0,
+                                step=0.1,
+                                value=0.7,
+                                marks=None,
+                                tooltip={"placement": "bottom"},
                             ),
                         ],
-                        className="mb-1",
-                    ),
-                    dbc.Checklist(
-                        id="poi-picker",
-                        options=get_poi_options(),
-                        value=get_all_poi_names(),
-                        style={"fontSize": "0.75rem", "maxHeight": "200px", "overflowY": "auto"},
-                        className="poi-checklist",
+                        className="mt-2",
                     ),
                 ],
-            ),
-
-            dbc.Button(
-                "Measure",
-                id="measure-btn",
-                outline=True,
-                color="secondary",
-                size="sm",
-                className="w-100 mt-2",
-            ),
-            html.Div(
-                id="measure-readout",
-                className="mt-2",
-                style={"fontSize": "0.75rem"},
-            ),
-
-            _divider(),
-
-            # ── Section 4: Layers & Visualization ──
-            _section_label("Layers"),
-            dbc.Checklist(
-                id="layer-toggles",
-                options=[
-                    {"label": " Nautical chart", "value": "contours"},
-                    {"label": " Bathymetry", "value": "gebco"},
-                ],
-                value=[],
-                style={"fontSize": "0.8rem"},
-                className="mb-2",
-            ),
-            dbc.Checklist(
-                id="lock-scale",
-                options=[{"label": " Lock scale (30-90\u00b0F)", "value": "lock"}],
-                value=[],
-                style={"fontSize": "0.8rem"},
-                className="mb-2",
-            ),
-            html.Div(
-                [
-                    html.Span(
-                        "SST opacity",
-                        style={
-                            "fontSize": "0.75rem",
-                            "color": "#94a3b8",
-                        },
-                    ),
-                    dcc.Slider(
-                        id="sst-opacity",
-                        min=0.1,
-                        max=1.0,
-                        step=0.1,
-                        value=0.7,
-                        marks=None,
-                        tooltip={"placement": "bottom"},
-                    ),
-                ],
-                className="mt-2",
+                className="sidebar-body",
             ),
 
             dcc.Store(id="measure-state", data={"mode": "off", "a": None, "b": None}),
@@ -308,7 +321,6 @@ def build_sidebar():
         style={
             "padding": "1rem 1.25rem",
             "height": "calc(100vh - 72px)",
-            "overflowY": "auto",
             "position": "relative",
         },
     )

@@ -47,6 +47,7 @@ body {
 .gotone-sidebar {
     background-color: #0a1628 !important;
     color: #e2e8f0;
+    overflow-y: auto;
 }
 .gotone-sidebar hr {
     border-color: #1e293b;
@@ -265,17 +266,30 @@ body {
         box-shadow: none;
         padding-top: 2.5rem !important;
         padding-left: max(1.25rem, env(safe-area-inset-left)) !important;
-        touch-action: pan-y;             /* allow vertical scroll, block horizontal drag */
-        -webkit-overflow-scrolling: touch;
+        overflow: visible !important;     /* let calendar popup extend beyond sidebar */
+        display: flex !important;
+        flex-direction: column !important;
     }
 
-    /* --- Date picker calendar: break out of sidebar overflow --- */
+    /* Sidebar header: non-scrolling, calendar popup can overflow */
+    .gotone-sidebar .sidebar-header {
+        flex-shrink: 0;
+        position: relative;
+        z-index: 10;                      /* above scrollable body so calendar isn't clipped */
+    }
+
+    /* Sidebar body: scrollable area for remaining controls */
+    .gotone-sidebar .sidebar-body {
+        flex: 1;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        touch-action: pan-y;
+        min-height: 0;                    /* flex child overflow fix */
+    }
+
+    /* Calendar popup: ensure it floats above sidebar body */
     .gotone-sidebar .dash-datepicker-calendar {
-        position: fixed !important;
         z-index: 2100 !important;
-        left: env(safe-area-inset-left, 0px);
-        margin-left: 1rem;
-        width: min(320px, 85vw) !important;
         box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
         border-radius: 8px;
     }
