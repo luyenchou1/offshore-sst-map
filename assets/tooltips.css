@@ -46,8 +46,8 @@
     border-top-color: rgba(99, 102, 241, 0.9);
 }
 
-/* Mobile: tooltips can wrap */
-@media (max-width: 767.98px) {
+/* Mobile: tooltips can wrap (narrow or landscape phone) */
+@media (max-width: 767.98px), (max-height: 500px) {
     .sst-tooltip .leaflet-tooltip,
     .poi-tooltip .leaflet-tooltip,
     .measure-tooltip .leaflet-tooltip {

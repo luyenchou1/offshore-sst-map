@@ -223,9 +223,11 @@ body {
 }
 
 /* ============================================
-   Mobile Responsive (< 768px)
+   Mobile Responsive
+   Triggers on narrow screens (< 768px) OR
+   short screens (< 500px tall, i.e. landscape phones)
    ============================================ */
-@media (max-width: 767.98px) {
+@media (max-width: 767.98px), (max-height: 500px) {
 
     /* --- Header: compact --- */
     .gotone-header {
@@ -313,8 +315,8 @@ body {
     }
 }
 
-/* Hide mobile-only elements on desktop */
-@media (min-width: 768px) {
+/* Hide mobile-only elements on desktop (wide AND tall screens) */
+@media (min-width: 768px) and (min-height: 500px) {
     .hamburger-btn { display: none !important; }
     .sidebar-close-btn { display: none !important; }
     .sidebar-backdrop { display: none !important; }
