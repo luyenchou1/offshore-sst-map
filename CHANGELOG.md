@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-03-29 — v2.0 Release
+
+Full feature release combining nautical chart/bathymetry layers, SST opacity control, UI polish, loading spinner fix, and Squarespace integration.
+
+### Added
+- **NOAA ENC nautical chart layer**: Toggleable WMS overlay showing depth contour lines, soundings, navigation aids, and chart features. Source: NOAA Maritime Chart Service.
+- **GEBCO bathymetry layer**: Toggleable WMS overlay showing ocean depth shading (continental shelf, canyons, underwater terrain). Source: GEBCO 2024 grid.
+- **SST opacity slider**: Adjustable SST overlay transparency (0.1–1.0) so users can fade SST colors to reveal chart features underneath.
+- **Layers sidebar section**: New "Layers" section with on/off toggles for Nautical chart / Bathymetry and SST opacity slider.
+- **Custom domain**: App served at `sst.gotoneapp.com` via CNAME to Render. SSL auto-provisioned.
+- **Squarespace embed**: iframe on `gotoneapp.com/offshore-sst` loads the full SST analyzer inline on the GotOne website.
+- **iframe security headers**: `Content-Security-Policy: frame-ancestors` allows embedding from `gotoneapp.com` and related domains.
+
+### Fixed
+- **Loading spinner not showing on Render**: Converted `show_loading_on_fetch` from server-side to clientside callback. With 1 gunicorn worker, the server-side version could be blocked behind the slow ERDDAP fetch, leaving users with no visual feedback for 30-90s.
+- **Click callbacks returning no data on Render**: Memory-first cache pattern + base64 numpy serialization + background thread disk writes.
+
+### Changed
+- **POI markers restyled**: Solid white fill with dark navy border — visible against any background (SST, charts, bathymetry). Replaces hollow slate-gray rings.
+- **Z-index restructure**: Chart layers render below SST (GEBCO z=390, NOAA z=400, SST z=410). SST opacity slider controls visibility.
+- **Sidebar spacing**: Increased horizontal padding, wider section divider margins, more space above section labels.
+- **POI rename**: "July2025" → "Rachel's Whales"
+
+---
+
 ## 2026-03-29 — Nautical Chart & Bathymetry Layers (v1.2)
 
 ### Added

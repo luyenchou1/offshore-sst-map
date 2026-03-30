@@ -66,7 +66,7 @@ render_static_layers sets initial overlay + POIs + legend
 | `assets/gotone-logo.png` | White fish logotype on transparent background |
 
 ### Callback Structure
-1. **show_loading_on_fetch** — Fast callback on button click / auto-fetch, shows loading overlay immediately
+1. **show_loading_on_fetch** — **Clientside** callback on button click / auto-fetch, shows loading overlay immediately (must be clientside — with 1 gunicorn worker, a server-side version gets blocked behind the slow fetch callback)
 2. **fetch_sst_data** — Synchronous: fetches 7 days (or reads disk cache), processes, pre-renders PNGs, stores raw data server-side (memory-first, then background disk write)
 3. **render_static_layers** — Sets initial overlay PNG + bounds, POIs, legend, hides loading overlay. Also fires on POI picker / lock-scale changes
 4. **clientside: swap overlay** — Swaps overlay PNG by frame index (sst-store as State, not Input)
@@ -78,6 +78,8 @@ render_static_layers sets initial overlay + POIs + legend
 10. **render_click_marker** — Shows temp reading at clicked position (reads server-side cache)
 11. **toggle_measure** — Activates/deactivates measure mode
 12. **update_poi_count** — Shows "(19/19)" count next to "Spots" label
+13. **toggle_layers** — Shows/hides NOAA ENC and GEBCO layers based on sidebar checklist
+14. **update_sst_opacity** — Adjusts SST overlay opacity from sidebar slider
 
 ## Critical Lessons Learned
 

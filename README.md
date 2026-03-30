@@ -61,6 +61,8 @@ The app is served at `sst.gotoneapp.com` via a CNAME pointing to Render, and emb
 - **Spots dropdown** — Multi-select which fishing POIs to show on the map
 - **Lock scale** — Toggle fixed 30–90°F color range vs adaptive scaling
 - **Measure** — Two-click distance and bearing measurement tool
+- **Nautical chart / Bathymetry** — Toggle NOAA ENC chart and GEBCO depth layers on/off
+- **SST opacity** — Slider to fade SST overlay and reveal chart features underneath
 
 ## Architecture
 
@@ -73,7 +75,9 @@ See `CLAUDE.md` for full architecture details, callback structure, and lessons l
 
 ## Tech Stack
 
-- Dash 4.0 + dash-leaflet + dash-bootstrap-components
-- NOAA CoastWatch ERDDAP (MUR GHRSST 1km / OISST 25km)
-- Render Starter ($7/month): 0.5 CPU, 512 MB RAM, 1 GB persistent disk
-- Python 3.12
+- **Backend**: Python 3.12, Dash 4.0, NumPy, SciPy
+- **Frontend**: Dash Leaflet (Leaflet.js), Dash Bootstrap Components (Flatly theme), custom CSS
+- **SST data**: NOAA CoastWatch ERDDAP — MUR GHRSST 1km (preferred), OISST 25km (fallback)
+- **Chart layers**: NOAA ENC nautical charts (WMS), GEBCO bathymetry (WMS), CARTO basemap
+- **Hosting**: Render Starter ($7/month) — 0.5 CPU, 512 MB RAM, 1 GB persistent disk
+- **Domain**: `sst.gotoneapp.com` (CNAME → Render), embedded on Squarespace via iframe
