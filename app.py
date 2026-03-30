@@ -298,7 +298,27 @@ _LOADING_OVERLAY_HIDDEN = {"display": "none"}
 
 
 # ---- Callback 1a: Show loading overlay immediately on fetch ----
-@app.callback(
+# Clientside so it runs instantly in the browser — no server round-trip.
+# With 1 gunicorn worker, a server-side callback could be blocked behind
+# the slow fetch callback, leaving the user with no visual feedback.
+app.clientside_callback(
+    """
+    function(n_clicks, n_intervals) {
+        return [
+            true,
+            "Loading...",
+            {
+                "position": "absolute",
+                "top": 0, "left": 0, "right": 0, "bottom": 0,
+                "backgroundColor": "rgba(255,255,255,0.7)",
+                "display": "flex",
+                "alignItems": "center",
+                "justifyContent": "center",
+                "zIndex": 1000
+            }
+        ];
+    }
+    """,
     Output("fetch-btn", "disabled"),
     Output("fetch-btn", "children"),
     Output("map-loading-overlay", "style"),
@@ -306,8 +326,6 @@ _LOADING_OVERLAY_HIDDEN = {"display": "none"}
     Input("auto-fetch", "n_intervals"),
     prevent_initial_call=True,
 )
-def show_loading_on_fetch(n_clicks, n_intervals):
-    return True, "Loading...", _LOADING_OVERLAY_VISIBLE
 
 
 # ---- Callback 1b: Fetch 7-day SST data ----
