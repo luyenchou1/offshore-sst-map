@@ -1,7 +1,7 @@
 # GotOne Offshore SST Analyzer — Project Context
 
 ## What This Is
-Dash 4.0 web app ("GotOne Offshore SST Analyzer") branded for [gotoneapp.com](https://www.gotoneapp.com). Shows daily sea-surface temperatures for the NJ-to-MA offshore corridor. Users pick any 7-day date window (back to June 2002) and animate through the week's SST evolution to spot fishing-relevant trends (warm eddies, cold upwelling, thermoclines).
+Dash 4.0 web app ("GotOne Offshore SST Analyzer") branded for [gotoneapp.com](https://www.gotoneapp.com). Shows daily sea-surface temperatures for the Cape May, NJ to Portland, ME offshore corridor. Users pick any 7-day date window (back to June 2002) and animate through the week's SST evolution to spot fishing-relevant trends (warm eddies, cold upwelling, thermoclines).
 
 ## Tech Stack
 - **Dash 4.0** + **dash-leaflet** + **dash-bootstrap-components** (Flatly theme + GotOne CSS overrides)
@@ -191,18 +191,19 @@ All clicks route through a single `handle_map_click` callback. Only one tooltip 
 - Math in `map/measure.py`: haversine distance + initial bearing formula
 
 ### Performance Notes
-- **dcc.Store payload**: ~7 MB (7 base64 PNGs + dates + metadata). Raw arrays stored server-side.
-- **Server-side raw data**: ~18 MB in memory per date window. Falls back to disk cache on miss.
-- **Disk cache**: gzip JSON, ~250-275 KB per date window. Persistent across deploys.
+- **dcc.Store payload**: ~2.5 MB (7 base64 PNGs at 1x native resolution + dates + metadata). Raw arrays stored server-side.
+- **Server-side raw data**: ~25 MB in memory per date window. Falls back to disk cache on miss.
+- **Disk cache**: gzip JSON, ~200 KB per date window. Persistent across deploys.
 - **Pre-rendering PNGs server-side** with unified vmin/vmax makes frame switching instant — the clientside callback just selects a pre-built base64 URL.
-- **2x upsample** (scipy zoom) is hardcoded. Higher factors showed negligible visual improvement for more processing cost.
-- **AOI expansion** (39.5°N southern boundary) added ~15% more grid cells — negligible impact.
+- **1x native upsample**: Dropped from 2x to 1x when AOI expanded — reduces payload by ~62% with no visible quality difference at typical zoom levels. The `upsample_visual()` call with factor 1 returns the array unchanged.
+- **AOI coverage**: Cape May, NJ (38.80°N) to Portland, ME (43.80°N), ~501×617 grid at MUR 1km. Bounding box: 5.00° lat × 6.16° lon.
 - **Cache hit path**: disk read + decompress + parse → ~1-2s. No ERDDAP call needed.
 - **Cache miss path**: 7 parallel ERDDAP fetches → 30-90s. Data cached for instant future loads.
+- **AOI change invalidates cache**: Disk-cached data has bounding box baked in. After AOI polygon changes, old caches will have wrong bounds — first fetch after change will be a cache miss.
 
-## POI Fishing Spots (20 points + 1 rectangle)
+## POI Fishing Spots (32 points + 1 rectangle)
 ```
-Original:
+Original (7):
   Haabs Ledge          40.868, -71.838
   Butterfish Hole      40.836, -71.675
   Rachel's Whales      40.896, -71.831
@@ -211,7 +212,7 @@ Original:
   Wind Farm SW Corner  40.974, -71.273
   Tuna Ridge           40.917, -71.279
 
-Added (source: marinebasin.com):
+Named spots (11, source: marinebasin.com):
   Bacardi Wreck        39.883, -72.645
   Coimbra Wreck        40.401, -72.339
   Cartwright           41.000, -71.808
@@ -223,6 +224,24 @@ Added (source: marinebasin.com):
   Jennie's Horn        40.813, -71.544
   Mud Hole             40.937, -71.417
   Ranger Wreck         40.588, -71.790
+
+Canyons (7, shelf edge — major tuna grounds):
+  Hudson Canyon        39.540, -72.050
+  Block Canyon         39.730, -71.750
+  Toms Canyon          39.500, -72.600
+  Lindenkohl Canyon    39.450, -72.350
+  Spencer Canyon       39.100, -73.150
+  Veatch Canyon        40.050, -69.550
+  Hydrographer Canyon  40.100, -69.300
+
+Banks & ledges (7, tuna staging/feeding areas):
+  17 Fathom Bank       39.650, -73.100
+  Cholera Bank         40.050, -73.200
+  The Fingers          40.700, -70.600
+  Stellwagen Bank      42.350, -70.350
+  Jeffreys Ledge       42.850, -70.100
+  Platts Bank          43.200, -69.700
+  Cashes Ledge         42.900, -69.000
 
 The Dump (source: saltycape.com):
   Rectangle: 40.667-40.833°N, 70.750-70.996°W

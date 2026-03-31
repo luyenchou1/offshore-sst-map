@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-03-31 — Expanded Coverage & Tuna Spots (v2.2)
+
+### Added
+- **14 new tuna fishing POIs**: 7 canyons (Hudson, Block, Toms, Lindenkohl, Spencer, Veatch, Hydrographer) and 7 banks/ledges (17 Fathom Bank, Cholera Bank, The Fingers, Stellwagen Bank, Jeffreys Ledge, Platts Bank, Cashes Ledge). Total spots: 32 points + The Dump rectangle.
+
+### Changed
+- **AOI expanded to Cape May → Portland**: Coverage now spans 38.80°N to 43.80°N (was 39.50°N to 42.80°N). Southern boundary covers Cape May, NJ and offshore canyons. Northern boundary covers Gulf of Maine up to Portland, ME — Stellwagen Bank, Jeffreys Ledge, Platts Bank, and Cashes Ledge are all within coverage.
+- **Eastern boundary widened** to -68.80°W (from -68.92°W) to include Cashes Ledge.
+- **Visual upsample dropped from 2x to 1x**: Native MUR 1km resolution. Reduces dcc.Store payload from ~6.5 MB to ~2.5 MB despite the larger AOI. No visible quality difference at typical zoom levels.
+- **PNG compression**: Added `compress_level=9` to overlay PNG rendering for smaller payloads.
+- **Map center adjusted** to [41.2, -71.5] to better frame the expanded coverage area.
+
+---
+
 ## 2026-03-30 — Mobile-Responsive UI (v2.1)
 
 ### Added
