@@ -28,6 +28,22 @@ ALL_POIS = [
     ("Jennie's Horn",       40.812500, -71.544200),
     ("Mud Hole",            40.937300, -71.417300),
     ("Ranger Wreck",        40.588300, -71.790000),
+    # Canyons (shelf edge — major tuna grounds)
+    ("Hudson Canyon",       39.540000, -72.050000),
+    ("Block Canyon",        39.730000, -71.750000),
+    ("Toms Canyon",         39.500000, -72.600000),
+    ("Lindenkohl Canyon",   39.450000, -72.350000),
+    ("Spencer Canyon",      39.100000, -73.150000),
+    ("Veatch Canyon",       40.050000, -69.550000),
+    ("Hydrographer Canyon", 40.100000, -69.300000),
+    # Banks & ledges (tuna staging/feeding areas)
+    ("17 Fathom Bank",      39.650000, -73.100000),
+    ("Cholera Bank",        40.050000, -73.200000),
+    ("The Fingers",         40.700000, -70.600000),
+    ("Stellwagen Bank",     42.350000, -70.350000),
+    ("Jeffreys Ledge",      42.850000, -70.100000),
+    ("Platts Bank",         43.200000, -69.700000),
+    ("Cashes Ledge",        42.900000, -69.000000),
 ]
 
 # ---- The Dump: defined as a box (source: saltycape.com/the-dump/) ----
