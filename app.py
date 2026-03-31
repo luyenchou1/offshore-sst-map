@@ -164,7 +164,7 @@ def _build_payload(sst: dict, locked: bool) -> dict:
     frames = []
     dates = []
     for pd_item in processed_days:
-        arrF_vis = upsample_visual(pd_item["arrF"], 2)
+        arrF_vis = upsample_visual(pd_item["arrF"], 1)
         png_url = sst_to_base64_png(arrF_vis, vmin, vmax)
         frames.append(png_url)
         dates.append(pd_item["date"])

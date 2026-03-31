@@ -20,7 +20,7 @@ def build_map():
                     ),
                     dl.Map(
                         id="sst-map",
-                        center=[40.9, -71.5],
+                        center=[40.8, -71.9],
                         zoom=7,
                         minZoom=5,
                         maxZoom=12,

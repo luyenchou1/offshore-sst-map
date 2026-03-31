@@ -35,6 +35,6 @@ def sst_to_base64_png(
     rgba = array_to_rgba(arrF, vmin, vmax)
     img = Image.fromarray(rgba, "RGBA")
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    img.save(buf, format="PNG", optimize=True, compress_level=9)
     b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
     return f"data:image/png;base64,{b64}"
