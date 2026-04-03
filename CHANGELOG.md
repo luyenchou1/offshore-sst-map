@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-04-02 — Fishing Activity Overlay (v2.3)
+
+### Added
+- **Global Fishing Watch integration**: New "Fishing activity" layer in sidebar shows commercial fishing vessel activity (draggers, trawlers) as colored dots overlaid on the map. Helps tuna fishermen spot productive areas.
+- **Server-side tile proxy** (`/api/gfw/`): Fetches GFW 4Wings fishing effort tiles with Bearer auth so the API token stays server-side. Requires `GFW_API_TOKEN` env var.
+- **Date-synced fishing data**: GFW tile date range automatically matches the SST 7-day window. Cache-busting query param ensures tiles refresh when dates change.
+- **`.env` in `.gitignore`**: Prevents accidental commit of API tokens.
+
+### Changed
+- **GFW layer renders above SST** (zIndex 420, between SST at 410 and POI markers at 450) for clear visibility of fishing activity dots over temperature colors.
+
+---
+
 ## 2026-03-31 — Expanded Coverage & Tuna Spots (v2.2)
 
 ### Added

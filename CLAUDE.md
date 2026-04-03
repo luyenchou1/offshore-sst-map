@@ -45,6 +45,13 @@ Two-part storage:
 
 render_static_layers sets initial overlay + POIs + legend
   → clientside callback swaps PNG by frame index (instant)
+
+GFW Fishing Activity (separate data path):
+  fetch_sst_data sets _gfw_date_range → updates gfw-layer URL with ?dr= param
+  → Leaflet requests /api/gfw/{z}/{x}/{y}.png?dr=START,END
+  → Flask proxy calls GFW generate-png (once per date range, cached)
+  → Fetches styled tile with Bearer auth → returns PNG to browser
+  → Tiles cached 1hr (Cache-Control: public, max-age=3600)
 ```
 
 ### Key Files
@@ -134,12 +141,23 @@ render_static_layers sets initial overlay + POIs + legend
 - **Always populate `_raw_data_cache` before disk write.** If the disk write OOMs or crashes the worker, the memory cache is already set and clicks work. The callback response is also faster since the disk write happens asynchronously.
 - **Disk write in background thread** — `threading.Thread(target=_write_disk_cache, daemon=True)`. Non-blocking, so the fetch callback returns immediately to the browser.
 
+### Global Fishing Watch Integration
+- **GFW 4Wings API**: Two-step process — POST to `generate-png` to get a styled tile URL template with color ramp, then GET individual tiles at `{z}/{x}/{y}` using that template.
+- **Server-side tile proxy** (`/api/gfw/<z>/<x>/<y>.png`): Flask route proxies GFW tile requests with Bearer auth so the `GFW_API_TOKEN` stays server-side (Leaflet can't add custom auth headers to tile requests).
+- **SSL domain fix**: GFW's `generate-png` returns URLs pointing to `gateway.api.prod.globalfishingwatch.org` which causes `SSLEOFError` in Python. Must replace with `gateway.api.globalfishingwatch.org`.
+- **Date range sync**: GFW tiles use the same 7-day window as SST data. `fetch_sst_data` callback updates `_gfw_date_range` and sets a `?dr=` cache-busting query param on the tile URL so Leaflet re-fetches tiles when dates change.
+- **Style cache**: `_gfw_style_cache` stores the URL template per date range. Only calls `generate-png` once per date range; subsequent tile fetches reuse the cached template.
+- **Graceful degradation**: If `GFW_API_TOKEN` env var is not set, proxy returns 204 (no content) and tiles are transparent. The checkbox still appears but does nothing.
+- **Layer z-index**: 420 (above SST at 410, below POI markers at 450) so fishing dots render on top of temperature colors.
+- **Token**: JWT with 10-year expiry. Set as `GFW_API_TOKEN` env var on Render and locally.
+
 ### Render Deployment
 - **Must use 1 gunicorn worker.** The `_raw_data_cache` is per-process. With multiple workers, a click request may be served by a worker that doesn't have the data. The disk cache fallback mitigates this, but 1 worker is the intended config.
 - **Start command must be set in Render Settings** (not blank — Render requires a value). Use: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --timeout 180`
 - **Auto-deploy is currently OFF.** Use Manual Deploy after pushing to `main`.
 - **Pre-warm thread** runs 15s after startup. Only loads from disk cache (no ERDDAP). Heavy ERDDAP fetches during startup starve the gunicorn worker and cause Render's health check to fail, hanging the deploy indefinitely.
 - **Disk cache persists across deploys** (Render Starter has persistent filesystem). Previously fetched dates load instantly from cache.
+- **`GFW_API_TOKEN` env var** must be set in Render Environment for fishing activity layer. Without it, the layer degrades gracefully (transparent tiles).
 
 ### Custom Domain & Squarespace Integration
 - **Custom domain**: `sst.gotoneapp.com` — CNAME in Squarespace DNS pointing to `offshore-sst-map.onrender.com`. Added as custom domain in Render dashboard; SSL auto-provisioned by Render.
@@ -160,6 +178,7 @@ Map layer panes and their z-index values matter enormously:
 - **gebco-pane**: 390 (custom — GEBCO bathymetry WMS)
 - **contours-pane**: 400 (custom — NOAA ENC nautical chart WMS)
 - **sst-pane**: 410 (custom — SST ImageOverlay, opacity controlled by sidebar slider)
+- **gfw-pane**: 420 (custom — GFW fishing activity tiles, above SST for visibility)
 - **poi-pane**: 450 (custom — above SST, below tooltips)
 - **click-pane**: 500 (custom — above POIs, below tooltips)
 - **tooltipPane**: 650 (Leaflet default — tooltips render here)
