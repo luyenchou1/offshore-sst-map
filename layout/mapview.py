@@ -83,6 +83,9 @@ def build_map():
                                     url="/api/gfw/{z}/{x}/{y}.png",
                                     opacity=0,
                                     bounds=[[38.80, -74.96], [43.80, -68.80]],
+                                    updateWhenZooming=False,  # wait for zoom to finish
+                                    updateWhenIdle=True,      # only load after pan/zoom stops
+                                    keepBuffer=4,             # keep more off-screen tiles cached
                                     attribution='&copy; <a href="https://globalfishingwatch.org">Global Fishing Watch</a>',
                                 ),
                                 name="gfw-pane",

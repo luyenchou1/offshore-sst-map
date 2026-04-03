@@ -151,7 +151,7 @@ def gfw_tile_proxy(z, x, y):
         return Response(
             resp.content,
             content_type=resp.headers.get("Content-Type", "image/png"),
-            headers={"Cache-Control": "public, max-age=3600"},
+            headers={"Cache-Control": "public, max-age=86400"},
         )
     except Exception:
         return "", 502
