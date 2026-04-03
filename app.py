@@ -212,6 +212,12 @@ def precache_endpoint():
 
     def _run_precache(dates, delay_s):
         import gc
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+        # Hard timeout per date — prevents ERDDAP hangs from blocking the
+        # worker so long that Render's health check fails and restarts it.
+        PER_DATE_TIMEOUT = 120  # seconds
+
         for d in dates:
             # Re-check cache in case a previous run cached this date
             # before the worker restarted
@@ -220,34 +226,37 @@ def precache_endpoint():
                 logger.info("Pre-cache: already cached %s, skipping", d)
                 continue
 
-            sst = store_payload = raw_data = disk_payload = None
+            sst = disk_payload = None
             try:
                 logger.info("Pre-cache: fetching %s", d)
-                sst = get_sst_multiday(d, CFG)
-                store_payload, raw_data = _build_payload(sst, locked=False)
 
-                # Write to disk cache (synchronous — no need for background thread here)
-                disk_payload = dict(store_payload)
-                disk_payload["raw_days"] = [
-                    {"arrF": _serialize_array(day["arrF"]), "date": day["date"]}
-                    for day in raw_data["raw_days"]
-                ]
-                disk_payload["lats"] = _serialize_array(raw_data["lats"])
-                disk_payload["lons"] = _serialize_array(raw_data["lons"])
-                put_cache(d, False, disk_payload)
+                # Run the fetch + process in a thread with a hard timeout
+                # so a hung ERDDAP request can't block forever
+                def _fetch_and_cache(date_val):
+                    s = get_sst_multiday(date_val, CFG)
+                    dp = _precache_single_date(s, locked=False)
+                    put_cache(date_val, False, dp)
+                    return True
+
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_fetch_and_cache, d)
+                    future.result(timeout=PER_DATE_TIMEOUT)
 
                 _precache_status["done"] += 1
                 logger.info("Pre-cache: cached %s (%d/%d)",
                             d, _precache_status["done"], _precache_status["total"])
+            except FuturesTimeout:
+                logger.warning("Pre-cache: TIMEOUT after %ds for %s, skipping",
+                               PER_DATE_TIMEOUT, d)
+                _precache_status["errors"].append(f"{d}: timeout after {PER_DATE_TIMEOUT}s")
+                _precache_status["done"] += 1
             except Exception as e:
                 logger.warning("Pre-cache: failed %s: %s", d, e)
                 _precache_status["errors"].append(f"{d}: {e}")
                 _precache_status["done"] += 1
 
-            # Free memory aggressively between fetches — critical on
-            # Render's 512MB. Without this, accumulated numpy arrays
-            # from multiple fetches can OOM the worker.
-            sst = store_payload = raw_data = disk_payload = None
+            # Free memory aggressively between fetches
+            sst = disk_payload = None
             gc.collect()
 
             # Pause between fetches to avoid ERDDAP rate limits
@@ -311,7 +320,7 @@ def _get_raw_data(data_key):
         cached = get_cached(end_date, locked)
         if cached:
             logger.info("_get_raw_data: disk cache HIT for %s, rebuilding raw data", data_key)
-            _, raw_data = _build_payload_from_disk_cache(cached)
+            _, raw_data = _build_payload_from_disk_cache(cached, raw_only=True)
             _raw_data_cache[data_key] = raw_data
             logger.info("Raw data loaded from disk cache: %s", data_key)
             return raw_data
@@ -417,22 +426,110 @@ def _deserialize_array(s: str) -> np.ndarray:
     return np.load(buf)
 
 
-def _build_payload_from_disk_cache(cached: dict):
+def _precache_single_date(sst: dict, locked: bool) -> dict:
+    """Build a raw-only disk cache payload (no PNG frames).
+
+    Unlike _build_payload, this:
+    - Never renders PNGs (saves ~5-7 MB peak)
+    - Processes and serializes each day individually (never holds all
+      7 arrays + their base64 representations simultaneously)
+    - Uses running percentiles instead of np.concatenate (saves ~16 MB)
+
+    Returns a dict ready for put_cache() with frames=None.
+    """
+    import gc
+    lats_raw = sst["lats"]
+    lons_raw = sst["lons"]
+
+    # Orient once for lat/lon arrays
+    _, lats, lons = orient_to_leaflet(
+        sst["days"][0]["arrF"], lats_raw.copy(), lons_raw.copy()
+    )
+    serialized_lats = _serialize_array(lats)
+    serialized_lons = _serialize_array(lons)
+    res_km = abs(float(lats[1] - lats[0])) * 111.0 if len(lats) > 1 else None
+    bounds = [
+        [float(np.min(lats)), float(np.min(lons))],
+        [float(np.max(lats)), float(np.max(lons))],
+    ]
+
+    # Process each day individually — serialize and free before next
+    serialized_days = []
+    dates = []
+    running_p5_min = float("inf")
+    running_p95_max = float("-inf")
+
+    for day_data in sst["days"]:
+        arrF = day_data["arrF"]
+        arrF, _, _ = orient_to_leaflet(arrF, lats_raw.copy(), lons_raw.copy())
+        arrF = mask_aoi_rasterized(arrF, lats, lons, CFG)
+        arrF = mask_land_rasterized(arrF, lats, lons)
+
+        # Running percentiles (avoids 16 MB concatenation)
+        finite = arrF[np.isfinite(arrF)]
+        if finite.size >= 50:
+            running_p5_min = min(running_p5_min, float(np.nanpercentile(finite, 5)))
+            running_p95_max = max(running_p95_max, float(np.nanpercentile(finite, 95)))
+        del finite
+
+        # Serialize immediately, then free numpy array
+        serialized_days.append({
+            "arrF": _serialize_array(arrF),
+            "date": day_data["date"],
+        })
+        dates.append(day_data["date"])
+        del arrF
+
+    # Free lats/lons now that all days are processed
+    del lats, lons
+    gc.collect()
+
+    # Apply color bounds logic (matches compute_color_bounds)
+    if locked:
+        vmin, vmax = 30.0, 90.0
+    elif running_p5_min < float("inf"):
+        vmin = max(running_p5_min, 28.0)
+        vmax = min(running_p95_max, 95.0)
+        if vmax - vmin < 5.0:
+            mid = (vmin + vmax) / 2
+            vmin, vmax = mid - 3.0, mid + 3.0
+    else:
+        vmin, vmax = 30.0, 90.0
+
+    return {
+        "frames": None,  # sentinel: raw-only, render PNGs on demand
+        "dates": dates,
+        "bounds": bounds,
+        "vmin": float(vmin),
+        "vmax": float(vmax),
+        "res_km": res_km,
+        "server": sst["server"],
+        "dataset_id": sst["dataset_id"],
+        "dataset_title": sst["dataset_title"],
+        "raw_days": serialized_days,
+        "lats": serialized_lats,
+        "lons": serialized_lons,
+    }
+
+
+def _build_payload_from_disk_cache(cached: dict, raw_only: bool = False):
     """Split a disk-cached payload into store_payload + raw_data.
 
-    Supports two formats:
-      - New (v2): raw_days[i]["arrF"] is a base64-encoded numpy string
-      - Old (v1): raw_days[i]["arrF"] is a nested JSON list of floats
+    Supports three formats:
+      - v3 (raw-only pre-cache): frames is None, raw arrays are base64
+      - v2: raw_days[i]["arrF"] is a base64-encoded numpy string
+      - v1: raw_days[i]["arrF"] is a nested JSON list of floats
+
+    If raw_only=True, skip PNG rendering even for raw-only entries
+    (used by _get_raw_data which only needs arrays for click lookups).
     """
     raw_days = []
     dates = []
     for rd in cached["raw_days"]:
         arr_data = rd["arrF"]
         if isinstance(arr_data, str):
-            # v2 format: base64-encoded numpy array
             arrF = _deserialize_array(arr_data)
         else:
-            # v1 format: JSON list of floats
             arrF = np.array(arr_data, dtype=np.float64)
         raw_days.append({"arrF": arrF, "date": rd["date"]})
         dates.append(rd["date"])
@@ -445,8 +542,22 @@ def _build_payload_from_disk_cache(cached: dict):
         "lons": _deserialize_array(lons_data) if isinstance(lons_data, str) else np.array(lons_data, dtype=np.float64),
     }
 
+    # Handle raw-only pre-cache entries (frames=None)
+    frames = cached.get("frames")
+    if frames is None and not raw_only:
+        # Render PNGs on the fly from raw arrays
+        logger.info("Raw-only cache entry — rendering PNGs on the fly")
+        vmin, vmax = cached["vmin"], cached["vmax"]
+        frames = []
+        for rd in raw_days:
+            arrF_vis = upsample_visual(rd["arrF"], 1)
+            png_url = sst_to_base64_png(arrF_vis, vmin, vmax)
+            frames.append(png_url)
+    elif frames is None:
+        frames = []  # raw_only mode — caller doesn't need PNGs
+
     store_payload = {
-        "frames": cached["frames"],
+        "frames": frames,
         "dates": dates,
         "bounds": cached["bounds"],
         "vmin": cached["vmin"],
@@ -603,7 +714,29 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
             _gfw_date_range = f"{sst_dates[0]},{sst_dates[-1]}"
             _gfw_style_cache = {"url_template": None, "date_range": None}
 
-        if not cached_hit:
+        if cached_hit and cached.get("frames") is None:
+            # Raw-only pre-cache entry — upgrade with rendered PNGs in
+            # background so subsequent loads are instant
+            def _upgrade_cache(sp, rd, ed, lk):
+                try:
+                    dp = dict(sp)
+                    dp["raw_days"] = [
+                        {"arrF": _serialize_array(d["arrF"]), "date": d["date"]}
+                        for d in rd["raw_days"]
+                    ]
+                    dp["lats"] = _serialize_array(rd["lats"])
+                    dp["lons"] = _serialize_array(rd["lons"])
+                    put_cache(ed, lk, dp)
+                    logger.info("Cache upgraded with PNGs: %s", ed)
+                except Exception:
+                    logger.warning("Cache upgrade failed", exc_info=True)
+
+            threading.Thread(
+                target=_upgrade_cache,
+                args=(store_payload, raw_data, end_date, locked),
+                daemon=True,
+            ).start()
+        elif not cached_hit:
             # Write to disk cache in background thread to avoid blocking
             # the callback response. Uses base64-encoded numpy arrays
             # instead of .tolist() to avoid 3x memory spike from Python
@@ -1193,7 +1326,7 @@ def _prewarm_cache():
         cached = get_cached(end_date, locked)
         if cached and not is_stale(end_date):
             try:
-                _, raw_data = _build_payload_from_disk_cache(cached)
+                _, raw_data = _build_payload_from_disk_cache(cached, raw_only=True)
                 _raw_data_cache[data_key] = raw_data
                 logger.info("Pre-warm: loaded from disk cache %s (locked=%s)", end_date, locked)
             except Exception:
