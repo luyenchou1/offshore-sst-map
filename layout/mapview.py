@@ -82,6 +82,7 @@ def build_map():
                                     id="gfw-layer",
                                     url="/api/gfw/{z}/{x}/{y}.png",
                                     opacity=0,
+                                    bounds=[[38.80, -74.96], [43.80, -68.80]],
                                     attribution='&copy; <a href="https://globalfishingwatch.org">Global Fishing Watch</a>',
                                 ),
                                 name="gfw-pane",
