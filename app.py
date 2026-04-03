@@ -183,7 +183,7 @@ def precache_endpoint():
     end_year = int(request.args.get("end_year", 2025))
     months = [int(m) for m in request.args.get("months", "6,7,8,9,10,11").split(",")]
     interval = int(request.args.get("interval", 7))
-    delay = int(request.args.get("delay", 30))
+    delay = int(request.args.get("delay", 45))
 
     # Build list of target dates (every `interval` days during target months)
     from datetime import date as _date
@@ -211,7 +211,16 @@ def precache_endpoint():
     _precache_status["errors"] = []
 
     def _run_precache(dates, delay_s):
+        import gc
         for d in dates:
+            # Re-check cache in case a previous run cached this date
+            # before the worker restarted
+            if get_cached(d, False):
+                _precache_status["done"] += 1
+                logger.info("Pre-cache: already cached %s, skipping", d)
+                continue
+
+            sst = store_payload = raw_data = disk_payload = None
             try:
                 logger.info("Pre-cache: fetching %s", d)
                 sst = get_sst_multiday(d, CFG)
@@ -235,8 +244,14 @@ def precache_endpoint():
                 _precache_status["errors"].append(f"{d}: {e}")
                 _precache_status["done"] += 1
 
+            # Free memory aggressively between fetches — critical on
+            # Render's 512MB. Without this, accumulated numpy arrays
+            # from multiple fetches can OOM the worker.
+            sst = store_payload = raw_data = disk_payload = None
+            gc.collect()
+
             # Pause between fetches to avoid ERDDAP rate limits
-            # and to leave the worker available for user requests
+            # and to leave the worker available for health checks
             time.sleep(delay_s)
 
         _precache_status["running"] = False
