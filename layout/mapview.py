@@ -76,6 +76,17 @@ def build_map():
                                 name="contours-pane",
                                 style={"zIndex": 400},
                             ),
+                            # Global Fishing Watch fishing effort heatmap
+                            dl.Pane(
+                                dl.TileLayer(
+                                    id="gfw-layer",
+                                    url="/api/gfw/{z}/{x}/{y}.png",
+                                    opacity=0,
+                                    attribution='&copy; <a href="https://globalfishingwatch.org">Global Fishing Watch</a>',
+                                ),
+                                name="gfw-pane",
+                                style={"zIndex": 420},
+                            ),
                             # SST overlay on top of chart layers
                             dl.Pane(
                                 dl.ImageOverlay(

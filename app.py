@@ -17,6 +17,9 @@ import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 
+import requests as http_requests
+from flask import Response
+
 import dash
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
@@ -65,6 +68,93 @@ def set_iframe_headers(response):
     # Remove X-Frame-Options if set by any middleware (CSP takes precedence)
     response.headers.pop("X-Frame-Options", None)
     return response
+
+
+# ---- Global Fishing Watch tile proxy ----
+# GFW 4Wings API requires Bearer auth in headers, which Leaflet can't do.
+# Proxy tiles through Flask so the token stays server-side.
+_gfw_style_cache = {"url_template": None, "date_range": None}
+_gfw_date_range = None  # "YYYY-MM-DD,YYYY-MM-DD" — updated by fetch_sst_data
+
+
+def _get_gfw_style(date_range: str) -> str | None:
+    """Call GFW generate-png to get a styled tile URL template.
+
+    Must be called once per date range before tiles can be fetched.
+    Returns the full URL template with {z}/{x}/{y} placeholders, or None.
+    """
+    token = os.environ.get("GFW_API_TOKEN")
+    if not token:
+        return None
+    try:
+        resp = http_requests.post(
+            "https://gateway.api.globalfishingwatch.org/v3/4wings/generate-png",
+            params={
+                "datasets[0]": "public-global-fishing-effort:latest",
+                "interval": "DAY",
+                "date-range": date_range,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        url = resp.json().get("url", "")
+        # The API returns URLs pointing to the prod subdomain which has
+        # SSL issues with Python's ssl module. Use the main domain instead.
+        url = url.replace(
+            "gateway.api.prod.globalfishingwatch.org",
+            "gateway.api.globalfishingwatch.org",
+        )
+        return url
+    except Exception as e:
+        logger.warning("GFW generate-png failed: %s", e)
+        return None
+
+
+@server.route("/api/gfw/<int:z>/<int:x>/<int:y>.png")
+def gfw_tile_proxy(z, x, y):
+    """Proxy GFW fishing effort tiles with auth header."""
+    global _gfw_style_cache
+    token = os.environ.get("GFW_API_TOKEN")
+    if not token:
+        return "", 204
+
+    # Determine date range — match SST window or default to last 7 days
+    if _gfw_date_range:
+        dr = _gfw_date_range
+    else:
+        end = date.today() - timedelta(days=4)
+        start = end - timedelta(days=6)
+        dr = f"{start},{end}"
+
+    # Refresh style if date range changed or not yet initialized
+    if _gfw_style_cache["url_template"] is None or _gfw_style_cache["date_range"] != dr:
+        url_tpl = _get_gfw_style(dr)
+        _gfw_style_cache = {"url_template": url_tpl, "date_range": dr}
+
+    if not _gfw_style_cache["url_template"]:
+        return "", 204
+
+    tile_url = (_gfw_style_cache["url_template"]
+                .replace("{z}", str(z))
+                .replace("{x}", str(x))
+                .replace("{y}", str(y)))
+
+    try:
+        resp = http_requests.get(
+            tile_url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return "", resp.status_code
+        return Response(
+            resp.content,
+            content_type=resp.headers.get("Content-Type", "image/png"),
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+    except Exception:
+        return "", 502
 
 
 # ---- Server-side raw data cache ----
@@ -348,6 +438,7 @@ app.clientside_callback(
         Output("fetch-btn", "children", allow_duplicate=True),
         Output("sidebar-col", "className", allow_duplicate=True),
         Output("sidebar-backdrop", "style", allow_duplicate=True),
+        Output("gfw-layer", "url", allow_duplicate=True),
     ],
     inputs=[
         Input("fetch-btn", "n_clicks"),
@@ -387,6 +478,13 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
         # Store raw data server-side FIRST — must happen before disk write
         # so click callbacks work even if the disk write crashes or OOMs
         _raw_data_cache[data_key] = raw_data
+
+        # Update GFW date range to match the SST window
+        global _gfw_date_range, _gfw_style_cache
+        sst_dates = store_payload.get("dates", [])
+        if sst_dates:
+            _gfw_date_range = f"{sst_dates[0]},{sst_dates[-1]}"
+            _gfw_style_cache = {"url_template": None, "date_range": None}
 
         if not cached_hit:
             # Write to disk cache in background thread to avoid blocking
@@ -431,12 +529,16 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
 
         anim_visible = {"display": "block"}
 
+        # Cache-bust GFW tile URL so browser re-fetches for new date range
+        gfw_url = f"/api/gfw/{{z}}/{{x}}/{{y}}.png?dr={_gfw_date_range or ''}"
+
         return (
             store_payload, status,
             marks, num_days - 1, num_days - 1,
             anim_visible, "",
             False, "Fetch SST",
             "gotone-sidebar", {"display": "none"},
+            gfw_url,
         )
 
     except Exception as e:
@@ -453,6 +555,7 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
             dash.no_update, "",
             False, "Fetch SST",
             "gotone-sidebar", {"display": "none"},
+            dash.no_update,
         )
 
 
@@ -918,13 +1021,15 @@ def poi_select_deselect(select_clicks, deselect_clicks):
 @app.callback(
     Output("contours-layer", "opacity"),
     Output("gebco-layer", "opacity"),
+    Output("gfw-layer", "opacity"),
     Input("layer-toggles", "value"),
 )
 def toggle_layers(active_layers):
-    """Show/hide nautical chart and bathymetry layers."""
+    """Show/hide nautical chart, bathymetry, and fishing activity layers."""
     active = active_layers or []
     return (0.6 if "contours" in active else 0,
-            0.5 if "gebco" in active else 0)
+            0.5 if "gebco" in active else 0,
+            0.7 if "gfw" in active else 0)
 
 
 @app.callback(

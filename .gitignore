@@ -12,3 +12,4 @@ __pycache__/
 *.nc
 Branding:Logo/
 cache/
+.env

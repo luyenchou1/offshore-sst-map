@@ -276,6 +276,7 @@ def build_sidebar():
                         options=[
                             {"label": " Nautical chart", "value": "contours"},
                             {"label": " Bathymetry", "value": "gebco"},
+                            {"label": " Fishing activity", "value": "gfw"},
                         ],
                         value=[],
                         style={"fontSize": "0.8rem"},
