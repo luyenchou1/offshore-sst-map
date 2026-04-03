@@ -21,7 +21,7 @@ from typing import Dict, Optional
 logger = logging.getLogger(__name__)
 
 CACHE_DIR = Path(os.environ.get("SST_CACHE_DIR", "./cache")) / "sst"
-MAX_ENTRIES = 200
+MAX_ENTRIES = 500
 
 
 def _ensure_dir() -> Path:

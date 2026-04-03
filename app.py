@@ -18,7 +18,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 
 import requests as http_requests
-from flask import Response
+from flask import Response, request
 
 import dash
 import dash_bootstrap_components as dbc
@@ -155,6 +155,108 @@ def gfw_tile_proxy(z, x, y):
         )
     except Exception:
         return "", 502
+
+
+# ---- Pre-cache endpoint ----
+# Populates disk cache for historical dates so users get instant loads.
+# Runs in a background thread to avoid blocking the web worker.
+_precache_status = {"running": False, "done": 0, "total": 0, "errors": []}
+
+
+@server.route("/api/precache")
+def precache_endpoint():
+    """Trigger background pre-caching of tuna season dates.
+
+    Query params:
+      start_year (int, default 2020)
+      end_year   (int, default 2025)
+      months     (comma-sep ints, default "6,7,8,9,10,11")
+      interval   (int days between dates, default 7 = weekly)
+      delay      (int seconds between fetches, default 30)
+
+    Returns status JSON. Hit again to check progress.
+    """
+    if _precache_status["running"]:
+        return json.dumps(_precache_status), 200, {"Content-Type": "application/json"}
+
+    start_year = int(request.args.get("start_year", 2020))
+    end_year = int(request.args.get("end_year", 2025))
+    months = [int(m) for m in request.args.get("months", "6,7,8,9,10,11").split(",")]
+    interval = int(request.args.get("interval", 7))
+    delay = int(request.args.get("delay", 30))
+
+    # Build list of target dates (every `interval` days during target months)
+    from datetime import date as _date
+    target_dates = []
+    for year in range(start_year, end_year + 1):
+        for month in months:
+            d = _date(year, month, 1)
+            while d.month == month:
+                target_dates.append(d)
+                d += timedelta(days=interval)
+
+    # Filter out dates already cached
+    uncached = []
+    for d in target_dates:
+        cached = get_cached(d, False)  # adaptive mode
+        if not cached:
+            uncached.append(d)
+
+    if not uncached:
+        return json.dumps({"message": "All dates already cached", "total": len(target_dates)}), 200, {"Content-Type": "application/json"}
+
+    _precache_status["running"] = True
+    _precache_status["done"] = 0
+    _precache_status["total"] = len(uncached)
+    _precache_status["errors"] = []
+
+    def _run_precache(dates, delay_s):
+        for d in dates:
+            try:
+                logger.info("Pre-cache: fetching %s", d)
+                sst = get_sst_multiday(d, CFG)
+                store_payload, raw_data = _build_payload(sst, locked=False)
+
+                # Write to disk cache (synchronous — no need for background thread here)
+                disk_payload = dict(store_payload)
+                disk_payload["raw_days"] = [
+                    {"arrF": _serialize_array(day["arrF"]), "date": day["date"]}
+                    for day in raw_data["raw_days"]
+                ]
+                disk_payload["lats"] = _serialize_array(raw_data["lats"])
+                disk_payload["lons"] = _serialize_array(raw_data["lons"])
+                put_cache(d, False, disk_payload)
+
+                _precache_status["done"] += 1
+                logger.info("Pre-cache: cached %s (%d/%d)",
+                            d, _precache_status["done"], _precache_status["total"])
+            except Exception as e:
+                logger.warning("Pre-cache: failed %s: %s", d, e)
+                _precache_status["errors"].append(f"{d}: {e}")
+                _precache_status["done"] += 1
+
+            # Pause between fetches to avoid ERDDAP rate limits
+            # and to leave the worker available for user requests
+            time.sleep(delay_s)
+
+        _precache_status["running"] = False
+        logger.info("Pre-cache: complete. %d/%d cached, %d errors",
+                     _precache_status["done"], _precache_status["total"],
+                     len(_precache_status["errors"]))
+
+    threading.Thread(target=_run_precache, args=(uncached, delay), daemon=True).start()
+
+    return json.dumps({
+        "message": f"Started pre-caching {len(uncached)} dates ({len(target_dates) - len(uncached)} already cached)",
+        "uncached": [str(d) for d in uncached[:10]],  # show first 10
+        "total": len(uncached),
+    }), 200, {"Content-Type": "application/json"}
+
+
+@server.route("/api/precache/status")
+def precache_status():
+    """Check pre-cache progress."""
+    return json.dumps(_precache_status), 200, {"Content-Type": "application/json"}
 
 
 # ---- Server-side raw data cache ----
