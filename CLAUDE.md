@@ -66,7 +66,7 @@ GFW Fishing Activity (separate data path):
 | `layout/mapview.py` | dl.Map with custom panes, loading overlay, hamburger button |
 | `map/overlay.py` | Array → RGBA → base64 PNG |
 | `map/colorscale.py` | Legend component, adaptive color bounds |
-| `map/pois.py` | 20 fishing spots + The Dump rectangle, multi-select picker |
+| `map/pois.py` | 32 fishing spots + The Dump rectangle, multi-select picker |
 | `map/measure.py` | Haversine distance, initial bearing, compass direction |
 | `config.json` | AOI polygon, ERDDAP servers, search terms |
 | `assets/gotone.css` | GotOne brand CSS overrides (colors, dark sidebar, inputs, mobile responsive) |
@@ -86,7 +86,7 @@ GFW Fishing Activity (separate data path):
 10. **render_click_marker** — Shows temp reading at clicked position (reads server-side cache)
 11. **toggle_measure** — Activates/deactivates measure mode
 12. **update_poi_count** — Shows "All" or "n/total" count next to "Spots" label
-13. **toggle_layers** — Shows/hides NOAA ENC and GEBCO layers based on sidebar checklist
+13. **toggle_layers** — Shows/hides NOAA ENC, GEBCO, and GFW fishing activity layers based on sidebar checklist
 14. **update_sst_opacity** — Adjusts SST overlay opacity from sidebar slider
 15. **clientside: drawer toggle** — Opens/closes mobile sidebar drawer + backdrop (toggles `drawer-open` class)
 16. **clientside: POI collapse toggle** — Expands/collapses POI checklist, flips chevron (▾/▴)
@@ -150,6 +150,18 @@ GFW Fishing Activity (separate data path):
 - **Graceful degradation**: If `GFW_API_TOKEN` env var is not set, proxy returns 204 (no content) and tiles are transparent. The checkbox still appears but does nothing.
 - **Layer z-index**: 420 (above SST at 410, below POI markers at 450) so fishing dots render on top of temperature colors.
 - **Token**: JWT with 10-year expiry. Set as `GFW_API_TOKEN` env var on Render and locally.
+- **AOI bounds clipping**: `bounds=[[38.80, -74.96], [43.80, -68.80]]` on the TileLayer prevents tiles from loading outside the SST coverage area. Reduces proxy requests and eliminates visual clutter.
+
+### Pre-Cache System
+- **Endpoint**: `GET /api/precache` triggers background fetching of historical SST data for tuna season dates (Jun–Nov, weekly intervals, 2020–2025).
+- **Status**: `GET /api/precache/status` returns JSON with `running`, `done`, `total`, `errors`.
+- **Background thread**: Fetches run in a daemon thread with configurable delay between requests (`?delay=30` default). Uses the same `get_sst_multiday()` → `_build_payload()` → `put_cache()` pipeline as the main fetch callback.
+- **Query params**: `start_year`, `end_year`, `months` (comma-sep), `interval` (days between dates, default 7), `delay` (seconds between fetches, default 30).
+- **Skips already-cached dates**: Checks disk cache before fetching. Safe to re-run after interruptions.
+- **Cache persistence**: Disk cache survives Render deploys. Pre-cached dates stay cached permanently (only dates within 3 days of today are considered stale).
+- **MAX_ENTRIES**: Bumped from 200 to 500 in `data/cache.py` to accommodate pre-cached data.
+- **Timing**: ~1 date per minute (30s fetch + 30s delay). Full 180 dates takes ~3 hours.
+- **Known issue**: On Render's single worker, very slow ERDDAP fetches can occasionally starve health check requests. The 30s delay between fetches mitigates this. If the worker restarts, the in-memory status resets but cached files persist — just hit `/api/precache` again and it skips already-cached dates.
 
 ### Render Deployment
 - **Must use 1 gunicorn worker.** The `_raw_data_cache` is per-process. With multiple workers, a click request may be served by a worker that doesn't have the data. The disk cache fallback mitigates this, but 1 worker is the intended config.
@@ -216,9 +228,11 @@ All clicks route through a single `handle_map_click` callback. Only one tooltip 
 - **Pre-rendering PNGs server-side** with unified vmin/vmax makes frame switching instant — the clientside callback just selects a pre-built base64 URL.
 - **1x native upsample**: Dropped from 2x to 1x when AOI expanded — reduces payload by ~62% with no visible quality difference at typical zoom levels. The `upsample_visual()` call with factor 1 returns the array unchanged.
 - **AOI coverage**: Cape May, NJ (38.80°N) to Portland, ME (43.80°N), ~501×617 grid at MUR 1km. Bounding box: 5.00° lat × 6.16° lon.
-- **Cache hit path**: disk read + decompress + parse → ~1-2s. No ERDDAP call needed.
-- **Cache miss path**: 7 parallel ERDDAP fetches → 30-90s. Data cached for instant future loads.
+- **Cache hit path**: disk read + decompress + parse → ~2-5s on Render. No ERDDAP call needed.
+- **Cache miss path**: 7 parallel ERDDAP fetches → 20-50s on Render (cloud-to-cloud), 60-120s+ on localhost (residential internet). Data cached for instant future loads.
+- **Localhost timeout issue**: Expanded AOI ERDDAP fetches often exceed Dash's ~30s browser callback timeout, causing "server did not respond" and a stuck loading overlay. Data may still finish fetching server-side. On Render, faster network usually completes within timeout.
 - **AOI change invalidates cache**: Disk-cached data has bounding box baked in. After AOI polygon changes, old caches will have wrong bounds — first fetch after change will be a cache miss.
+- **Pre-cache strategy**: `/api/precache` endpoint populates disk cache for tuna season dates. Once cached, 2020–2025 Jun–Nov dates load in 2-5s instead of 30-50s.
 
 ## POI Fishing Spots (32 points + 1 rectangle)
 ```
@@ -270,6 +284,14 @@ The Dump (source: saltycape.com):
 ```bash
 cd "Offshore Trip Planner"
 source .venv/bin/activate
+export GFW_API_TOKEN="your-token-here"  # optional, for fishing activity layer
 python app.py
 # → http://localhost:8050
 ```
+
+## Environment Variables
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `GFW_API_TOKEN` | No | Global Fishing Watch API token (JWT). Enables fishing activity overlay. Without it, layer degrades gracefully (transparent tiles). |
+| `SST_CACHE_DIR` | No | Cache directory path (default: `./cache`). |
+| `PORT` | Render only | Set automatically by Render for gunicorn binding. |

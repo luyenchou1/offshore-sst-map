@@ -1,15 +1,18 @@
 # Changelog
 
-## 2026-04-02 — Fishing Activity Overlay (v2.3)
+## 2026-04-02 — Fishing Activity Overlay & Pre-Cache (v2.3)
 
 ### Added
 - **Global Fishing Watch integration**: New "Fishing activity" layer in sidebar shows commercial fishing vessel activity (draggers, trawlers) as colored dots overlaid on the map. Helps tuna fishermen spot productive areas.
 - **Server-side tile proxy** (`/api/gfw/`): Fetches GFW 4Wings fishing effort tiles with Bearer auth so the API token stays server-side. Requires `GFW_API_TOKEN` env var.
 - **Date-synced fishing data**: GFW tile date range automatically matches the SST 7-day window. Cache-busting query param ensures tiles refresh when dates change.
+- **Pre-cache endpoint** (`/api/precache`): Background worker pre-fetches and caches SST data for tuna season dates (Jun–Nov, 2020–2025). Status at `/api/precache/status`. Reduces load times from 30-50s to 2-5s for historical dates.
 - **`.env` in `.gitignore`**: Prevents accidental commit of API tokens.
 
 ### Changed
 - **GFW layer renders above SST** (zIndex 420, between SST at 410 and POI markers at 450) for clear visibility of fishing activity dots over temperature colors.
+- **GFW tiles clipped to AOI boundary**: `bounds` on TileLayer prevents loading/rendering fishing dots outside SST coverage area. Cleaner visual + fewer proxy requests.
+- **Cache MAX_ENTRIES bumped to 500** (from 200) to accommodate pre-cached historical data.
 
 ---
 
