@@ -51,7 +51,19 @@ GFW Fishing Activity (separate data path):
   → Leaflet requests /api/gfw/{z}/{x}/{y}.png?dr=START,END
   → Flask proxy calls GFW generate-png (once per date range, cached)
   → Fetches styled tile with Bearer auth → returns PNG to browser
-  → Tiles cached 1hr (Cache-Control: public, max-age=3600)
+  → Tiles cached 24hr (Cache-Control: public, max-age=86400)
+  → updateWhenZooming=False prevents proxy flood during zoom
+
+Pre-cache (memory-efficient raw-only mode):
+  /api/precache → _run_precache thread → for each date:
+    get_sst_multiday() → _precache_single_date() (one day at a time):
+      orient + mask → running percentiles (no np.concatenate)
+      → serialize array → free → next day
+    → put_cache() with frames=None (no PNG rendering)
+    → 120s hard timeout per date via ThreadPoolExecutor
+  On user load of raw-only cache entry:
+    _build_payload_from_disk_cache() renders PNGs on-the-fly (~2-3s)
+    → background thread upgrades cache with PNGs for instant future loads
 ```
 
 ### Key Files
@@ -140,6 +152,8 @@ GFW Fishing Activity (separate data path):
 - **Use `_serialize_array()` / `_deserialize_array()`** — base64-encoded numpy `.npy` format. Only 1.3x memory overhead vs 3x+ for `.tolist()`.
 - **Always populate `_raw_data_cache` before disk write.** If the disk write OOMs or crashes the worker, the memory cache is already set and clicks work. The callback response is also faster since the disk write happens asynchronously.
 - **Disk write in background thread** — `threading.Thread(target=_write_disk_cache, daemon=True)`. Non-blocking, so the fetch callback returns immediately to the browser.
+- **Pre-cache uses raw-only mode** (`_precache_single_date`): Processes one day at a time, serializes immediately, frees the numpy array before moving to the next. Running percentiles instead of `np.concatenate` avoids the 16 MB temporary allocation. Skips PNG rendering entirely. Peak memory ~30-35 MB per iteration vs 65-70 MB with `_build_payload`.
+- **Per-date timeout**: 120s hard limit via `ThreadPoolExecutor` prevents ERDDAP hangs from blocking the worker. Timed-out dates are skipped and logged as errors.
 
 ### Global Fishing Watch Integration
 - **GFW 4Wings API**: Two-step process — POST to `generate-png` to get a styled tile URL template with color ramp, then GET individual tiles at `{z}/{x}/{y}` using that template.
@@ -151,25 +165,31 @@ GFW Fishing Activity (separate data path):
 - **Layer z-index**: 420 (above SST at 410, below POI markers at 450) so fishing dots render on top of temperature colors.
 - **Token**: JWT with 10-year expiry. Set as `GFW_API_TOKEN` env var on Render and locally.
 - **AOI bounds clipping**: `bounds=[[38.80, -74.96], [43.80, -68.80]]` on the TileLayer prevents tiles from loading outside the SST coverage area. Reduces proxy requests and eliminates visual clutter.
+- **Zoom-aware tile loading**: `updateWhenZooming=False` + `updateWhenIdle=True` prevents GFW tile requests from flooding the single worker during zoom animations. `keepBuffer=4` retains more off-screen tiles to reduce re-fetches on pan-back.
+- **Browser cache**: `Cache-Control: max-age=86400` (24 hours). Historical GFW data is static, so aggressive caching is safe. Tiles for different date ranges use different proxy URLs (via `?dr=` param).
 
 ### Pre-Cache System
 - **Endpoint**: `GET /api/precache` triggers background fetching of historical SST data for tuna season dates (Jun–Nov, weekly intervals, 2020–2025).
-- **Status**: `GET /api/precache/status` returns JSON with `running`, `done`, `total`, `errors`.
-- **Background thread**: Fetches run in a daemon thread with configurable delay between requests (`?delay=30` default). Uses the same `get_sst_multiday()` → `_build_payload()` → `put_cache()` pipeline as the main fetch callback.
-- **Query params**: `start_year`, `end_year`, `months` (comma-sep), `interval` (days between dates, default 7), `delay` (seconds between fetches, default 30).
-- **Skips already-cached dates**: Checks disk cache before fetching. Safe to re-run after interruptions.
-- **Cache persistence**: Disk cache survives Render deploys. Pre-cached dates stay cached permanently (only dates within 3 days of today are considered stale).
-- **MAX_ENTRIES**: Bumped from 200 to 500 in `data/cache.py` to accommodate pre-cached data.
-- **Timing**: ~1 date per minute (30s fetch + 30s delay). Full 180 dates takes ~3 hours.
-- **Known issue**: On Render's single worker, very slow ERDDAP fetches can occasionally starve health check requests. The 30s delay between fetches mitigates this. If the worker restarts, the in-memory status resets but cached files persist — just hit `/api/precache` again and it skips already-cached dates.
+- **Status**: `GET /api/precache/status` returns JSON with `running`, `done`, `total`, `errors`, `cache_dir`, `cached_files`.
+- **Raw-only mode**: Pre-cache uses `_precache_single_date()` which skips PNG rendering entirely. Processes each day individually (serialize → free → next), uses running percentiles instead of `np.concatenate`. Peak memory ~30-35 MB per iteration (down from 65-70 MB with `_build_payload`).
+- **On-the-fly PNG rendering**: When a user loads a raw-only cache entry (`frames: None`), `_build_payload_from_disk_cache()` renders PNGs on-the-fly (~2-3s). A background thread then upgrades the cache entry with PNGs so subsequent loads are instant.
+- **Per-date timeout**: 120s hard timeout via `ThreadPoolExecutor`. If ERDDAP hangs, the date is skipped and logged as an error instead of blocking the worker indefinitely. Prevents Render health-check failures.
+- **Query params**: `start_year`, `end_year`, `months` (comma-sep), `interval` (days between dates, default 7), `delay` (seconds between fetches, default 45).
+- **Skips already-cached dates**: Checks disk cache before fetching. Safe to re-run after interruptions or worker restarts.
+- **Cache persistence**: Render Persistent Disk ($0.25/GB/month) at `/var/data/cache`. Set via `SST_CACHE_DIR` env var. Cache survives worker restarts and deploys. Without persistent disk, Render's ephemeral filesystem wipes cache on every container restart.
+- **MAX_ENTRIES**: 500 in `data/cache.py` to accommodate pre-cached data.
+- **Timing**: ~1 date per 90 seconds (45s fetch + 45s delay on Render). Full 180 dates takes ~4-5 hours.
+- **Idempotent**: Safe to call `/api/precache` multiple times. Already-cached dates are skipped. If the worker restarts mid-run, just hit the endpoint again to resume.
+- **`raw_only` parameter on `_build_payload_from_disk_cache()`**: When `True`, skips PNG rendering entirely (returns `frames=[]`). Used by `_get_raw_data()` for click-lookup paths and pre-warm thread, where only raw arrays are needed.
 
 ### Render Deployment
 - **Must use 1 gunicorn worker.** The `_raw_data_cache` is per-process. With multiple workers, a click request may be served by a worker that doesn't have the data. The disk cache fallback mitigates this, but 1 worker is the intended config.
 - **Start command must be set in Render Settings** (not blank — Render requires a value). Use: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --timeout 180`
 - **Auto-deploy is currently OFF.** Use Manual Deploy after pushing to `main`.
-- **Pre-warm thread** runs 15s after startup. Only loads from disk cache (no ERDDAP). Heavy ERDDAP fetches during startup starve the gunicorn worker and cause Render's health check to fail, hanging the deploy indefinitely.
-- **Disk cache persists across deploys** (Render Starter has persistent filesystem). Previously fetched dates load instantly from cache.
+- **Pre-warm thread** runs 15s after startup. Only loads from disk cache (no ERDDAP, uses `raw_only=True` to skip PNG rendering). Heavy ERDDAP fetches during startup starve the gunicorn worker and cause Render's health check to fail, hanging the deploy indefinitely.
+- **Persistent Disk**: 1 GB disk mounted at `/var/data/cache`. Set `SST_CACHE_DIR=/var/data/cache` in Render Environment. Cache survives worker restarts and deploys. Without this, Render's ephemeral filesystem wipes cache on every container restart — the pre-cache system is useless without persistent storage.
 - **`GFW_API_TOKEN` env var** must be set in Render Environment for fishing activity layer. Without it, the layer degrades gracefully (transparent tiles).
+- **Health check failures**: Caused by ERDDAP stalls blocking the single worker. The pre-cache 120s timeout and GFW tile `updateWhenZooming=False` mitigate this. If the worker restarts, persistent disk preserves cache files.
 
 ### Custom Domain & Squarespace Integration
 - **Custom domain**: `sst.gotoneapp.com` — CNAME in Squarespace DNS pointing to `offshore-sst-map.onrender.com`. Added as custom domain in Render dashboard; SSL auto-provisioned by Render.
@@ -232,7 +252,8 @@ All clicks route through a single `handle_map_click` callback. Only one tooltip 
 - **Cache miss path**: 7 parallel ERDDAP fetches → 20-50s on Render (cloud-to-cloud), 60-120s+ on localhost (residential internet). Data cached for instant future loads.
 - **Localhost timeout issue**: Expanded AOI ERDDAP fetches often exceed Dash's ~30s browser callback timeout, causing "server did not respond" and a stuck loading overlay. Data may still finish fetching server-side. On Render, faster network usually completes within timeout.
 - **AOI change invalidates cache**: Disk-cached data has bounding box baked in. After AOI polygon changes, old caches will have wrong bounds — first fetch after change will be a cache miss.
-- **Pre-cache strategy**: `/api/precache` endpoint populates disk cache for tuna season dates. Once cached, 2020–2025 Jun–Nov dates load in 2-5s instead of 30-50s.
+- **Pre-cache strategy**: `/api/precache` endpoint populates disk cache for tuna season dates. Once cached, 2020–2025 Jun–Nov dates load in 2-5s instead of 30-50s. Raw-only cache entries add ~2-3s for on-the-fly PNG rendering on first user load; background thread upgrades to full cache (with PNGs) for instant subsequent loads.
+- **GFW tile proxy blocking**: On zoom, Leaflet requests multiple GFW tiles through the server-side proxy, each blocking the single worker briefly. `updateWhenZooming=False` + `updateWhenIdle=True` on the TileLayer prevents tile flood during zoom animations, keeping the worker free for click callbacks.
 
 ## POI Fishing Spots (32 points + 1 rectangle)
 ```
@@ -293,5 +314,5 @@ python app.py
 | Variable | Required | Purpose |
 |----------|----------|---------|
 | `GFW_API_TOKEN` | No | Global Fishing Watch API token (JWT). Enables fishing activity overlay. Without it, layer degrades gracefully (transparent tiles). |
-| `SST_CACHE_DIR` | No | Cache directory path (default: `./cache`). |
+| `SST_CACHE_DIR` | Yes (Render) | Cache directory path. Set to `/var/data/cache` on Render (persistent disk mount). Default `./cache` for local dev. |
 | `PORT` | Render only | Set automatically by Render for gunicorn binding. |

@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-04-04 — Pre-Cache Optimization & Persistent Storage (v2.4)
+
+### Added
+- **Raw-only pre-cache mode** (`_precache_single_date`): Processes each day individually — serialize, free, move to next. Uses running percentiles instead of `np.concatenate`. Skips PNG rendering entirely. Peak memory drops from ~65-70 MB to ~30-35 MB per iteration.
+- **On-the-fly PNG rendering**: Raw-only cache entries (`frames: null`) get PNGs rendered when a user first loads them (~2-3s). Background thread then upgrades the cache entry with PNGs for instant subsequent loads.
+- **Per-date timeout**: 120s hard limit via `ThreadPoolExecutor` in pre-cache loop. ERDDAP hangs get skipped instead of blocking the worker indefinitely, preventing Render health-check failures.
+- **Render Persistent Disk**: 1 GB disk at `/var/data/cache` ($0.25/GB/month). Cache survives worker restarts and deploys. Set via `SST_CACHE_DIR` env var.
+- **Cache diagnostics**: `/api/precache/status` now includes `cache_dir` and `cached_files` count for verifying persistent disk setup.
+
+### Changed
+- **GFW tile loading optimized**: `updateWhenZooming=False` + `updateWhenIdle=True` + `keepBuffer=4` on GFW TileLayer. Prevents proxy request flood during zoom animations that was blocking click callbacks and causing tooltip delay.
+- **GFW tile browser cache bumped to 24 hours** (from 1 hour). Historical fishing activity data is static.
+- **Pre-cache default delay increased to 45s** (from 30s) to reduce ERDDAP rate limiting.
+- **Pre-warm thread uses `raw_only=True`** to skip unnecessary PNG rendering on startup.
+
+### Fixed
+- **Pre-cache OOM on Render 512 MB**: Old `_build_payload` held all 7 days + PNGs + serialized arrays simultaneously (~65-70 MB peak). New `_precache_single_date` processes one day at a time (~30-35 MB peak).
+- **Pre-cache losing progress on restart**: Render's ephemeral filesystem wiped cache files on every container restart. Persistent disk solves this permanently.
+- **Tooltip delay after zoom**: GFW tile proxy requests flooding the single worker prevented click callbacks from responding. Zoom-aware tile loading fixes this.
+
+---
+
 ## 2026-04-02 — Fishing Activity Overlay & Pre-Cache (v2.3)
 
 ### Added
@@ -123,7 +145,7 @@ Full feature release combining nautical chart/bathymetry layers, SST opacity con
 
 ### Changed
 - **Removed Dash background callbacks**: `background=True` with `DiskcacheManager` caused 502s on Render due to large polling responses. Reverted to synchronous callbacks with separate loading-overlay callback for UI feedback.
-- **Render deployment**: Added 1 GB persistent disk ($0.30/month) for SST cache. Env var `SST_CACHE_DIR` points to persistent mount.
+- **Render deployment**: Env var `SST_CACHE_DIR` configures cache directory path. Persistent disk added in v2.4.
 - **Disk cache serialization**: Switched from `.tolist()` + JSON (3x memory overhead) to base64-encoded numpy `.npy` format (1.3x overhead). Backward-compatible with old v1 caches. Disk write now runs in a background thread.
 
 ### Removed
