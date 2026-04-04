@@ -279,8 +279,17 @@ def precache_endpoint():
 
 @server.route("/api/precache/status")
 def precache_status():
-    """Check pre-cache progress."""
-    return json.dumps(_precache_status), 200, {"Content-Type": "application/json"}
+    """Check pre-cache progress, including cache directory diagnostics."""
+    from data.cache import CACHE_DIR
+    status = dict(_precache_status)
+    # Debug info for verifying persistent disk setup
+    status["cache_dir"] = str(CACHE_DIR)
+    try:
+        files = list(CACHE_DIR.glob("*.json.gz"))
+        status["cached_files"] = len(files)
+    except Exception:
+        status["cached_files"] = -1
+    return json.dumps(status), 200, {"Content-Type": "application/json"}
 
 
 # ---- Server-side raw data cache ----
