@@ -26,7 +26,7 @@ import dash_leaflet as dl
 import numpy as np
 from dash import Input, Output, State, ctx, dcc, html
 
-from data.cache import get_cached, is_stale, put_cache
+from data.cache import find_nearest_cached, get_cached, is_stale, put_cache
 from data.convert import upsample_visual
 from data.erddap import get_sst_multiday
 from data.geo import mask_aoi_rasterized, mask_land_rasterized, orient_to_leaflet
@@ -741,13 +741,17 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
     data_key = _cache_key(end_date, locked)
 
     try:
-        # Check disk cache first
+        # Check disk cache first — exact match, then nearby dates (±3 days)
         cached_hit = False
-        cached = get_cached(end_date, locked)
-        if cached and not is_stale(end_date):
-            logger.info("Serving from cache: %s", end_date)
+        actual_end_date = end_date
+        cached, actual_end_date_found = find_nearest_cached(end_date, locked)
+        if cached:
+            actual_end_date = actual_end_date_found
+            logger.info("Serving from cache: %s (requested %s)", actual_end_date, end_date)
             store_payload, raw_data = _build_payload_from_disk_cache(cached)
             cached_hit = True
+            # Update data_key to match actual cached date
+            data_key = _cache_key(actual_end_date, locked)
         else:
             # Cache miss — fetch from ERDDAP
             logger.info("Cache miss, fetching from ERDDAP: %s", end_date)
@@ -785,7 +789,7 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
 
             threading.Thread(
                 target=_upgrade_cache,
-                args=(store_payload, raw_data, end_date, locked),
+                args=(store_payload, raw_data, actual_end_date, locked),
                 daemon=True,
             ).start()
         elif not cached_hit:
@@ -823,8 +827,12 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
             d = datetime.strptime(d_str, "%Y-%m-%d")
             marks[i] = str(d.day)
 
+        status_text = f"MUR 1km \u2022 {num_days} days loaded"
+        if cached_hit and actual_end_date != end_date:
+            offset = (actual_end_date - end_date).days
+            status_text += f" (nearest cache: {offset:+d}d)"
         status = html.Div(
-            f"MUR 1km \u2022 {num_days} days loaded",
+            status_text,
             className="text-success",
             style={"fontSize": "0.75rem", "fontWeight": "500"},
         )

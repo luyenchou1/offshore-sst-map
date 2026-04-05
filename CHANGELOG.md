@@ -4,6 +4,10 @@
 
 ### Added
 - **Version indicator** in sidebar UI — shows current version (bottom-right of sidebar body).
+- **Fuzzy cache lookup** (`find_nearest_cached()`): When the exact end date isn't cached, checks ±3 nearby days. Pre-cached entries are every 7 days, so most dates within tuna season now hit a cache entry that's at most 3 days off — avoiding slow ERDDAP fetches entirely. Status message shows offset when serving from a nearby cache (e.g., "nearest cache: +1d").
+
+### Fixed
+- **Loading overlay stuck after fetch error**: The spinner was never hidden when ERDDAP timed out. Added `map-loading-overlay` as an output of the fetch callback so both success and error paths hide it.
 
 ### Summary
 First official release. All core features stable: 7-day SST animation, 32 POI fishing spots, GFW fishing activity overlay, measure tool, mobile-responsive drawer, pre-cached tuna season data (2020–2025), persistent disk cache, multi-threaded gunicorn with server-side tile caching.

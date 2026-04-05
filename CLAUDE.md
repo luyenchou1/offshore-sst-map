@@ -75,7 +75,7 @@ Pre-cache (memory-efficient raw-only mode):
 | `data/erddap.py` | ERDDAP search, fetch, multi-day parallel download |
 | `data/geo.py` | Orient arrays, AOI mask, land mask (all 2D only) |
 | `data/convert.py` | Kelvin→Fahrenheit, 2x visual upsample |
-| `data/cache.py` | Disk-based gzip JSON cache with staleness checks |
+| `data/cache.py` | Disk-based gzip JSON cache with staleness checks and fuzzy lookup |
 | `layout/sidebar.py` | Date picker, animation controls, collapsible POI checklist, fetch button, version indicator |
 | `layout/mapview.py` | dl.Map with custom panes, loading overlay, hamburger button |
 | `map/overlay.py` | Array → RGBA → base64 PNG |
@@ -253,6 +253,7 @@ All clicks route through a single `handle_map_click` callback. Only one tooltip 
 - **1x native upsample**: Dropped from 2x to 1x when AOI expanded — reduces payload by ~62% with no visible quality difference at typical zoom levels. The `upsample_visual()` call with factor 1 returns the array unchanged.
 - **AOI coverage**: Cape May, NJ (38.80°N) to Portland, ME (43.80°N), ~501×617 grid at MUR 1km. Bounding box: 5.00° lat × 6.16° lon.
 - **Cache hit path**: disk read + decompress + parse → ~2-5s on Render. No ERDDAP call needed.
+- **Fuzzy cache lookup**: `find_nearest_cached()` in `data/cache.py` checks ±3 days around the requested end date. With pre-cached entries every 7 days, most tuna-season dates hit a nearby cache within 3 days — avoiding ERDDAP entirely. Status shows "(nearest cache: +1d)" when offset. The `data_key` in `sst-store` reflects the actual cached date so click-to-read-temp works correctly.
 - **Cache miss path**: 7 parallel ERDDAP fetches → 20-50s on Render (cloud-to-cloud), 60-120s+ on localhost (residential internet). Data cached for instant future loads.
 - **Localhost timeout issue**: Expanded AOI ERDDAP fetches often exceed Dash's ~30s browser callback timeout, causing "server did not respond" and a stuck loading overlay. Data may still finish fetching server-side. On Render, faster network usually completes within timeout.
 - **AOI change invalidates cache**: Disk-cached data has bounding box baked in. After AOI polygon changes, old caches will have wrong bounds — first fetch after change will be a cache miss.

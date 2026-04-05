@@ -101,6 +101,27 @@ def is_stale(end_date: date) -> bool:
     return False
 
 
+def find_nearest_cached(end_date: date, locked: bool, max_offset: int = 3) -> tuple:
+    """Find the nearest cached entry within ±max_offset days.
+
+    Returns (cached_payload, actual_end_date) or (None, None) if no
+    nearby cache exists.  Checks the exact date first, then alternates
+    +1, -1, +2, -2, … up to ±max_offset.
+    """
+    for offset in range(max_offset + 1):
+        for sign in ([0] if offset == 0 else [1, -1]):
+            candidate = end_date + timedelta(days=offset * sign)
+            cached = get_cached(candidate, locked)
+            if cached and not is_stale(candidate):
+                if offset != 0:
+                    logger.info(
+                        "Fuzzy cache HIT: requested %s, serving %s (offset %+d)",
+                        end_date, candidate, offset * sign,
+                    )
+                return cached, candidate
+    return None, None
+
+
 def evict_old(max_entries: int = MAX_ENTRIES) -> None:
     """Delete oldest cache files if count exceeds max_entries."""
     try:
