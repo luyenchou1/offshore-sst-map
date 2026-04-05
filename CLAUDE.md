@@ -11,8 +11,9 @@ Dash 4.0 web app ("GotOne Offshore SST Analyzer") branded for [gotoneapp.com](ht
 - Dev server: `python app.py` (port 8050)
 - Production: **Render Starter** ($7/month) at https://offshore-sst-map.onrender.com
   - Custom domain: `sst.gotoneapp.com` (CNAME → Render, SSL auto-provisioned)
-  - Start command: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --timeout 180`
+  - Start command: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 180`
   - Must be 1 worker (raw data cache is in-memory per process)
+  - 4 threads allows concurrent I/O (GFW tile proxy, click callbacks) without separate processes
   - Auto-deploy is OFF — use Manual Deploy in Render dashboard
 - **Squarespace embed**: iframe on `gotoneapp.com/offshore-sst` loads the app inline
   - `Content-Security-Policy: frame-ancestors` header allows embedding from gotoneapp.com
@@ -184,7 +185,8 @@ Pre-cache (memory-efficient raw-only mode):
 
 ### Render Deployment
 - **Must use 1 gunicorn worker.** The `_raw_data_cache` is per-process. With multiple workers, a click request may be served by a worker that doesn't have the data. The disk cache fallback mitigates this, but 1 worker is the intended config.
-- **Start command must be set in Render Settings** (not blank — Render requires a value). Use: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --timeout 180`
+- **4 threads per worker** (`--threads 4`): GFW tile proxy and click callbacks are I/O-bound. With threads, `requests.get()` releases the GIL during network I/O, so tile fetches and click lookups run concurrently. Without threads, ~42 GFW tile proxy requests after zoom block click callbacks for several seconds. Python's GIL keeps dict operations on shared state (`_raw_data_cache`, `_gfw_style_cache`) atomic.
+- **Start command must be set in Render Settings** (not blank — Render requires a value). Use: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 180`
 - **Auto-deploy is currently OFF.** Use Manual Deploy after pushing to `main`.
 - **Pre-warm thread** runs 15s after startup. Only loads from disk cache (no ERDDAP, uses `raw_only=True` to skip PNG rendering). Heavy ERDDAP fetches during startup starve the gunicorn worker and cause Render's health check to fail, hanging the deploy indefinitely.
 - **Persistent Disk**: 1 GB disk mounted at `/var/data/cache`. Set `SST_CACHE_DIR=/var/data/cache` in Render Environment. Cache survives worker restarts and deploys. Without this, Render's ephemeral filesystem wipes cache on every container restart — the pre-cache system is useless without persistent storage.
@@ -253,7 +255,7 @@ All clicks route through a single `handle_map_click` callback. Only one tooltip 
 - **Localhost timeout issue**: Expanded AOI ERDDAP fetches often exceed Dash's ~30s browser callback timeout, causing "server did not respond" and a stuck loading overlay. Data may still finish fetching server-side. On Render, faster network usually completes within timeout.
 - **AOI change invalidates cache**: Disk-cached data has bounding box baked in. After AOI polygon changes, old caches will have wrong bounds — first fetch after change will be a cache miss.
 - **Pre-cache strategy**: `/api/precache` endpoint populates disk cache for tuna season dates. Once cached, 2020–2025 Jun–Nov dates load in 2-5s instead of 30-50s. Raw-only cache entries add ~2-3s for on-the-fly PNG rendering on first user load; background thread upgrades to full cache (with PNGs) for instant subsequent loads.
-- **GFW tile proxy blocking**: On zoom, Leaflet requests multiple GFW tiles through the server-side proxy, each blocking the single worker briefly. `updateWhenZooming=False` + `updateWhenIdle=True` on the TileLayer prevents tile flood during zoom animations, keeping the worker free for click callbacks.
+- **GFW tile proxy blocking**: On zoom, Leaflet requests ~42 GFW tiles through the server-side proxy, each taking ~1s (GFW API latency). Without threading, these block click callbacks for several seconds. Fix: `--threads 4` allows concurrent I/O (tile fetches release the GIL). `updateWhenZooming=False` + `updateWhenIdle=True` + `keepBuffer=4` further reduce tile requests.
 
 ## POI Fishing Spots (32 points + 1 rectangle)
 ```
