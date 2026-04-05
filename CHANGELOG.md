@@ -3,7 +3,8 @@
 ## 2026-04-04 — Pre-Cache Optimization & Persistent Storage (v2.4)
 
 ### Added
-- **Multi-threaded gunicorn** (`--threads 4`): GFW tile proxy requests release the GIL during network I/O, allowing click callbacks to run concurrently. Fixes the multi-second tooltip delay after zoom when ~42 GFW tile requests flood the single worker.
+- **Multi-threaded gunicorn** (`--threads 16`): GFW tile proxy requests release the GIL during network I/O, allowing click callbacks to run concurrently. With 16 threads, ~48 tile requests process in ~3 rounds instead of ~12, keeping threads free for click callbacks.
+- **Server-side GFW tile cache** (`_gfw_tile_cache`): Caches both 200 and 404 tile responses in memory. ~Half of tile requests return 404 (empty ocean), each saving a ~1s GFW API round-trip. After first zoom to an area, subsequent visits are instant from cache. Cleared on date range change.
 - **Raw-only pre-cache mode** (`_precache_single_date`): Processes each day individually — serialize, free, move to next. Uses running percentiles instead of `np.concatenate`. Skips PNG rendering entirely. Peak memory drops from ~65-70 MB to ~30-35 MB per iteration.
 - **On-the-fly PNG rendering**: Raw-only cache entries (`frames: null`) get PNGs rendered when a user first loads them (~2-3s). Background thread then upgrades the cache entry with PNGs for instant subsequent loads.
 - **Per-date timeout**: 120s hard limit via `ThreadPoolExecutor` in pre-cache loop. ERDDAP hangs get skipped instead of blocking the worker indefinitely, preventing Render health-check failures.
@@ -19,7 +20,7 @@
 ### Fixed
 - **Pre-cache OOM on Render 512 MB**: Old `_build_payload` held all 7 days + PNGs + serialized arrays simultaneously (~65-70 MB peak). New `_precache_single_date` processes one day at a time (~30-35 MB peak).
 - **Pre-cache losing progress on restart**: Render's ephemeral filesystem wiped cache files on every container restart. Persistent disk solves this permanently.
-- **Tooltip delay after zoom**: GFW tile proxy requests (~42 after zoom) flooding the single-threaded worker prevented click callbacks from responding. Multi-threaded gunicorn (`--threads 4`) allows concurrent I/O so click callbacks aren't blocked. Zoom-aware tile loading (`updateWhenZooming=False`, `keepBuffer=4`) further reduces tile request volume.
+- **Tooltip delay after zoom**: GFW tile proxy requests (~48 after zoom) flooding the worker prevented click callbacks from responding. Multi-threaded gunicorn (`--threads 16`) + server-side tile cache eliminates the delay. First zoom to a new area: ~3s. Subsequent zooms to same area: instant from cache.
 
 ---
 

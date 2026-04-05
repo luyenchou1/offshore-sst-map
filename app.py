@@ -75,6 +75,8 @@ def set_iframe_headers(response):
 # Proxy tiles through Flask so the token stays server-side.
 _gfw_style_cache = {"url_template": None, "date_range": None}
 _gfw_date_range = None  # "YYYY-MM-DD,YYYY-MM-DD" — updated by fetch_sst_data
+_gfw_tile_cache = {}  # (z, x, y, dr) → (content_bytes, status_code)
+_GFW_TILE_CACHE_MAX = 500  # max cached tiles before eviction
 
 
 def _get_gfw_style(date_range: str) -> str | None:
@@ -113,7 +115,13 @@ def _get_gfw_style(date_range: str) -> str | None:
 
 @server.route("/api/gfw/<int:z>/<int:x>/<int:y>.png")
 def gfw_tile_proxy(z, x, y):
-    """Proxy GFW fishing effort tiles with auth header."""
+    """Proxy GFW fishing effort tiles with auth header.
+
+    Includes server-side tile caching so repeat requests (zoom back,
+    pan back) return instantly without hitting GFW API. Both 200s and
+    404s are cached — 404s are ~half of all requests and each saves
+    a ~1s round-trip to GFW.
+    """
     global _gfw_style_cache
     token = os.environ.get("GFW_API_TOKEN")
     if not token:
@@ -126,6 +134,19 @@ def gfw_tile_proxy(z, x, y):
         end = date.today() - timedelta(days=4)
         start = end - timedelta(days=6)
         dr = f"{start},{end}"
+
+    # Check server-side tile cache first (instant, no GFW API call)
+    tile_key = (z, x, y, dr)
+    cached = _gfw_tile_cache.get(tile_key)
+    if cached is not None:
+        content, status = cached
+        if status == 200:
+            return Response(
+                content,
+                content_type="image/png",
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+        return "", status
 
     # Refresh style if date range changed or not yet initialized
     if _gfw_style_cache["url_template"] is None or _gfw_style_cache["date_range"] != dr:
@@ -146,6 +167,14 @@ def gfw_tile_proxy(z, x, y):
             headers={"Authorization": f"Bearer {token}"},
             timeout=10,
         )
+        # Cache both successes and failures (404s are ~half of requests)
+        if resp.status_code == 200:
+            _gfw_tile_cache[tile_key] = (resp.content, 200)
+        elif resp.status_code in (404, 204):
+            _gfw_tile_cache[tile_key] = (b"", resp.status_code)
+        # Evict if cache too large (simple clear — tiles repopulate fast)
+        if len(_gfw_tile_cache) > _GFW_TILE_CACHE_MAX:
+            _gfw_tile_cache.clear()
         if resp.status_code != 200:
             return "", resp.status_code
         return Response(
@@ -722,6 +751,7 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
         if sst_dates:
             _gfw_date_range = f"{sst_dates[0]},{sst_dates[-1]}"
             _gfw_style_cache = {"url_template": None, "date_range": None}
+            _gfw_tile_cache.clear()  # new date range → tiles change
 
         if cached_hit and cached.get("frames") is None:
             # Raw-only pre-cache entry — upgrade with rendered PNGs in
