@@ -18,6 +18,7 @@
 - **Pre-warm thread uses `raw_only=True`** to skip unnecessary PNG rendering on startup.
 
 ### Fixed
+- **Raw data cache OOM**: `_raw_data_cache` was unbounded — each date window adds ~25 MB of numpy arrays, and entries were never evicted. After fetching several dates, memory accumulated past 512 MB. Now limited to 2 entries via `_put_raw_cache()` with oldest-first eviction. Falls back to disk cache on miss.
 - **Pre-cache OOM on Render 512 MB**: Old `_build_payload` held all 7 days + PNGs + serialized arrays simultaneously (~65-70 MB peak). New `_precache_single_date` processes one day at a time (~30-35 MB peak).
 - **Pre-cache losing progress on restart**: Render's ephemeral filesystem wiped cache files on every container restart. Persistent disk solves this permanently.
 - **Tooltip delay after zoom**: GFW tile proxy requests (~48 after zoom) flooding the worker prevented click callbacks from responding. Multi-threaded gunicorn (`--threads 16`) + server-side tile cache eliminates the delay. First zoom to a new area: ~3s. Subsequent zooms to same area: instant from cache.

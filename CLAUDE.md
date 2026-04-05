@@ -145,7 +145,7 @@ Pre-cache (memory-efficient raw-only mode):
 - **dcc.Store payload must stay under ~7 MB** for reliable delivery on Render.
 - **Raw float arrays are the biggest culprit**: 7 days × ~93K floats × ~8 bytes/float = ~5 MB as numpy. These MUST be kept server-side.
 - **Store payload contents**: 7 base64 PNG frames (~6.5 MB) + dates + bounds + metadata = ~7 MB total.
-- **Server-side `_raw_data_cache`**: In-memory dict keyed by `"{end_date}_{mode}"`. Stores numpy arrays for click-to-read-temp lookups. **Populated BEFORE disk write** so clicks work even if disk write fails. Falls back to disk cache on miss (handles restarts).
+- **Server-side `_raw_data_cache`**: In-memory dict keyed by `"{end_date}_{mode}"`. Stores numpy arrays for click-to-read-temp lookups. **Limited to 2 entries** (~25 MB each) via `_put_raw_cache()` to stay within Render's 512 MB. Oldest entry evicted when limit exceeded. **Populated BEFORE disk write** so clicks work even if disk write fails. Falls back to disk cache on miss (handles restarts).
 - **Disk cache** (`data/cache.py`): Stores the FULL payload with raw arrays as **base64-encoded numpy `.npy`** format (v2) instead of JSON lists (v1). Written in a **background thread** to avoid blocking the callback response. Backward-compatible: reads both v1 and v2 formats.
 
 ### Memory Management on Render (512 MB)
@@ -167,7 +167,7 @@ Pre-cache (memory-efficient raw-only mode):
 - **Token**: JWT with 10-year expiry. Set as `GFW_API_TOKEN` env var on Render and locally.
 - **AOI bounds clipping**: `bounds=[[38.80, -74.96], [43.80, -68.80]]` on the TileLayer prevents tiles from loading outside the SST coverage area. Reduces proxy requests and eliminates visual clutter.
 - **Zoom-aware tile loading**: `updateWhenZooming=False` + `updateWhenIdle=True` prevents GFW tile requests from flooding the single worker during zoom animations. `keepBuffer=4` retains more off-screen tiles to reduce re-fetches on pan-back.
-- **Server-side tile cache** (`_gfw_tile_cache`): In-memory dict caches both 200 and 404 responses keyed by `(z, x, y, date_range)`. ~Half of tile requests return 404 from GFW (empty ocean areas), each saving a ~1s round-trip. Cache cleared on date range change. Max 500 entries with simple eviction. Memory: ~5-10 KB per tile × 500 = ~5 MB max.
+- **Server-side tile cache** (`_gfw_tile_cache`): In-memory dict caches both 200 and 404 responses keyed by `(z, x, y, date_range)`. ~Half of tile requests return 404 from GFW (empty ocean areas), each saving a ~1s round-trip. Cache cleared on date range change. Max 200 entries with simple eviction. Memory: ~5-10 KB per tile × 200 = ~2-4 MB max.
 - **Browser cache**: `Cache-Control: max-age=86400` (24 hours). Historical GFW data is static, so aggressive caching is safe. Tiles for different date ranges use different proxy URLs (via `?dr=` param).
 
 ### Pre-Cache System

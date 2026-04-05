@@ -76,7 +76,7 @@ def set_iframe_headers(response):
 _gfw_style_cache = {"url_template": None, "date_range": None}
 _gfw_date_range = None  # "YYYY-MM-DD,YYYY-MM-DD" — updated by fetch_sst_data
 _gfw_tile_cache = {}  # (z, x, y, dr) → (content_bytes, status_code)
-_GFW_TILE_CACHE_MAX = 500  # max cached tiles before eviction
+_GFW_TILE_CACHE_MAX = 200  # max cached tiles before eviction (~2-4 MB)
 
 
 def _get_gfw_style(date_range: str) -> str | None:
@@ -325,6 +325,18 @@ def precache_status():
 # Raw float arrays are too large (~18 MB) for dcc.Store / browser transport.
 # Keep them server-side; click callbacks read from here instead.
 _raw_data_cache = {}  # key → {"raw_days": [...], "lats": np.array, "lons": np.array}
+_RAW_CACHE_MAX = 2  # max entries (~25 MB each) — keep tight on 512 MB Render
+
+
+def _put_raw_cache(key, value):
+    """Store raw data with eviction to stay within memory budget."""
+    _raw_data_cache[key] = value
+    while len(_raw_data_cache) > _RAW_CACHE_MAX:
+        oldest = next(iter(_raw_data_cache))
+        if oldest != key:
+            del _raw_data_cache[oldest]
+        else:
+            break
 
 
 def _cache_key(end_date, locked):
@@ -359,7 +371,7 @@ def _get_raw_data(data_key):
         if cached:
             logger.info("_get_raw_data: disk cache HIT for %s, rebuilding raw data", data_key)
             _, raw_data = _build_payload_from_disk_cache(cached, raw_only=True)
-            _raw_data_cache[data_key] = raw_data
+            _put_raw_cache(data_key, raw_data)
             logger.info("Raw data loaded from disk cache: %s", data_key)
             return raw_data
         else:
@@ -743,7 +755,7 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
 
         # Store raw data server-side FIRST — must happen before disk write
         # so click callbacks work even if the disk write crashes or OOMs
-        _raw_data_cache[data_key] = raw_data
+        _put_raw_cache(data_key, raw_data)
 
         # Update GFW date range to match the SST window
         global _gfw_date_range, _gfw_style_cache
@@ -1366,7 +1378,7 @@ def _prewarm_cache():
         if cached and not is_stale(end_date):
             try:
                 _, raw_data = _build_payload_from_disk_cache(cached, raw_only=True)
-                _raw_data_cache[data_key] = raw_data
+                _put_raw_cache(data_key, raw_data)
                 logger.info("Pre-warm: loaded from disk cache %s (locked=%s)", end_date, locked)
             except Exception:
                 logger.warning("Pre-warm: disk cache parse failed for %s", end_date, exc_info=True)
