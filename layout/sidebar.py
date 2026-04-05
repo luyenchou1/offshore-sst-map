@@ -310,6 +310,16 @@ def build_sidebar():
                         ],
                         className="mt-2",
                     ),
+                    html.Div(
+                        "v1.0",
+                        style={
+                            "fontSize": "0.6rem",
+                            "color": "#475569",
+                            "textAlign": "right",
+                            "marginTop": "auto",
+                            "paddingTop": "0.75rem",
+                        },
+                    ),
                 ],
                 className="sidebar-body",
             ),

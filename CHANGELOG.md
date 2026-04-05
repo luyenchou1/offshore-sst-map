@@ -1,6 +1,16 @@
 # Changelog
 
-## 2026-04-04 — Pre-Cache Optimization & Persistent Storage (v2.4)
+## 2026-04-05 — Official Release (v1.0)
+
+### Added
+- **Version indicator** in sidebar UI — shows current version (bottom-right of sidebar body).
+
+### Summary
+First official release. All core features stable: 7-day SST animation, 32 POI fishing spots, GFW fishing activity overlay, measure tool, mobile-responsive drawer, pre-cached tuna season data (2020–2025), persistent disk cache, multi-threaded gunicorn with server-side tile caching.
+
+---
+
+## 2026-04-04 — Pre-Cache Optimization & Persistent Storage
 
 ### Added
 - **Multi-threaded gunicorn** (`--threads 16`): GFW tile proxy requests release the GIL during network I/O, allowing click callbacks to run concurrently. With 16 threads, ~48 tile requests process in ~3 rounds instead of ~12, keeping threads free for click callbacks.

@@ -4,6 +4,7 @@
 Dash 4.0 web app ("GotOne Offshore SST Analyzer") branded for [gotoneapp.com](https://www.gotoneapp.com). Shows daily sea-surface temperatures for the Cape May, NJ to Portland, ME offshore corridor. Users pick any 7-day date window (back to June 2002) and animate through the week's SST evolution to spot fishing-relevant trends (warm eddies, cold upwelling, thermoclines).
 
 ## Tech Stack
+- **Current version**: v1.0 (displayed in sidebar UI; next release: v1.01)
 - **Dash 4.0** + **dash-leaflet** + **dash-bootstrap-components** (Flatly theme + GotOne CSS overrides)
 - **NOAA CoastWatch ERDDAP** — MUR GHRSST (1km, preferred) with OISST (25km) fallback
 - Data available from 2002-06-01 to ~2 days ago (MUR has ~2-day latency)
@@ -75,7 +76,7 @@ Pre-cache (memory-efficient raw-only mode):
 | `data/geo.py` | Orient arrays, AOI mask, land mask (all 2D only) |
 | `data/convert.py` | Kelvin→Fahrenheit, 2x visual upsample |
 | `data/cache.py` | Disk-based gzip JSON cache with staleness checks |
-| `layout/sidebar.py` | Date picker, animation controls, collapsible POI checklist, fetch button |
+| `layout/sidebar.py` | Date picker, animation controls, collapsible POI checklist, fetch button, version indicator |
 | `layout/mapview.py` | dl.Map with custom panes, loading overlay, hamburger button |
 | `map/overlay.py` | Array → RGBA → base64 PNG |
 | `map/colorscale.py` | Legend component, adaptive color bounds |
