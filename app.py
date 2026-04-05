@@ -717,6 +717,7 @@ app.clientside_callback(
         Output("sidebar-col", "className", allow_duplicate=True),
         Output("sidebar-backdrop", "style", allow_duplicate=True),
         Output("gfw-layer", "url", allow_duplicate=True),
+        Output("map-loading-overlay", "style", allow_duplicate=True),
     ],
     inputs=[
         Input("fetch-btn", "n_clicks"),
@@ -840,6 +841,7 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
             False, "Fetch SST",
             "gotone-sidebar", {"display": "none"},
             gfw_url,
+            {"display": "none"},
         )
 
     except Exception as e:
@@ -857,6 +859,7 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
             False, "Fetch SST",
             "gotone-sidebar", {"display": "none"},
             dash.no_update,
+            {"display": "none"},
         )
 
 
