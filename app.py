@@ -562,7 +562,58 @@ def _precache_single_date(sst: dict, locked: bool) -> dict:
     }
 
 
-def _build_payload_from_disk_cache(cached: dict, raw_only: bool = False):
+def _rebuild_payload_from_raw(raw_data: dict, locked: bool) -> dict:
+    """Re-render PNGs from existing raw arrays with new color bounds.
+
+    Used when toggling lock-scale: the raw SST data is identical between
+    adaptive and locked modes — only vmin/vmax and PNGs differ.
+    """
+    raw_days = raw_data["raw_days"]
+    lats = raw_data["lats"]
+    lons = raw_data["lons"]
+
+    if locked:
+        vmin, vmax = 30.0, 90.0
+    else:
+        all_finite = []
+        for rd in raw_days:
+            finite = rd["arrF"][np.isfinite(rd["arrF"])]
+            if finite.size > 0:
+                all_finite.append(finite)
+        if all_finite:
+            stacked = np.concatenate(all_finite)
+            vmin, vmax = compute_color_bounds(stacked, locked=False)
+        else:
+            vmin, vmax = 30.0, 90.0
+
+    frames = []
+    dates = []
+    for rd in raw_days:
+        arrF_vis = upsample_visual(rd["arrF"], 1)
+        png_url = sst_to_base64_png(arrF_vis, vmin, vmax)
+        frames.append(png_url)
+        dates.append(rd["date"])
+
+    res_km = abs(float(lats[1] - lats[0])) * 111.0 if len(lats) > 1 else None
+    bounds = [
+        [float(np.min(lats)), float(np.min(lons))],
+        [float(np.max(lats)), float(np.max(lons))],
+    ]
+
+    return {
+        "frames": frames,
+        "dates": dates,
+        "bounds": bounds,
+        "vmin": float(vmin),
+        "vmax": float(vmax),
+        "res_km": res_km,
+        "server": "",
+        "dataset_id": "",
+        "dataset_title": "",
+    }
+
+
+def _build_payload_from_disk_cache(cached: dict, raw_only: bool = False, locked_override=None):
     """Split a disk-cached payload into store_payload + raw_data.
 
     Supports three formats:
@@ -592,12 +643,29 @@ def _build_payload_from_disk_cache(cached: dict, raw_only: bool = False):
         "lons": _deserialize_array(lons_data) if isinstance(lons_data, str) else np.array(lons_data, dtype=np.float64),
     }
 
-    # Handle raw-only pre-cache entries (frames=None)
-    frames = cached.get("frames")
-    if frames is None and not raw_only:
-        # Render PNGs on the fly from raw arrays
-        logger.info("Raw-only cache entry — rendering PNGs on the fly")
+    # Determine color bounds — use locked_override if provided (cross-mode reuse)
+    need_rerender = locked_override is not None
+    if need_rerender:
+        if locked_override:
+            vmin, vmax = 30.0, 90.0
+        else:
+            all_finite = []
+            for rd in raw_days:
+                finite = rd["arrF"][np.isfinite(rd["arrF"])]
+                if finite.size > 0:
+                    all_finite.append(finite)
+            if all_finite:
+                stacked = np.concatenate(all_finite)
+                vmin, vmax = compute_color_bounds(stacked, locked=False)
+            else:
+                vmin, vmax = 30.0, 90.0
+    else:
         vmin, vmax = cached["vmin"], cached["vmax"]
+
+    # Handle raw-only pre-cache entries (frames=None) or cross-mode rerender
+    frames = cached.get("frames")
+    if (frames is None or need_rerender) and not raw_only:
+        logger.info("Rendering PNGs on the fly (rerender=%s)", need_rerender)
         frames = []
         for rd in raw_days:
             arrF_vis = upsample_visual(rd["arrF"], 1)
@@ -610,8 +678,8 @@ def _build_payload_from_disk_cache(cached: dict, raw_only: bool = False):
         "frames": frames,
         "dates": dates,
         "bounds": cached["bounds"],
-        "vmin": cached["vmin"],
-        "vmax": cached["vmax"],
+        "vmin": float(vmin),
+        "vmax": float(vmax),
         "res_km": cached.get("res_km"),
         "server": cached.get("server", ""),
         "dataset_id": cached.get("dataset_id", ""),
@@ -743,6 +811,7 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
     try:
         # Check disk cache first — exact match, then nearby dates (±3 days)
         cached_hit = False
+        cross_mode_hit = False
         actual_end_date = end_date
         cached, actual_end_date_found = find_nearest_cached(end_date, locked)
         if cached:
@@ -752,7 +821,46 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
             cached_hit = True
             # Update data_key to match actual cached date
             data_key = _cache_key(actual_end_date, locked)
-        else:
+        # Cross-mode fallback: raw data is identical between adaptive/locked,
+        # only vmin/vmax and PNG rendering differ
+        if not cached_hit:
+            alt_locked = not locked
+            alt_key = _cache_key(end_date, alt_locked)
+
+            # Check memory for alt mode — try exact date and ±3 fuzzy
+            alt_mem_key = None
+            for offset in range(4):
+                for sign in ([0] if offset == 0 else [1, -1]):
+                    candidate = end_date + timedelta(days=offset * sign)
+                    ck = _cache_key(candidate, alt_locked)
+                    if ck in _raw_data_cache:
+                        alt_mem_key = ck
+                        if offset != 0:
+                            actual_end_date = candidate
+                            data_key = _cache_key(candidate, locked)
+                        break
+                if alt_mem_key:
+                    break
+
+            if alt_mem_key:
+                logger.info("Cross-mode reuse from memory: %s → %s", alt_mem_key, data_key)
+                raw_data = _raw_data_cache[alt_mem_key]
+                store_payload = _rebuild_payload_from_raw(raw_data, locked)
+                cached_hit = True
+                cross_mode_hit = True
+            else:
+                alt_cached, alt_end_date = find_nearest_cached(end_date, alt_locked)
+                if alt_cached:
+                    logger.info("Cross-mode reuse from disk: %s (locked=%s → %s)",
+                                alt_end_date, alt_locked, locked)
+                    store_payload, raw_data = _build_payload_from_disk_cache(
+                        alt_cached, locked_override=locked)
+                    actual_end_date = alt_end_date
+                    cached_hit = True
+                    cross_mode_hit = True
+                    data_key = _cache_key(actual_end_date, locked)
+
+        if not cached_hit:
             # Cache miss — fetch from ERDDAP
             logger.info("Cache miss, fetching from ERDDAP: %s", end_date)
             sst = get_sst_multiday(end_date, CFG)
@@ -763,14 +871,37 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
         _put_raw_cache(data_key, raw_data)
 
         # Update GFW date range to match the SST window
+        # Skip if cross-mode toggle — dates haven't changed, tiles are still valid
         global _gfw_date_range, _gfw_style_cache
         sst_dates = store_payload.get("dates", [])
-        if sst_dates:
+        if sst_dates and not cross_mode_hit:
             _gfw_date_range = f"{sst_dates[0]},{sst_dates[-1]}"
             _gfw_style_cache = {"url_template": None, "date_range": None}
             _gfw_tile_cache.clear()  # new date range → tiles change
 
-        if cached_hit and cached.get("frames") is None:
+        if cross_mode_hit:
+            # Cross-mode reuse — write the re-rendered payload to disk
+            # under the new mode's key so future loads are instant
+            def _write_cross_mode_cache(sp, rd, ed, lk):
+                try:
+                    dp = dict(sp)
+                    dp["raw_days"] = [
+                        {"arrF": _serialize_array(d["arrF"]), "date": d["date"]}
+                        for d in rd["raw_days"]
+                    ]
+                    dp["lats"] = _serialize_array(rd["lats"])
+                    dp["lons"] = _serialize_array(rd["lons"])
+                    put_cache(ed, lk, dp)
+                    logger.info("Cross-mode cache written: %s locked=%s", ed, lk)
+                except Exception:
+                    logger.warning("Cross-mode cache write failed", exc_info=True)
+
+            threading.Thread(
+                target=_write_cross_mode_cache,
+                args=(store_payload, raw_data, actual_end_date, locked),
+                daemon=True,
+            ).start()
+        elif cached_hit and cached.get("frames") is None:
             # Raw-only pre-cache entry — upgrade with rendered PNGs in
             # background so subsequent loads are instant
             def _upgrade_cache(sp, rd, ed, lk):
