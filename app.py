@@ -689,7 +689,12 @@ def _build_payload_from_disk_cache(cached: dict, raw_only: bool = False, locked_
     return store_payload, raw_data
 
 
-app.layout = html.Div(
+# NOTE: layout is a callable so date.today() (and the date picker's
+# max_date_allowed / default date) are recomputed on every page load.
+# A static layout freezes "today" at server startup — on the long-running
+# Render worker that capped the date picker at the server's start date.
+def serve_layout():
+    return html.Div(
     [
         # GotOne branded header
         html.Div(
@@ -723,7 +728,10 @@ app.layout = html.Div(
             style={"padding": "0"},
         ),
     ]
-)
+    )
+
+
+app.layout = serve_layout
 
 
 _LOADING_OVERLAY_VISIBLE = {
