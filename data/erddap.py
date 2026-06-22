@@ -23,6 +23,16 @@ from data.convert import to_fahrenheit_whole
 
 logger = logging.getLogger(__name__)
 
+# NOAA CoastWatch sits behind a WAF that returns HTTP 403 to the default
+# `python-requests/<ver>` User-Agent — most aggressively for datacenter/cloud
+# IPs (e.g. Render). Without this header, erddap_search() silently gets 403,
+# returns None for every server, and get_sst_multiday() raises the misleading
+# "No compatible SST dataset found on any configured ERDDAP server." Any
+# non-`python-requests` UA clears the WAF; we send a descriptive one.
+_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; GotOneSST/1.0; +https://sst.gotoneapp.com)"
+}
+
 
 def erddap_search(server: str, terms: List[str]) -> Optional[pd.DataFrame]:
     """Search an ERDDAP server for SST datasets."""
@@ -30,6 +40,7 @@ def erddap_search(server: str, terms: List[str]) -> Optional[pd.DataFrame]:
         r = requests.get(
             f"{server}/search/index.csv",
             params={"searchFor": " ".join(terms)},
+            headers=_HEADERS,
             timeout=8,
         )
         r.raise_for_status()
@@ -118,7 +129,7 @@ def fetch_grid(
 ):
     """Download a NetCDF grid slice from ERDDAP and return (xarray.Dataset, var_name)."""
     das_url = f"{server}/griddap/{dsid}.das"
-    r = requests.get(das_url, timeout=10)
+    r = requests.get(das_url, headers=_HEADERS, timeout=10)
     r.raise_for_status()
     varname = guess_var_from_das(r.text)
     if not varname:
@@ -133,7 +144,7 @@ def fetch_grid(
         f"[({minlon}):1:({maxlon})]"
     )
     nc_url = f"{server}/griddap/{dsid}.nc?{query}"
-    rr = requests.get(nc_url, timeout=20)
+    rr = requests.get(nc_url, headers=_HEADERS, timeout=20)
     rr.raise_for_status()
 
     with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tf:
@@ -156,7 +167,7 @@ def fetch_grid_multiday(
     date_start through date_end.
     """
     das_url = f"{server}/griddap/{dsid}.das"
-    r = requests.get(das_url, timeout=10)
+    r = requests.get(das_url, headers=_HEADERS, timeout=10)
     r.raise_for_status()
     varname = guess_var_from_das(r.text)
     if not varname:
@@ -172,7 +183,7 @@ def fetch_grid_multiday(
     )
     nc_url = f"{server}/griddap/{dsid}.nc?{query}"
     # Larger timeout for multi-day downloads (~10x single-day data)
-    rr = requests.get(nc_url, timeout=75)
+    rr = requests.get(nc_url, headers=_HEADERS, timeout=75)
     rr.raise_for_status()
 
     with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tf:
@@ -280,7 +291,7 @@ def _fetch_single_day(server, dsid, varname, date, bbox):
     nc_url = f"{server}/griddap/{dsid}.nc?{query}"
 
     for attempt in range(3):
-        rr = requests.get(nc_url, timeout=45)
+        rr = requests.get(nc_url, headers=_HEADERS, timeout=45)
         if rr.status_code == 429:
             time.sleep(2 * (attempt + 1))  # back off: 2s, 4s, 6s
             continue
@@ -351,7 +362,7 @@ def get_sst_multiday(end_date, config: Dict, num_days: int = 7) -> Dict:
                 # Look up the variable name once (shared across all days)
                 try:
                     das_url = f"{server}/griddap/{dsid}.das"
-                    r = requests.get(das_url, timeout=10)
+                    r = requests.get(das_url, headers=_HEADERS, timeout=10)
                     r.raise_for_status()
                     varname = guess_var_from_das(r.text)
                     if not varname:
