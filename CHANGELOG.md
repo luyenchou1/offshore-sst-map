@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-06-22 — Off-Render SST Fetching (NOAA IP-block workaround)
+
+### Context
+NOAA CoastWatch ERDDAP began blocking Render's datacenter IP at the network layer — connections from the deployed app are refused/unreachable (`Network is unreachable`, `Connection reset by peer`, connect timeouts) across all three servers; `coastwatch.noaa.gov` additionally tarpits (`ReadTimeout`) from every IP. Cache-miss fetches on Render hung the full 90s budget and surfaced as the red "SST fetch timed out after 90s" / "No compatible SST dataset found" error. localhost and GitHub-hosted runners are **not** blocked, so SST fetching was moved off Render entirely. (It worked from Render months ago; NOAA tightened anti-cloud filtering since.)
+
+### Added
+- **`POST /api/cache/upload` endpoint** — receives a pre-built gzip cache file from an off-Render fetcher. Auth via the `CACHE_UPLOAD_TOKEN` env var (403 if unset, 401 on mismatch, constant-time compare); filename validated against the `cache_key` pattern (no path traversal); body validated as gzip-JSON; 8 MB cap; atomic write.
+- **`tools/sync_cache.py`** — runs where ERDDAP is reachable; fetches recent 7-day windows via the normal pipeline, builds the same raw-only payload the pre-cache writes, and POSTs them up. Retries on transient Render 500/502/503/504 with backoff; paces uploads (`--upload-delay`, default 2s).
+- **`.github/workflows/seed-sst-cache.yml`** — daily GitHub Action (11:00 UTC) that runs the sync script with `CACHE_UPLOAD_TOKEN` from a repo secret. Seeds end-dates today-2..today-11; the app's ±3-day fuzzy lookup covers the rest. Public repo → free Actions minutes.
+- **`erddap_search` failure logging** — previously swallowed every exception silently (making a blocked search look like a generic 90s timeout). Now logs the exception type per server, which is how the IP block was confirmed.
+
+### Changed
+- **All ERDDAP requests send a descriptive User-Agent** (`data/erddap._HEADERS`). NOAA's WAF 403s the default `python-requests` UA. (Necessary but not sufficient — the network-level IP block is the underlying issue.)
+
+### Summary
+Render no longer fetches ERDDAP directly; it serves recent dates from cache files pushed up by a daily GitHub Action. localhost still fetches ERDDAP live. The public AWS MUR Zarr mirror was evaluated and rejected (frozen at ~2020).
+
+---
+
 ## 2026-04-05 — Official Release (v1.0)
 
 ### Added

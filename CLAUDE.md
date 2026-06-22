@@ -31,6 +31,18 @@ Dash 4.0 web app ("GotOne Offshore SST Analyzer") branded for [gotoneapp.com](ht
 
 ## Architecture
 
+### SST Data Sourcing — Render serves cache, never fetches ERDDAP
+
+**As of 2026-06-22, NOAA CoastWatch ERDDAP blocks Render's datacenter IP at the network layer.** Connections from the deployed app are refused/unreachable (`Network is unreachable`, `Connection reset by peer`, connect timeouts); `coastwatch.noaa.gov` additionally tarpits (`ReadTimeout`) from every IP. A cache-miss fetch on Render therefore hangs the full 90s budget and shows the red "SST fetch timed out after 90s" error.
+
+**localhost and GitHub-hosted runners are NOT blocked**, so the data path is split:
+
+- **Render (production)** serves recent dates *only* from its disk cache; it never calls ERDDAP.
+- **Off-Render fetcher**: a daily GitHub Action (`.github/workflows/seed-sst-cache.yml`) runs `tools/sync_cache.py`, which fetches recent 7-day windows from ERDDAP (reachable from the runner) and POSTs raw-only cache files to `POST /api/cache/upload` (auth via the `CACHE_UPLOAD_TOKEN` env var + GitHub repo secret). Seeds end-dates today-2..today-11; the ±3-day fuzzy lookup covers the rest. Uploads retry on transient Render 502s.
+- **localhost (dev)** still fetches ERDDAP live via `get_sst_multiday()`, exactly as the Data Flow below describes.
+
+The Data Flow diagram below is the **live-fetch path**: it runs on localhost and inside the GitHub Action, but is dead on Render.
+
 ### Data Flow
 ```
 User picks date → Fetch button → get_sst_multiday() → 7 parallel ERDDAP requests
@@ -107,6 +119,13 @@ Pre-cache (memory-efficient raw-only mode):
 17. **poi_select_all** — Server callback for Select all / Deselect all links in POI checklist
 
 ## Critical Lessons Learned
+
+### NOAA Blocks Render's Datacenter IP — Data Must Be Fetched Off-Render
+- **The symptom**: recent dates on the live site show a red "SST fetch timed out after 90s" (or "No compatible SST dataset found") box, while localhost works perfectly. **The cause is not in the code** — NOAA's firewall blocks Render's datacenter IP at the network layer. Confirmed in the live Render logs: `ConnectionError: Network is unreachable` (coastwatch.pfeg), `ConnectTimeout` / `Connection reset by peer` (upwell), `ReadTimeout` (coastwatch.noaa.gov tarpit). It worked from Render months ago; NOAA tightened anti-cloud filtering since.
+- **`erddap_search` swallowed exceptions silently**, so the failures looked like a generic 90s timeout with zero log breadcrumbs. It now logs the exception type per server — that's how the block was confirmed (`ConnectTimeout`=firewall drop, `ReadTimeout`=tarpit, `403`=WAF/User-Agent).
+- **A User-Agent header is necessary but not sufficient**: NOAA's WAF 403s the default `python-requests` UA, so `data/erddap._HEADERS` sends a real one. But that only addresses the 403 variant — the network-level IP block is the real problem, and **no fetch-code change can fix it**.
+- **The fix is architectural**: fetch where ERDDAP is reachable (localhost / GitHub runners — both verified not blocked) and push cache files to Render via `POST /api/cache/upload`. See *Architecture → SST Data Sourcing*. The public AWS MUR Zarr mirror (`s3://mur-sst`) was evaluated and rejected — its time axis is frozen at ~Jan 2020.
+- **If the live map breaks for recent dates**: check the seed workflow first (`gh run list --workflow=seed-sst-cache.yml`), not Render's ERDDAP path. Re-seed manually by running `tools/sync_cache.py` from a non-blocked IP with `CACHE_UPLOAD_TOKEN` set.
 
 ### Dash 4.0 Gotchas
 - **Never use clientside callbacks that manipulate DOM for elements also controlled by server callbacks.** Dash's virtual DOM reconciliation won't see the DOM change, so server callback updates get silently skipped, leaving the UI stuck. We burned multiple iterations on this with the Fetch button getting permanently disabled.
@@ -254,8 +273,8 @@ All clicks route through a single `handle_map_click` callback. Only one tooltip 
 - **AOI coverage**: Cape May, NJ (38.80°N) to Portland, ME (43.80°N), ~501×617 grid at MUR 1km. Bounding box: 5.00° lat × 6.16° lon.
 - **Cache hit path**: disk read + decompress + parse → ~2-5s on Render. No ERDDAP call needed.
 - **Fuzzy cache lookup**: `find_nearest_cached()` in `data/cache.py` checks ±3 days around the requested end date. With pre-cached entries every 7 days, most tuna-season dates hit a nearby cache within 3 days — avoiding ERDDAP entirely. Status shows "(nearest cache: +1d)" when offset. The `data_key` in `sst-store` reflects the actual cached date so click-to-read-temp works correctly.
-- **Cache miss path**: 7 parallel ERDDAP fetches → 20-50s on Render (cloud-to-cloud), 60-120s+ on localhost (residential internet). Data cached for instant future loads.
-- **Localhost timeout issue**: Expanded AOI ERDDAP fetches often exceed Dash's ~30s browser callback timeout, causing "server did not respond" and a stuck loading overlay. Data may still finish fetching server-side. On Render, faster network usually completes within timeout.
+- **Cache miss path**: 7 parallel ERDDAP fetches, ~60-120s on localhost (residential internet). **On Render this path is dead** — NOAA blocks the IP, so a cache miss returns the red "timed out after 90s" error. Recent dates must be pre-seeded into the cache by the off-Render GitHub Action (see *Architecture → SST Data Sourcing*).
+- **Localhost timeout issue**: Expanded AOI ERDDAP fetches can exceed Dash's browser callback timeout, causing "server did not respond" and a stuck loading overlay. Data may still finish fetching server-side. (No longer applies on Render — it never fetches ERDDAP; it only serves cache.)
 - **AOI change invalidates cache**: Disk-cached data has bounding box baked in. After AOI polygon changes, old caches will have wrong bounds — first fetch after change will be a cache miss.
 - **Pre-cache strategy**: `/api/precache` endpoint populates disk cache for tuna season dates. Once cached, 2020–2025 Jun–Nov dates load in 2-5s instead of 30-50s. Raw-only cache entries add ~2-3s for on-the-fly PNG rendering on first user load; background thread upgrades to full cache (with PNGs) for instant subsequent loads.
 - **GFW tile proxy blocking**: On zoom, Leaflet requests ~48 GFW tiles through the server-side proxy, each taking ~1s (GFW API latency). Fix: `--threads 16` allows concurrent I/O (tile fetches release the GIL), and server-side tile cache (`_gfw_tile_cache`) makes repeat requests instant. `updateWhenZooming=False` + `updateWhenIdle=True` + `keepBuffer=4` further reduce tile requests. First zoom to a new area still has ~3s of proxy latency (48 tiles / 16 threads); subsequent zooms to the same area are instant from cache.
