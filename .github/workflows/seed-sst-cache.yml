@@ -1,0 +1,26 @@
+name: Seed SST cache
+
+# NOAA's firewall blocks ERDDAP from Render's datacenter IP, so SST data is
+# fetched here (GitHub runners CAN reach NOAA) and pushed to the live app's
+# /api/cache/upload endpoint. Keeps recent dates served from cache.
+on:
+  schedule:
+    - cron: '0 11 * * *'   # daily ~07:00 ET (after MUR's ~2-day-latency update)
+  workflow_dispatch:        # allow manual runs
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Build and upload recent SST windows
+        env:
+          CACHE_UPLOAD_TOKEN: ${{ secrets.CACHE_UPLOAD_TOKEN }}
+        run: python tools/sync_cache.py --base-url https://sst.gotoneapp.com --start-back 2 --count 10
