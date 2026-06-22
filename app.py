@@ -321,6 +321,69 @@ def precache_status():
     return json.dumps(status), 200, {"Content-Type": "application/json"}
 
 
+@server.route("/api/cache/upload", methods=["POST"])
+def cache_upload():
+    """Receive a pre-built SST cache file from an off-Render fetcher.
+
+    NOAA's firewall blocks ERDDAP from Render's datacenter IP (connections
+    are refused/unreachable), so recent cache files are built where ERDDAP
+    IS reachable (a residential IP / CI runner) and pushed here.
+
+    Auth: shared secret in the X-Upload-Token header, compared against the
+    CACHE_UPLOAD_TOKEN env var. If that env var is unset the endpoint is
+    disabled (403). The body is the raw gzip cache file; X-Cache-Filename
+    names it (strictly validated to prevent path traversal).
+    """
+    import hmac
+    import re as _re
+
+    from data.cache import CACHE_DIR
+
+    token = os.environ.get("CACHE_UPLOAD_TOKEN")
+    if not token:
+        return (json.dumps({"error": "upload disabled (CACHE_UPLOAD_TOKEN not set)"}),
+                403, {"Content-Type": "application/json"})
+
+    supplied = request.headers.get("X-Upload-Token", "")
+    if not (supplied and hmac.compare_digest(supplied, token)):
+        return (json.dumps({"error": "unauthorized"}),
+                401, {"Content-Type": "application/json"})
+
+    fname = request.headers.get("X-Cache-Filename", "")
+    if not _re.fullmatch(r"\d{4}-\d{2}-\d{2}_(adaptive|locked)\.json\.gz", fname):
+        return (json.dumps({"error": f"invalid filename: {fname!r}"}),
+                400, {"Content-Type": "application/json"})
+
+    data = request.get_data()
+    if not data:
+        return (json.dumps({"error": "empty body"}),
+                400, {"Content-Type": "application/json"})
+    if len(data) > 8 * 1024 * 1024:  # 8 MB ceiling per cache file
+        return (json.dumps({"error": "file too large"}),
+                413, {"Content-Type": "application/json"})
+
+    # Validate it really is our gzip-JSON cache format before writing
+    try:
+        import gzip as _gz
+        payload = json.loads(_gz.decompress(data).decode("utf-8"))
+        if "raw_days" not in payload or "dates" not in payload:
+            raise ValueError("missing expected cache keys")
+    except Exception as e:
+        return (json.dumps({"error": f"not a valid cache file: {e}"}),
+                400, {"Content-Type": "application/json"})
+
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    target = CACHE_DIR / fname
+    tmp = CACHE_DIR / (fname + ".uploading")
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, target)
+    size_kb = target.stat().st_size / 1024
+    logger.info("Cache UPLOAD: %s (%.0f KB)", fname, size_kb)
+    return (json.dumps({"ok": True, "file": fname, "size_kb": round(size_kb, 1)}),
+            200, {"Content-Type": "application/json"})
+
+
 # ---- Server-side raw data cache ----
 # Raw float arrays are too large (~18 MB) for dcc.Store / browser transport.
 # Keep them server-side; click callbacks read from here instead.
