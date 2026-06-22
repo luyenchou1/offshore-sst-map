@@ -45,7 +45,10 @@ def erddap_search(server: str, terms: List[str]) -> Optional[pd.DataFrame]:
         )
         r.raise_for_status()
         return pd.read_csv(io.StringIO(r.text))
-    except Exception:
+    except Exception as e:
+        # Log instead of swallowing silently — a hung/blocked search here is
+        # invisible otherwise and looks like a generic 90s timeout upstream.
+        logger.warning("erddap_search failed for %s: %s: %s", server, type(e).__name__, e)
         return None
 
 
