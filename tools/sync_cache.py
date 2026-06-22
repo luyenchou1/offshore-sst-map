@@ -114,6 +114,42 @@ def build_raw_payload(sst: dict, cfg: dict, locked: bool = False) -> dict:
     }
 
 
+def upload_cache_file(base_url, token, fname, blob, attempts=5):
+    """POST one cache file, retrying transient Render 5xx / network errors.
+
+    Render runs a single worker; rapid uploads can momentarily saturate it and
+    its proxy returns 502/503. Those are transient — back off and retry rather
+    than dropping the file.
+    """
+    url = f"{base_url.rstrip('/')}/api/cache/upload"
+    headers = {
+        "X-Upload-Token": token,
+        "X-Cache-Filename": fname,
+        "Content-Type": "application/octet-stream",
+    }
+    backoff = [3, 8, 15, 25]
+    for i in range(attempts):
+        try:
+            r = requests.post(url, data=blob, headers=headers, timeout=90)
+            if r.status_code == 200:
+                return True, r.json()
+            if r.status_code in (500, 502, 503, 504) and i < attempts - 1:
+                wait = backoff[min(i, len(backoff) - 1)]
+                print(f"  {fname}: HTTP {r.status_code} (worker busy) — retry in {wait}s",
+                      flush=True)
+                time.sleep(wait)
+                continue
+            return False, f"HTTP {r.status_code} {r.text[:120]}"
+        except requests.RequestException as e:
+            if i < attempts - 1:
+                wait = backoff[min(i, len(backoff) - 1)]
+                print(f"  {fname}: {type(e).__name__} — retry in {wait}s", flush=True)
+                time.sleep(wait)
+                continue
+            return False, f"{type(e).__name__}: {e}"
+    return False, "exhausted retries"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -132,6 +168,11 @@ def main() -> int:
     )
     ap.add_argument("--config", default="config.json")
     ap.add_argument("--dry-run", action="store_true", help="Build but do not upload")
+    ap.add_argument(
+        "--upload-delay", type=float, default=2.0,
+        help="Seconds to pause between uploads (avoids saturating the single "
+             "Render worker; default 2.0)",
+    )
     args = ap.parse_args()
 
     if not args.token and not args.dry_run:
@@ -159,23 +200,14 @@ def main() -> int:
             if args.dry_run:
                 ok += 1
                 continue
-            r = requests.post(
-                f"{args.base_url.rstrip('/')}/api/cache/upload",
-                data=blob,
-                headers={
-                    "X-Upload-Token": args.token,
-                    "X-Cache-Filename": fname,
-                    "Content-Type": "application/octet-stream",
-                },
-                timeout=60,
-            )
-            if r.status_code == 200:
-                print(f"  uploaded: {r.json()}", flush=True)
+            success, info = upload_cache_file(args.base_url, args.token, fname, blob)
+            if success:
+                print(f"  uploaded: {info}", flush=True)
                 ok += 1
             else:
-                print(f"  UPLOAD FAILED {fname}: HTTP {r.status_code} "
-                      f"{r.text[:200]}", file=sys.stderr, flush=True)
+                print(f"  UPLOAD FAILED {fname}: {info}", file=sys.stderr, flush=True)
                 fail += 1
+            time.sleep(args.upload_delay)
         except Exception as e:  # noqa: BLE001 — report and continue to next date
             print(f"  FAILED {fname}: {type(e).__name__}: {e}",
                   file=sys.stderr, flush=True)
