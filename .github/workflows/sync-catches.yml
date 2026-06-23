@@ -1,0 +1,49 @@
+name: Sync GotOne catches from Firestore
+
+# Pulls catches from Firestore, anonymizes them, and pushes the cleaned CSV to
+# the live app's /api/catches/upload endpoint (hot-reload, no redeploy). Runs
+# off-Render so the Firebase service account + raw PII never touch the public app.
+
+on:
+  workflow_dispatch:        # manual "Run workflow" button
+  schedule:
+    - cron: "0 6 * * 1"     # every Monday 06:00 UTC
+
+concurrency:
+  group: sync-catches
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install google-cloud-firestore requests
+
+      - name: Write service-account credentials
+        env:
+          GOTONE_FIREBASE_SA: ${{ secrets.GOTONE_FIREBASE_SA }}
+        run: |
+          printf '%s' "$GOTONE_FIREBASE_SA" > "$RUNNER_TEMP/sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
+
+      - name: Pull, anonymize, and upload
+        env:
+          SST_UPLOAD_URL: ${{ secrets.SST_UPLOAD_URL }}          # e.g. https://sst.gotoneapp.com
+          CATCHES_UPLOAD_TOKEN: ${{ secrets.CATCHES_UPLOAD_TOKEN }}
+        run: python scripts/sync_catches.py --out data --upload
+
+      # Optional: also keep a versioned snapshot in git. Uncomment to enable.
+      # - name: Commit refreshed CSVs
+      #   run: |
+      #     git config user.name "github-actions[bot]"
+      #     git config user.email "github-actions[bot]@users.noreply.github.com"
+      #     git add data/gotone_catches.csv data/gotone_species.csv
+      #     git commit -m "data: refresh GotOne catches from Firestore" || echo "no changes"
+      #     git push

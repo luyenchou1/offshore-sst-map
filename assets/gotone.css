@@ -49,6 +49,17 @@ body {
     color: #e2e8f0;
     overflow: visible;
     z-index: 2;  /* above map column so calendar popup isn't clipped */
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 72px);
+}
+.gotone-sidebar .sidebar-header {
+    flex-shrink: 0;
+}
+.gotone-sidebar .sidebar-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    min-height: 0;
 }
 /* Isolate Leaflet's internal z-indexes (up to 700) within the map column
    so they don't compete with the sidebar's calendar popup */

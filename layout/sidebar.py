@@ -282,6 +282,7 @@ def build_sidebar():
                         style={"fontSize": "0.8rem"},
                         className="mb-2",
                     ),
+
                     dbc.Checklist(
                         id="lock-scale",
                         options=[{"label": " Lock scale (30-90\u00b0F)", "value": "lock"}],

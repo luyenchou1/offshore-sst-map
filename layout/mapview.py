@@ -14,7 +14,7 @@ def build_map():
                 [
                     # Hamburger menu button (mobile only, hidden on desktop via CSS)
                     html.Button(
-                        "\u2630",
+                        "☰",
                         id="sidebar-open",
                         className="hamburger-btn",
                     ),

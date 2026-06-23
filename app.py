@@ -27,9 +27,15 @@ import numpy as np
 from dash import Input, Output, State, ctx, dcc, html
 
 from data.cache import find_nearest_cached, get_cached, is_stale, put_cache
+from data.catches import (
+    build_catch_payload,
+    get_all_groups,
+    load_catches,
+)
 from data.convert import upsample_visual
 from data.erddap import get_sst_multiday
 from data.geo import mask_aoi_rasterized, mask_land_rasterized, orient_to_leaflet
+from layout.catchview import build_catch_page
 from layout.mapview import build_map
 from layout.sidebar import build_sidebar
 from map.colorscale import build_legend_component, compute_color_bounds
@@ -50,6 +56,7 @@ app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.FLATLY],
     title="GotOne Offshore SST Analyzer",
+    suppress_callback_exceptions=True,  # multi-page: callbacks span / and /catches
     meta_tags=[
         {"name": "viewport", "content": "width=device-width, initial-scale=1, viewport-fit=cover"},
     ],
@@ -77,6 +84,59 @@ _gfw_style_cache = {"url_template": None, "date_range": None}
 _gfw_date_range = None  # "YYYY-MM-DD,YYYY-MM-DD" — updated by fetch_sst_data
 _gfw_tile_cache = {}  # (z, x, y, dr) → (content_bytes, status_code)
 _GFW_TILE_CACHE_MAX = 200  # max cached tiles before eviction (~2-4 MB)
+
+
+# ---- GotOne catches: load static data once at module import ----
+load_catches()
+
+
+@server.route("/api/catches/upload", methods=["POST"])
+def catches_upload():
+    """Receive a freshly anonymized catch CSV from the off-Render Firebase sync.
+
+    Mirrors the SST `/api/cache/upload` pattern: the Firestore pull + PII
+    stripping happens off the public app (a CI runner with the service
+    account), then the cleaned CSV is pushed here and hot-reloaded — no
+    redeploy. Auth: shared secret in X-Upload-Token vs CATCHES_UPLOAD_TOKEN
+    (endpoint disabled with 403 if that env var is unset). X-Catches-Filename
+    selects which file (allow-listed to prevent path traversal).
+    """
+    import hmac
+
+    from data.catches import ALLOWED_UPLOAD_FILES, load_catches as _reload
+
+    token = os.environ.get("CATCHES_UPLOAD_TOKEN")
+    if not token:
+        return (json.dumps({"error": "upload disabled (CATCHES_UPLOAD_TOKEN not set)"}),
+                403, {"Content-Type": "application/json"})
+
+    supplied = request.headers.get("X-Upload-Token", "")
+    if not (supplied and hmac.compare_digest(supplied, token)):
+        return (json.dumps({"error": "unauthorized"}), 401, {"Content-Type": "application/json"})
+
+    fname = request.headers.get("X-Catches-Filename", "")
+    if fname not in ALLOWED_UPLOAD_FILES:
+        return (json.dumps({"error": f"invalid filename: {fname!r}"}),
+                400, {"Content-Type": "application/json"})
+
+    data = request.get_data()
+    if not data:
+        return (json.dumps({"error": "empty body"}), 400, {"Content-Type": "application/json"})
+    if len(data) > 16 * 1024 * 1024:  # 16 MB ceiling
+        return (json.dumps({"error": "file too large"}), 413, {"Content-Type": "application/json"})
+
+    # Sanity-check the CSV header before overwriting the live file.
+    first_line = data.split(b"\n", 1)[0].decode("utf-8", "replace")
+    expected = "catch_time" if fname == "gotone_catches.csv" else "__id__"
+    if expected not in first_line:
+        return (json.dumps({"error": f"unexpected CSV header for {fname}"}),
+                400, {"Content-Type": "application/json"})
+
+    with open(ALLOWED_UPLOAD_FILES[fname], "wb") as f:
+        f.write(data)
+    n = _reload()
+    return (json.dumps({"ok": True, "file": fname, "loaded": n}),
+            200, {"Content-Type": "application/json"})
 
 
 def _get_gfw_style(date_range: str) -> str | None:
@@ -756,7 +816,7 @@ def _build_payload_from_disk_cache(cached: dict, raw_only: bool = False, locked_
 # max_date_allowed / default date) are recomputed on every page load.
 # A static layout freezes "today" at server startup — on the long-running
 # Render worker that capped the date picker at the server's start date.
-def serve_layout():
+def build_sst_page():
     return html.Div(
     [
         # GotOne branded header
@@ -772,6 +832,13 @@ def serve_layout():
                             className="subtitle",
                         ),
                     ]
+                ),
+                dcc.Link(
+                    "Catch Map →",
+                    href="/catches",
+                    style={"marginLeft": "auto", "alignSelf": "center",
+                           "color": "#0183fe", "fontSize": "0.85rem",
+                           "whiteSpace": "nowrap", "paddingLeft": "1rem"},
                 ),
             ],
             className="gotone-header",
@@ -794,7 +861,26 @@ def serve_layout():
     )
 
 
+def serve_layout():
+    # Shell: one Location + the page container the router swaps. Callable so
+    # date.today() stays fresh on the long-running worker (see build_sst_page).
+    return html.Div(
+        [
+            dcc.Location(id="url", refresh=False),
+            html.Div(id="page-content"),
+        ]
+    )
+
+
 app.layout = serve_layout
+
+
+@app.callback(Output("page-content", "children"), Input("url", "pathname"))
+def route_page(pathname):
+    """Render the catch map at /catches, the SST map everywhere else."""
+    if pathname and pathname.rstrip("/").endswith("/catches"):
+        return build_catch_page()
+    return build_sst_page()
 
 
 _LOADING_OVERLAY_VISIBLE = {
@@ -1544,6 +1630,263 @@ def toggle_layers(active_layers):
     return (0.6 if "contours" in active else 0,
             0.5 if "gebco" in active else 0,
             0.7 if "gfw" in active else 0)
+
+
+# ---- GotOne catch map (route: /catches) ----
+
+
+@app.callback(
+    Output("catch-store", "data"),
+    Output("catch-count", "children"),
+    Input("catch-group-picker", "value"),
+    Input("catch-species-picker", "value"),
+    Input("catch-year-picker", "value"),
+    Input("catch-grain", "value"),
+)
+def update_catch_store(groups, species_ids, years, grain):
+    """Filter catches into a compact payload (points + windowed frames + grid)."""
+    payload = build_catch_payload(
+        groups=groups or [],
+        species_ids=species_ids or None,
+        years=years or None,
+        grain=grain or "season",
+    )
+    return payload, f"{payload['count']:,} catches shown"
+
+
+@app.callback(
+    Output("catch-group-picker", "value"),
+    Input("catch-group-select-all", "n_clicks"),
+    Input("catch-group-deselect-all", "n_clicks"),
+    prevent_initial_call=True,
+)
+def catch_group_select_deselect(sel_clicks, des_clicks):
+    if ctx.triggered_id == "catch-group-select-all":
+        return get_all_groups()
+    return []
+
+
+@app.callback(
+    Output("catch-contours-layer", "opacity"),
+    Output("catch-gebco-layer", "opacity"),
+    Input("catch-contours-opacity", "value"),
+    Input("catch-gebco-opacity", "value"),
+)
+def set_catch_layer_opacity(contours, gebco):
+    """Dim the NOAA chart / bathymetry under the catch points (0 = off)."""
+    return (contours or 0), (gebco or 0)
+
+
+# Dim the catches via pane CSS opacity (instant — no marker re-render). The
+# heatmap blur is handled in the builder so it stays synced with the render.
+app.clientside_callback(
+    """
+    function(op) {
+        var el = document.querySelector('.leaflet-overlay-pane');
+        if (el) el.style.opacity = (op == null ? 1 : op);
+        return '';
+    }
+    """,
+    Output("catch-opacity-sink", "children"),
+    Input("catch-points-opacity", "value"),
+)
+
+
+# Slider max tracks the number of windows in the current payload.
+app.clientside_callback(
+    """
+    function(store) {
+        if (!store || !store.frames || !store.frames.length) return 0;
+        return store.frames.length - 1;
+    }
+    """,
+    Output("catch-frame-slider", "max"),
+    Input("catch-store", "data"),
+)
+
+
+# Reset the scrub position when the payload changes (new grain / filters).
+app.clientside_callback(
+    "function(store) { return 0; }",
+    Output("catch-frame-slider", "value", allow_duplicate=True),
+    Input("catch-store", "data"),
+    prevent_initial_call=True,
+)
+
+
+# Build the visible GeoJSON for the active time window. Points mode -> one
+# haloed marker per catch. Heatmap mode -> bin the windowed points into a
+# coarse grid and emit a density-ramped soft circle per cell (the pane blur,
+# toggled separately, melts them into blobs). Season grain = full-year window
+# = all catches. Pure clientside -> instant frame swaps.
+app.clientside_callback(
+    """
+    function(store, mode, frameIdx) {
+        // Keep the pane blur in lockstep with what we're about to render, so it
+        // can never linger into points mode (which would smear dots into blobs).
+        var pane = document.querySelector('.leaflet-overlay-pane');
+        if (pane) pane.style.filter = (mode === "heat" ? "blur(10px)" : "none");
+        var empty = {"type": "FeatureCollection", "features": []};
+        if (!store) return empty;
+        var pts = store.points || [];
+        var groups = store.groups || [];
+        var species = store.species || [];
+        var lo = 1, hi = 365;
+        if (store.frames && store.frames.length) {
+            var f = store.frames[Math.min(frameIdx || 0, store.frames.length - 1)];
+            lo = f[0]; hi = f[1];
+        }
+        if (mode === "heat") {
+            function heatColor(t) {
+                t = Math.max(0, Math.min(1, t));
+                var r, g, b, u;
+                if (t < 0.25) { u = t / 0.25; r = 0; g = Math.round(255 * u); b = 255; }
+                else if (t < 0.5) { u = (t - 0.25) / 0.25; r = 0; g = 255; b = Math.round(255 * (1 - u)); }
+                else if (t < 0.75) { u = (t - 0.5) / 0.25; r = Math.round(255 * u); g = 255; b = 0; }
+                else { u = (t - 0.75) / 0.25; r = 255; g = Math.round(255 * (1 - u)); b = 0; }
+                return "rgb(" + r + "," + g + "," + b + ")";
+            }
+            // Count local density on a fine grid for COLOR only, then draw a soft
+            // circle at each catch's ACTUAL location (no grid lattice). Overlap +
+            // the pane blur build the kernel-density surface.
+            var cell = 0.03, bins = {}, win = [];
+            for (var i = 0; i < pts.length; i++) {
+                var p = pts[i];
+                if (p[5] < lo || p[5] > hi) continue;
+                win.push(p);
+                var key = Math.round(p[0] / cell) + "_" + Math.round(p[1] / cell);
+                bins[key] = (bins[key] || 0) + 1;
+            }
+            // Normalize against the ~90th percentile so hot cores read warm.
+            var counts = [];
+            for (var k in bins) counts.push(bins[k]);
+            counts.sort(function(a, b) { return a - b; });
+            var ref = counts.length ? counts[Math.floor(0.90 * (counts.length - 1))] : 1;
+            if (ref < 1) ref = 1;
+            var hfeats = [];
+            for (var j = 0; j < win.length; j++) {
+                var q = win[j];
+                var t = Math.min(1, Math.sqrt(bins[Math.round(q[0] / cell) + "_" + Math.round(q[1] / cell)] / ref));
+                hfeats.push({
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [q[1], q[0]]},
+                    "properties": {"heat": true, "color": heatColor(t)}
+                });
+            }
+            return {"type": "FeatureCollection", "features": hfeats};
+        }
+        var feats = [];
+        for (var i = 0; i < pts.length; i++) {
+            var p = pts[i];
+            if (p[5] < lo || p[5] > hi) continue;
+            var g = groups[p[2]] || {};
+            feats.push({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [p[1], p[0]]},
+                "properties": {
+                    "color": g.color || "#9aa0a6",
+                    "species": species[p[6]] || g.label || "",
+                    "length": p[3], "temp": p[4], "date": p[7],
+                    "group": g.key, "label": g.label
+                }
+            });
+        }
+        return {"type": "FeatureCollection", "features": feats};
+    }
+    """,
+    Output("catches-layer", "data"),
+    Input("catch-store", "data"),
+    Input("catch-mode", "value"),
+    Input("catch-frame-slider", "value"),
+)
+
+
+# Show playback only when there's a window to scrub (Month/Week/Day) — works in
+# both points and heatmap modes. Always reveal paused ("Play").
+app.clientside_callback(
+    """
+    function(grain) {
+        var on = grain && grain !== "season";
+        return [on ? {"display": "block"} : {"display": "none"}, true, "Play"];
+    }
+    """,
+    Output("catch-anim-controls", "style"),
+    Output("catch-anim-interval", "disabled", allow_duplicate=True),
+    Output("catch-play-pause", "children", allow_duplicate=True),
+    Input("catch-grain", "value"),
+    prevent_initial_call=True,
+)
+
+
+# Play / pause the season animation.
+app.clientside_callback(
+    """
+    function(n_clicks, currently_disabled) {
+        if (currently_disabled) return [false, "Pause"];
+        return [true, "Play"];
+    }
+    """,
+    Output("catch-anim-interval", "disabled", allow_duplicate=True),
+    Output("catch-play-pause", "children", allow_duplicate=True),
+    Input("catch-play-pause", "n_clicks"),
+    State("catch-anim-interval", "disabled"),
+    prevent_initial_call=True,
+)
+
+
+# Auto-advance the frame on each interval tick (wraps at the end).
+app.clientside_callback(
+    """
+    function(n_intervals, current_val, max_val) {
+        if (current_val == null || max_val == null) return window.dash_clientside.no_update;
+        var next_val = current_val + 1;
+        if (next_val > max_val) next_val = 0;
+        return next_val;
+    }
+    """,
+    Output("catch-frame-slider", "value", allow_duplicate=True),
+    Input("catch-anim-interval", "n_intervals"),
+    State("catch-frame-slider", "value"),
+    State("catch-frame-slider", "max"),
+    prevent_initial_call=True,
+)
+
+
+# Step forward / back buttons.
+app.clientside_callback(
+    """
+    function(back_clicks, fwd_clicks, current_val, max_val) {
+        if (current_val == null || max_val == null) return window.dash_clientside.no_update;
+        var ctx = window.dash_clientside.callback_context;
+        if (!ctx.triggered.length) return window.dash_clientside.no_update;
+        var t = ctx.triggered[0].prop_id.split(".")[0];
+        if (t === "catch-step-back") return Math.max(0, current_val - 1);
+        if (t === "catch-step-fwd") return Math.min(max_val, current_val + 1);
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("catch-frame-slider", "value", allow_duplicate=True),
+    Input("catch-step-back", "n_clicks"),
+    Input("catch-step-fwd", "n_clicks"),
+    State("catch-frame-slider", "value"),
+    State("catch-frame-slider", "max"),
+    prevent_initial_call=True,
+)
+
+
+# Season-window label, e.g. "Apr 3 – Apr 16". Store is an Input (not State) so
+# the label appears as soon as the payload arrives, not only on slider moves.
+app.clientside_callback(
+    """
+    function(frameIdx, store) {
+        if (!store || !store.labels || !store.labels.length) return "";
+        return store.labels[Math.min(frameIdx || 0, store.labels.length - 1)];
+    }
+    """,
+    Output("catch-window-label", "children"),
+    Input("catch-frame-slider", "value"),
+    Input("catch-store", "data"),
+)
 
 
 @app.callback(

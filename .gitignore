@@ -13,3 +13,9 @@ __pycache__/
 Branding:Logo/
 cache/
 .env
+
+# GotOne catch data — populated at runtime by scripts/sync_catches.py /
+# the /api/catches/upload endpoint. NOT committed: this is a public repo and
+# the internal build uses full-precision spot locations (privacy-sensitive).
+data/gotone_catches.csv
+data/gotone_species.csv
