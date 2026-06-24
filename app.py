@@ -1669,12 +1669,16 @@ def catch_group_select_deselect(sel_clicks, des_clicks):
 @app.callback(
     Output("catch-contours-layer", "opacity"),
     Output("catch-gebco-layer", "opacity"),
+    Output("catch-white-underlay", "fillOpacity"),
     Input("catch-contours-opacity", "value"),
     Input("catch-gebco-opacity", "value"),
 )
 def set_catch_layer_opacity(contours, gebco):
-    """Dim the NOAA chart / bathymetry under the catch points (0 = off)."""
-    return (contours or 0), (gebco or 0)
+    """Dim the NOAA chart / bathymetry. The chart sits on a white backdrop so
+    dimming it fades toward white (legible), not the grey basemap."""
+    c = contours or 0
+    white = 1.0 if c > 0 else 0   # full white whenever the chart is shown
+    return c, (gebco or 0), white
 
 
 # Dim the catches via pane CSS opacity (instant — no marker re-render). The
@@ -1725,7 +1729,7 @@ app.clientside_callback(
         // Keep the pane blur in lockstep with what we're about to render, so it
         // can never linger into points mode (which would smear dots into blobs).
         var pane = document.querySelector('.leaflet-overlay-pane');
-        if (pane) pane.style.filter = (mode === "heat" ? "blur(10px)" : "none");
+        if (pane) pane.style.filter = (mode === "heat" ? "blur(4px)" : "none");
         var empty = {"type": "FeatureCollection", "features": []};
         if (!store) return empty;
         var pts = store.points || [];
@@ -1770,7 +1774,9 @@ app.clientside_callback(
                 hfeats.push({
                     "type": "Feature",
                     "geometry": {"type": "Point", "coordinates": [q[1], q[0]]},
-                    "properties": {"heat": true, "color": heatColor(t)}
+                    // alpha scales with density: sparse -> transparent (map shows
+                    // through, fades toward the light basemap), hot cores -> opaque.
+                    "properties": {"heat": true, "color": heatColor(t), "alpha": 0.08 + 0.5 * t}
                 });
             }
             return {"type": "FeatureCollection", "features": hfeats};

@@ -4,10 +4,10 @@ window.dashExtensions = Object.assign({}, window.dashExtensions, {
             const p = feature.properties || {};
             if (p.heat) {
                 return L.circleMarker(latlng, {
-                    radius: 9,
+                    radius: 14, // bigger circles merge cleanly with less blur
                     stroke: false,
                     fillColor: p.color || "#ff4400",
-                    fillOpacity: 0.3, // per-point: density builds via overlap
+                    fillOpacity: p.alpha != null ? p.alpha : 0.3, // density-scaled
                     interactive: false,
                 });
             }

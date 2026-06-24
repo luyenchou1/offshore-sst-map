@@ -39,10 +39,10 @@ catches_point_to_layer = assign("""function(feature, latlng) {
     const p = feature.properties || {};
     if (p.heat) {
         return L.circleMarker(latlng, {
-            radius: 9,
+            radius: 14,   // bigger circles merge cleanly with less blur
             stroke: false,
             fillColor: p.color || "#ff4400",
-            fillOpacity: 0.3,   // per-point: density builds via overlap
+            fillOpacity: p.alpha != null ? p.alpha : 0.3,  // density-scaled
             interactive: false,
         });
     }
@@ -287,6 +287,20 @@ def build_catch_map():
                             dl.TileLayer(
                                 url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
                                 attribution='&copy; <a href="https://carto.com/">CARTO</a>',
+                            ),
+                            # White backdrop under the nautical chart (zIndex 355,
+                            # below the chart's 360). Opacity follows the chart slider
+                            # so dimming the chart fades it toward white, not the grey
+                            # basemap — keeps overlaid detail legible.
+                            dl.Pane(
+                                dl.Rectangle(
+                                    id="catch-white-underlay",
+                                    bounds=[[-89, -179], [89, 179]],
+                                    fillColor="#ffffff", fillOpacity=0,
+                                    stroke=False, interactive=False,
+                                ),
+                                name="catch-white-pane",
+                                style={"zIndex": 355},
                             ),
                             # GEBCO bathymetry (off by default) — bottom structure
                             dl.Pane(
