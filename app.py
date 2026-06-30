@@ -861,6 +861,55 @@ def build_sst_page():
     )
 
 
+# ---- /catches access gate (shared-secret link) ----
+# If CATCH_ACCESS_KEY is set (production), the catch map requires ?key=<key>.
+# Unset (local dev) -> open. The SST map at / is always public.
+CATCH_ACCESS_KEY = os.environ.get("CATCH_ACCESS_KEY")
+
+
+def _catch_authorized(search):
+    """True if the catch map may be shown for this URL query string."""
+    if not CATCH_ACCESS_KEY:
+        # No key configured: open for local dev, but FAIL CLOSED in production
+        # (Render sets RENDER) so a forgotten env var can't expose /catches.
+        return not os.environ.get("RENDER")
+    if not search:
+        return False
+    import hmac
+    from urllib.parse import parse_qs
+
+    supplied = parse_qs(search.lstrip("?")).get("key", [])
+    return any(hmac.compare_digest(k, CATCH_ACCESS_KEY) for k in supplied)
+
+
+def _catch_restricted_page():
+    return html.Div(
+        [
+            html.Div(
+                [
+                    html.Img(src=app.get_asset_url("gotone-logo.png")),
+                    html.Div(
+                        [
+                            html.H1("Catch Map"),
+                            html.P("Restricted access", className="subtitle"),
+                        ]
+                    ),
+                    dcc.Link("← SST Map", href="/", style={
+                        "marginLeft": "auto", "alignSelf": "center",
+                        "color": "#0183fe", "fontSize": "0.85rem", "paddingLeft": "1rem"}),
+                ],
+                className="gotone-header",
+            ),
+            html.Div(
+                "This map is restricted. Open it with your access link "
+                "(…/catches?key=…), or contact GotOne for access.",
+                style={"padding": "2rem", "color": "#cbd5e1",
+                       "fontSize": "0.95rem", "textAlign": "center"},
+            ),
+        ]
+    )
+
+
 def serve_layout():
     # Shell: one Location + the page container the router swaps. Callable so
     # date.today() stays fresh on the long-running worker (see build_sst_page).
@@ -875,10 +924,16 @@ def serve_layout():
 app.layout = serve_layout
 
 
-@app.callback(Output("page-content", "children"), Input("url", "pathname"))
-def route_page(pathname):
-    """Render the catch map at /catches, the SST map everywhere else."""
+@app.callback(
+    Output("page-content", "children"),
+    Input("url", "pathname"),
+    State("url", "search"),
+)
+def route_page(pathname, search):
+    """Render the catch map at /catches (gated), the SST map everywhere else."""
     if pathname and pathname.rstrip("/").endswith("/catches"):
+        if not _catch_authorized(search):
+            return _catch_restricted_page()
         return build_catch_page()
     return build_sst_page()
 
@@ -1642,9 +1697,14 @@ def toggle_layers(active_layers):
     Input("catch-species-picker", "value"),
     Input("catch-year-picker", "value"),
     Input("catch-grain", "value"),
+    State("url", "search"),
 )
-def update_catch_store(groups, species_ids, years, grain):
+def update_catch_store(groups, species_ids, years, grain, search):
     """Filter catches into a compact payload (points + windowed frames + grid)."""
+    if not _catch_authorized(search):
+        empty = {"points": [], "frames": [], "labels": [], "groups": [],
+                 "species": [], "bounds": None, "count": 0, "grain": "season"}
+        return empty, "restricted"
     payload = build_catch_payload(
         groups=groups or [],
         species_ids=species_ids or None,
