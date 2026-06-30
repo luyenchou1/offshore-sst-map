@@ -857,9 +857,12 @@ def build_sst_page():
 
 
 # ---- /catches access gate (shared-secret link) ----
-# If CATCH_ACCESS_KEY is set (production), the catch map requires ?key=<key>.
-# Unset (local dev) -> open. The SST map at / is always public.
-CATCH_ACCESS_KEY = os.environ.get("CATCH_ACCESS_KEY")
+# Set CATCHES_ACCESS_KEY (preferred — matches the CATCHES_UPLOAD_TOKEN naming)
+# or CATCH_ACCESS_KEY in production -> the catch map requires ?key=<key>.
+# Unset -> open in local dev, but fail closed on Render. Trimmed so a stray
+# space/newline from pasting into the dashboard doesn't break the match.
+CATCH_ACCESS_KEY = (os.environ.get("CATCHES_ACCESS_KEY")
+                    or os.environ.get("CATCH_ACCESS_KEY") or "").strip() or None
 
 
 def _catch_authorized(search):
