@@ -17,7 +17,10 @@ from zoneinfo import ZoneInfo
 # Catch times are stored UTC; anglers think in Eastern Time. Display in ET.
 _ET = ZoneInfo("America/New_York")
 
-_DATA_DIR = os.path.join(os.path.dirname(__file__))
+# Catch CSVs live here. Defaults to this repo's data/ dir (local dev); set
+# CATCH_DATA_DIR to a persistent path on Render (e.g. the disk at /var/data/cache)
+# so uploaded catch data survives restarts and deploys.
+_DATA_DIR = os.environ.get("CATCH_DATA_DIR") or os.path.dirname(__file__)
 _CATCHES_CSV = os.path.join(_DATA_DIR, "gotone_catches.csv")
 _SPECIES_CSV = os.path.join(_DATA_DIR, "gotone_species.csv")
 

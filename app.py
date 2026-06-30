@@ -132,7 +132,9 @@ def catches_upload():
         return (json.dumps({"error": f"unexpected CSV header for {fname}"}),
                 400, {"Content-Type": "application/json"})
 
-    with open(ALLOWED_UPLOAD_FILES[fname], "wb") as f:
+    dest = ALLOWED_UPLOAD_FILES[fname]
+    os.makedirs(os.path.dirname(dest), exist_ok=True)  # persistent dir may not exist yet
+    with open(dest, "wb") as f:
         f.write(data)
     n = _reload()
     return (json.dumps({"ok": True, "file": fname, "loaded": n}),
