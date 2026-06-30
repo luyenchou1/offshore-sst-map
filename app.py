@@ -833,13 +833,8 @@ def build_sst_page():
                         ),
                     ]
                 ),
-                dcc.Link(
-                    "Catch Map →",
-                    href="/catches",
-                    style={"marginLeft": "auto", "alignSelf": "center",
-                           "color": "#0183fe", "fontSize": "0.85rem",
-                           "whiteSpace": "nowrap", "paddingLeft": "1rem"},
-                ),
+                # No public link to the catch map — it's reachable only by
+                # navigating to /catches directly, then entering the access key.
             ],
             className="gotone-header",
         ),
@@ -882,7 +877,9 @@ def _catch_authorized(search):
     return any(hmac.compare_digest(k, CATCH_ACCESS_KEY) for k in supplied)
 
 
-def _catch_restricted_page():
+def _catch_restricted_page(attempted=False):
+    msg = ("Incorrect access key — try again."
+           if attempted else "Enter your access key to continue.")
     return html.Div(
         [
             html.Div(
@@ -901,10 +898,32 @@ def _catch_restricted_page():
                 className="gotone-header",
             ),
             html.Div(
-                "This map is restricted. Open it with your access link "
-                "(…/catches?key=…), or contact GotOne for access.",
-                style={"padding": "2rem", "color": "#cbd5e1",
-                       "fontSize": "0.95rem", "textAlign": "center"},
+                html.Div(
+                    [
+                        html.Div(msg, style={
+                            "color": "#f87171" if attempted else "#e2e8f0",
+                            "fontSize": "0.9rem", "fontWeight": "600",
+                            "marginBottom": "0.75rem", "textAlign": "center"}),
+                        dcc.Input(
+                            id="catch-key-input", type="password",
+                            placeholder="Access key", n_submit=0,
+                            style={"width": "100%", "padding": "0.55rem 0.7rem",
+                                   "borderRadius": "8px", "border": "1px solid #334155",
+                                   "backgroundColor": "#ffffff", "color": "#0a1628",
+                                   "fontSize": "0.9rem", "marginBottom": "0.6rem",
+                                   "boxSizing": "border-box"},
+                        ),
+                        html.Button("Enter", id="catch-key-submit", n_clicks=0, style={
+                            "width": "100%", "padding": "0.55rem", "borderRadius": "100px",
+                            "border": "none", "backgroundColor": "#0183fe",
+                            "color": "#ffffff", "fontWeight": "600",
+                            "fontSize": "0.9rem", "cursor": "pointer"}),
+                        html.Div(id="catch-key-sink", style={"display": "none"}),
+                    ],
+                    style={"maxWidth": "320px", "margin": "0 auto"},
+                ),
+                style={"padding": "3rem 1.5rem", "display": "flex",
+                       "justifyContent": "center"},
             ),
         ]
     )
@@ -933,9 +952,29 @@ def route_page(pathname, search):
     """Render the catch map at /catches (gated), the SST map everywhere else."""
     if pathname and pathname.rstrip("/").endswith("/catches"):
         if not _catch_authorized(search):
-            return _catch_restricted_page()
+            return _catch_restricted_page(attempted=bool(search and "key=" in search))
         return build_catch_page()
     return build_sst_page()
+
+
+# Restricted page: submit the access key -> reload /catches?key=... so the gate
+# re-validates server-side (a wrong key just lands back on the prompt).
+app.clientside_callback(
+    """
+    function(n_clicks, n_submit) {
+        var el = document.getElementById("catch-key-input");
+        var val = el ? el.value : "";
+        if ((n_clicks || n_submit) && val) {
+            window.location.href = "/catches?key=" + encodeURIComponent(val);
+        }
+        return "";
+    }
+    """,
+    Output("catch-key-sink", "children"),
+    Input("catch-key-submit", "n_clicks"),
+    Input("catch-key-input", "n_submit"),
+    prevent_initial_call=True,
+)
 
 
 _LOADING_OVERLAY_VISIBLE = {
