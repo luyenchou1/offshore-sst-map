@@ -145,24 +145,26 @@ def _firestore_client(service_account: str | None):
     return firestore.Client()
 
 
-def from_firestore(db, out_dir: str):
-    species = ((doc.id, (doc.to_dict() or {}).get("name", ""),
-                (doc.to_dict() or {}).get("phonetic_names", ""))
-               for doc in db.collection("species").stream())
-    _write_species(species, out_dir)
-    _write_catches((doc.to_dict() or {} for doc in db.collection("catches").stream()), out_dir)
+def from_firestore(db, out_dir: str, catches_coll="catches", species_coll="species") -> int:
+    def _species_rows():
+        for doc in db.collection(species_coll).stream():
+            d = doc.to_dict() or {}
+            yield doc.id, d.get("name", ""), d.get("phonetic_names", "")
+    _write_species(_species_rows(), out_dir)
+    records = (doc.to_dict() or {} for doc in db.collection(catches_coll).stream())
+    return _write_catches(records, out_dir)
 
 
 # ---- Local CSV source -----------------------------------------------------
 
-def from_csv(catches_csv: str, species_csv: str | None, out_dir: str):
+def from_csv(catches_csv: str, species_csv: str | None, out_dir: str) -> int:
     if species_csv:
         with open(species_csv, newline="") as f:
             rows = [(r["__id__"], r.get("name", ""), r.get("phonetic_names", ""))
                     for r in csv.DictReader(f)]
         _write_species(rows, out_dir)
     with open(catches_csv, newline="") as f:
-        _write_catches(list(csv.DictReader(f)), out_dir)
+        return _write_catches(list(csv.DictReader(f)), out_dir)
 
 
 # ---- Upload to the live app ----------------------------------------------
@@ -193,19 +195,30 @@ def main():
     ap.add_argument("--from-csv", help="clean a local raw catches CSV instead of Firestore")
     ap.add_argument("--species-csv", help="raw species CSV (with --from-csv)")
     ap.add_argument("--service-account", help="path to a service-account JSON")
+    ap.add_argument("--catches-collection", default="catches",
+                    help="Firestore collection name for catches (default: catches)")
+    ap.add_argument("--species-collection", default="species",
+                    help="Firestore collection name for species (default: species)")
     ap.add_argument("--upload", action="store_true", help="POST to /api/catches/upload")
     ap.add_argument("--full-precision", action="store_true",
                     help="keep exact lat/lon (internal view); default rounds to ~1 km for privacy")
+    ap.add_argument("--min-catches", type=int, default=1000,
+                    help="refuse to upload if fewer than this many catches were produced "
+                         "(guards against a bad/empty Firestore pull wiping the live map)")
     args = ap.parse_args()
 
     global FULL_PRECISION
     FULL_PRECISION = args.full_precision
     os.makedirs(args.out, exist_ok=True)
     if args.from_csv:
-        from_csv(args.from_csv, args.species_csv, args.out)
+        kept = from_csv(args.from_csv, args.species_csv, args.out)
     else:
-        from_firestore(_firestore_client(args.service_account), args.out)
+        kept = from_firestore(_firestore_client(args.service_account), args.out,
+                              args.catches_collection, args.species_collection)
     if args.upload:
+        if kept < args.min_catches:
+            sys.exit(f"[sync] ABORT: only {kept} catches produced (< --min-catches "
+                     f"{args.min_catches}); NOT uploading — keeping the live data intact.")
         upload(args.out)
 
 

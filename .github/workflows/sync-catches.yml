@@ -7,7 +7,7 @@ name: Sync GotOne catches from Firestore
 on:
   workflow_dispatch:        # manual "Run workflow" button
   schedule:
-    - cron: "0 6 * * 1"     # every Monday 06:00 UTC
+    - cron: "0 8 * * *"     # daily at 08:00 UTC (~4am ET) — fresh each morning
 
 concurrency:
   group: sync-catches
@@ -16,6 +16,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -37,13 +38,12 @@ jobs:
         env:
           SST_UPLOAD_URL: ${{ secrets.SST_UPLOAD_URL }}          # e.g. https://sst.gotoneapp.com
           CATCHES_UPLOAD_TOKEN: ${{ secrets.CATCHES_UPLOAD_TOKEN }}
-        run: python scripts/sync_catches.py --out data --upload
+        # --full-precision matches the gated prod map; --min-catches aborts the
+        # upload (leaving the live data intact) if the pull returns too few rows.
+        # If your Firestore collections aren't named "catches"/"species", add
+        # --catches-collection / --species-collection.
+        run: python scripts/sync_catches.py --out data --upload --full-precision --min-catches 1000
 
-      # Optional: also keep a versioned snapshot in git. Uncomment to enable.
-      # - name: Commit refreshed CSVs
-      #   run: |
-      #     git config user.name "github-actions[bot]"
-      #     git config user.email "github-actions[bot]@users.noreply.github.com"
-      #     git add data/gotone_catches.csv data/gotone_species.csv
-      #     git commit -m "data: refresh GotOne catches from Firestore" || echo "no changes"
-      #     git push
+      # NOTE: the cleaned CSVs are intentionally NOT committed. This repo is
+      # public and prod uses full-precision spot data, which must never enter
+      # git. The app serves the uploaded data from its persistent disk instead.
