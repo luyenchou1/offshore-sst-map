@@ -6,6 +6,7 @@ Dash 4.0 web app ("GotOne Offshore SST Analyzer") branded for [gotoneapp.com](ht
 ## Tech Stack
 - **Current version**: v1.0 (displayed in sidebar UI; next release: v1.01)
 - **Dash 4.0** + **dash-leaflet** + **dash-bootstrap-components** (Flatly theme + GotOne CSS overrides)
+- **Basemap**: Esri World Light Gray Canvas — keyless raster tiles, `{z}/{y}/{x}` scheme. Replaced CARTO Positron (`basemaps.cartocdn.com/light_all`), which began requiring an API key and served "API KEY REQUIRED" watermarks. Defined in `layout/mapview.py` (SST map) and `layout/catchview.py` (catch map).
 - **NOAA CoastWatch ERDDAP** — MUR GHRSST (1km, preferred) with OISST (25km) fallback
 - Data available from 2002-06-01 to ~2 days ago (MUR has ~2-day latency)
 - Python 3.12, venv at `.venv/`
@@ -229,7 +230,7 @@ Pre-cache (memory-efficient raw-only mode):
 
 ### Leaflet Z-Index
 Map layer panes and their z-index values matter enormously:
-- **tilePane**: 200 (CARTO basemap)
+- **tilePane**: 200 (Esri Light Gray basemap)
 - **gebco-pane**: 390 (custom — GEBCO bathymetry WMS)
 - **contours-pane**: 400 (custom — NOAA ENC nautical chart WMS)
 - **sst-pane**: 410 (custom — SST ImageOverlay, opacity controlled by sidebar slider)

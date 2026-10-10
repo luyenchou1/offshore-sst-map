@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-10 — Keyless Basemap (CARTO → Esri Light Gray)
+
+### Fixed
+- **Basemap showed "API KEY REQUIRED" watermarks**: CARTO began gating its previously-keyless Positron tiles (`basemaps.cartocdn.com/light_all`) behind an API key. Both the SST map (`layout/mapview.py`) and the catch map (`layout/catchview.py`) used that URL, so both rendered watermark tiles instead of a basemap.
+
+### Changed
+- **Switched both maps to Esri World Light Gray Canvas** (`server.arcgisonline.com/.../World_Light_Gray_Base`) — a keyless, no-account, near-identical light-grey basemap. Note the Esri tile scheme is `{z}/{y}/{x}` (not `{z}/{x}/{y}`), with no `{s}` subdomain or `{r}` retina token. Attribution updated to Esri. The SST data pipeline was unaffected — only the background tiles changed.
+
+---
+
 ## 2026-06-22 — Off-Render SST Fetching (NOAA IP-block workaround)
 
 ### Context
