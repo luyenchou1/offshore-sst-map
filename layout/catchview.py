@@ -284,9 +284,12 @@ def build_catch_map():
                         preferCanvas=True,
                         style={"height": "100%", "width": "100%"},
                         children=[
+                            # Esri World Light Gray Canvas — keyless light-grey
+                            # basemap (replaced CARTO Positron, which now requires
+                            # an API key). Esri tile scheme is {z}/{y}/{x}.
                             dl.TileLayer(
-                                url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-                                attribution='&copy; <a href="https://carto.com/">CARTO</a>',
+                                url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+                                attribution='Tiles &copy; <a href="https://www.esri.com/">Esri</a> &mdash; Esri, HERE, Garmin, FAO, NOAA, USGS',
                             ),
                             # White backdrop under the nautical chart (zIndex 355,
                             # below the chart's 360). Opacity follows the chart slider
