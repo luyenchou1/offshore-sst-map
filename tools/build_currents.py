@@ -12,7 +12,8 @@ Runs off-Render (locally or in GitHub Actions):
   3. Fetch NOAA CO-OPS tide + tidal-current predictions for the same window.
   4. Write to --out-dir (default: the local CURRENTS_DIR, so a local dev
      server serves it immediately) and optionally upload to the live app,
-     manifest last so a partial run never goes live.
+     manifest last so a half-uploaded week never goes live. A week that fails
+     to build is skipped (its old version stays live) and the run exits 1.
 
 Usage (repo root, project venv with requirements-tools.txt installed):
   python tools/build_currents.py --weeks 2015-09-supermoon
@@ -28,7 +29,6 @@ import json
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import requests
@@ -48,6 +48,7 @@ MDAPI = "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi"
 # NOAA's WAF rejects the default python-requests User-Agent.
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; GotOneSST/1.0; +https://sst.gotoneapp.com)"}
 TIDE_STATION = "8510560"        # Montauk (Fort Pond Bay)
+NOAA_MIN_INTERVAL = 1.0         # s between CO-OPS calls (~175/week); doubles per 403
 MJD0_EPOCH = int(dt.datetime(1858, 11, 17, tzinfo=dt.timezone.utc).timestamp())
 SCALE = 0.025                   # m/s per int8 unit -> +/-3.2 m/s (6.2 kn)
 KNOTS = 1.943844
@@ -67,6 +68,10 @@ class NoRetry(Exception):
     """A deterministic failure (e.g. NOAA 'no predictions') - don't retry."""
 
 
+class Throttled(Exception):
+    """NOAA's firewall answered 403/429: back off for minutes, not seconds."""
+
+
 def retry(fn, what, tries=5, base=3):
     for i in range(tries):
         try:
@@ -76,7 +81,7 @@ def retry(fn, what, tries=5, base=3):
         except Exception as e:  # noqa: BLE001 - network/OPeNDAP errors vary
             if i == tries - 1:
                 raise
-            wait = base * (i + 1)
+            wait = 60 * 2 ** i if isinstance(e, Throttled) else base * (i + 1)
             log(f"    {what} failed ({type(e).__name__}: {e}); retry in {wait}s")
             time.sleep(wait)
 
@@ -237,9 +242,24 @@ def sample_point(g, field, lat, lon):
 
 # ----------------------------------------------------------------- NOAA ---
 
+_noaa = {"last": 0.0, "gap": NOAA_MIN_INTERVAL}
+
+
 def get_json(url, params=None, what=""):
+    """GET a NOAA CO-OPS endpoint, one call at a time. NOAA rate-limits per IP
+    (403 after ~160 calls, both as a 21 req/s burst from a GitHub runner and
+    at 2 req/s from home), so calls are spaced out and the spacing doubles,
+    up to 4 s, each time we're throttled."""
     def go():
+        pause = _noaa["last"] + _noaa["gap"] - time.monotonic()
+        if pause > 0:
+            time.sleep(pause)
+        _noaa["last"] = time.monotonic()
         r = requests.get(url, params=params, headers=HEADERS, timeout=60)
+        if r.status_code in (403, 429):
+            _noaa["gap"] = min(_noaa["gap"] * 2, 4.0)
+            raise Throttled(f"HTTP {r.status_code} from NOAA (rate limited; "
+                            f"now {_noaa['gap']:g}s between calls)")
         r.raise_for_status()
         j = r.json()
         if isinstance(j, dict) and "error" in j:
@@ -303,7 +323,9 @@ def station_predictions(st, t0, t1, labels):
     try:
         curve = coops({**base, "interval": "30"}, f"{st['id']} curve")["current_predictions"]["cp"]
         events = coops({**base, "interval": "MAX_SLACK"}, f"{st['id']} events")["current_predictions"]["cp"]
-    except Exception as e:  # noqa: BLE001 - some stations have no predictions
+    except (NoRetry, KeyError, TypeError, ValueError) as e:
+        # No predictions for this station/window. Network errors and
+        # throttling propagate instead: they would silently drop stations.
         log(f"    skip {st['id']} ({st['name']}): {e}")
         return None
     if not curve:
@@ -398,9 +420,7 @@ def build_window(ds, times, g, k0, k1, keep, spec, labels, stations_meta, tide_i
                      "v": [round(float(z + offset), 3) if np.isfinite(z) else None
                            for z in zeta_ft]}
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        recs = list(pool.map(lambda s: station_predictions(s, t0 - pad, t1 + pad, labels),
-                             stations_meta))
+    recs = [station_predictions(s, t0 - pad, t1 + pad, labels) for s in stations_meta]
     ref = fields.get("surface") or fields.get("davg")
     stations = []
     for rec in recs:
@@ -586,8 +606,10 @@ def main() -> int:
                             "to see where today's wind is pushing the water off the tide table.",
                   "_window": k0}]
 
-    entries, all_blobs, station_index = [], {}, []
-    for spec in specs:
+    # A failed week is skipped (its previously published version stays live);
+    # the run still exits 1 so the failure shows up in Actions.
+    entries, all_blobs, station_index, failed = [], {}, [], []
+    for n, spec in enumerate(specs):
         log(f"\n== {spec['id']}: {spec['title']} ==")
         spec = {**spec, "default_station": default_station}
         if "_window" in spec:
@@ -598,19 +620,29 @@ def main() -> int:
             k0 = int(np.searchsorted(times, start))
             if k0 >= len(times) or times[k0] != start:
                 log(f"ERROR: model has no step at {iso(start)}")
-                return 1
+                failed.append(spec["id"])
+                continue
             want = int(spec.get("hours", 168)) + 1
         try:
             k1, keep = window_steps(times, k0, want)
             entry, blobs, sidx = build_window(ds, times, g, k0, k1, keep, spec, labels,
                                               stations_meta, tide_info, depths, args.force)
+        except Throttled as e:
+            log(f"ERROR building {spec['id']}: {e} even after backing off; "
+                "skipping the remaining weeks - re-run later")
+            failed += [s["id"] for s in specs[n:]]
+            break
         except Exception as e:  # noqa: BLE001
             log(f"ERROR building {spec['id']}: {type(e).__name__}: {e}")
-            return 1
+            failed.append(spec["id"])
+            continue
         entries.append(entry)
         all_blobs.update(blobs)
         station_index += sidx
     ds.close()
+    if not entries:
+        log(f"\nNothing built; failed: {', '.join(failed)}")
+        return 1
 
     for fname, blob in all_blobs.items():
         write_local(args.out_dir, fname, blob)
@@ -625,8 +657,12 @@ def main() -> int:
         indent=1).encode("utf-8"))
     log(f"\nWrote {len(all_blobs) + 1} files to {args.out_dir}")
 
+    status = 0
+    if failed:
+        log(f"FAILED (not built): {', '.join(failed)}")
+        status = 1
     if not args.upload:
-        return 0
+        return status
     log(f"Uploading to {args.base_url} ...")
     try:
         for fname, blob in all_blobs.items():
@@ -643,7 +679,7 @@ def main() -> int:
     except Exception as e:  # noqa: BLE001
         log(f"ERROR uploading: {type(e).__name__}: {e} (manifest not updated)")
         return 1
-    return 0
+    return status
 
 
 if __name__ == "__main__":

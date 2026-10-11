@@ -19,6 +19,7 @@
 
 ### Fixed / Ops
 - **"Seed SST cache" had been silently disabled by GitHub since 2026-08-30** (60 days without commits). Re-enabled; the keepalive workflow prevents a repeat. The SST map kept working only because **NOAA has lifted its block on Render's IP** — Render now fetches uncached windows from ERDDAP itself (Oct 8 window loaded live in ~10 s). Docs updated.
+- **First production build hit NOAA rate limiting** — 4 parallel threads (~21 req/s) from the GitHub runner got `403 Forbidden` from CO-OPS after one week (~175 calls). The builder now makes NOAA calls one at a time, 1 s apart (spacing doubles after each 403), backs off minutes when throttled, never silently drops stations on network errors, and publishes the weeks that did build (exit 1 still flags the failure).
 
 ---
 
