@@ -22,7 +22,7 @@
 ### Tablet & full screen
 - On iPads (any touch screen) and windows narrower than 1200 px the sidebar is a slide-in drawer, as on phones, so the map and chart get the full width; it closes itself after you pick a view, date, week, strength or spot.
 - Floating Play / step buttons on the map (tablets and phones), kept in sync with the sidebar's Play button.
-- Full-screen button on the map (hides the page header); opens the page in a new tab when embedded without fullscreen permission; not shown on iPhone, which can't full-screen a web page.
+- Full-screen button on the map; in full screen the header shrinks to a slim branded bar (logo, "Currents", "How it works") with room on the left for iPadOS's own exit "X". Opens the page in a new tab when embedded without fullscreen permission; not shown on iPhone, which can't full-screen a web page.
 
 ### Accuracy (full-season build)
 - Out-of-sample share of the model's flow reproduced: Race/Plum Gut/Fishers 87–96%, Gardiners/Peconics 78–89%, Block Island Sound 65–83%, ocean side 28–58%.

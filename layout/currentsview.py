@@ -416,7 +416,8 @@ def build_currents_page():
                         [
                             html.Button("How it works", id="currents-about-open",
                                         className="header-nav-link currents-about-link"),
-                            dcc.Link("← SST Map", href="/", className="header-nav-link"),
+                            dcc.Link("← SST Map", href="/",
+                                     className="header-nav-link currents-sst-link"),
                         ],
                         className="currents-header-links",
                     ),
