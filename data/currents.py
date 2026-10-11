@@ -7,10 +7,17 @@ lazily) so the builder can import it without pulling in the web app.
 Files live in CURRENTS_DIR (on Render: /var/data/cache/currents, i.e. a
 subfolder of the persistent disk that SST_CACHE_DIR points at):
 
-  manifest.json                 index of available weeks + station list
+  manifest.json                 index: weeks, stations, and the "atlas" entry
   <week>_surface.bin.gz         hourly surface-current frames
   <week>_davg.bin.gz            hourly depth-averaged-current frames
   <week>_meta.json.gz           NOAA tide/current predictions for the week
+
+The tide-stage atlas (tools/build_tide_atlas.py) uses the same names and
+format with id "atlas-<year>": its frame files hold basis fields per tide
+phase bin instead of hourly frames (frame = basis * bins + bin; t0 = 0,
+dt = mean tide cycle / bins), and its meta has an "atlas" key instead of
+"week" (phase/range model, presets, skill maps, station curves, bundled
+Montauk high/low predictions).
 
 Frame file format "GOCUR1" (little-endian), gzip-compressed on disk:
 
@@ -150,9 +157,11 @@ def validate_upload(fname, data):
         raw = _gunzip_bounded(data)
         if fname.endswith("_meta.json.gz"):
             meta = json.loads(raw.decode("utf-8"))
-            for key in ("week", "tide", "stations"):
+            for key in ("tide", "stations"):
                 if key not in meta:
                     return f"meta missing '{key}'"
+            if "week" not in meta and "atlas" not in meta:
+                return "meta missing 'week' or 'atlas'"
             return None
         h = parse_header(raw)
         if not (2 <= h["nx"] <= 2000 and 2 <= h["ny"] <= 2000 and 1 <= h["nframes"] <= 2000):

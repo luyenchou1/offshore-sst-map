@@ -190,7 +190,7 @@ def build_geometry(mesh, bbox, grid_m, margin=0.05):
     }
 
 
-def fetch_elements(ds, name, k0, k1, i0, i1, layer=None, chunk=24):
+def fetch_elements(ds, name, k0, k1, i0, i1, layer=None, chunk=24, verbose=True):
     """Read var[k0:k1, (layer,) i0:i1] in time chunks, with retries."""
     out = np.empty((k1 - k0, i1 - i0), np.float32)
     for a in range(k0, k1, chunk):
@@ -203,7 +203,8 @@ def fetch_elements(ds, name, k0, k1, i0, i1, layer=None, chunk=24):
 
         t = time.monotonic()
         out[a - k0:b - k0] = retry(get, f"{name}[{a}:{b}]")
-        log(f"    {name} hours {a - k0:3d}-{b - k0 - 1:3d} ({time.monotonic() - t:.1f}s)")
+        if verbose:
+            log(f"    {name} hours {a - k0:3d}-{b - k0 - 1:3d} ({time.monotonic() - t:.1f}s)")
     return out
 
 
@@ -504,13 +505,17 @@ def build_window(ds, times, g, k0, k1, keep, spec, labels, stations_meta, tide_i
 
 
 def merge_manifest(existing, entries, station_index, default_station):
-    weeks = {w["id"]: w for w in (existing or {}).get("weeks", []) if "id" in w}
+    """Merge week entries and stations into the manifest. Keys this builder
+    doesn't own (e.g. "atlas" from build_tide_atlas.py) are kept as-is."""
+    existing = existing or {}
+    weeks = {w["id"]: w for w in existing.get("weeks", []) if "id" in w}
     for e in entries:
         weeks[e["id"]] = e
-    stations = {s["id"]: s for s in (existing or {}).get("stations", [])}
+    stations = {s["id"]: s for s in existing.get("stations", [])}
     for s in station_index:
         stations[s["id"]] = s
     return {
+        **existing,
         "version": 1,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "default_station": default_station,

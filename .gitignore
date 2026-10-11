@@ -12,6 +12,7 @@ __pycache__/
 *.nc
 Branding:Logo/
 cache/
+build/
 .env
 
 # GotOne catch data — populated at runtime by scripts/sync_catches.py /

@@ -1,22 +1,31 @@
 name: Build currents
 
-# Builds the /currents animation data off-Render (UMass Dartmouth NECOFS model +
-# NOAA CO-OPS predictions) and uploads it to the live app via
-# /api/currents/upload. Manual runs rebuild the curated hindcast weeks in
-# data/currents_weeks.json. The daily schedule tries the live NECOFS forecast and
-# exits quietly (success) while UMassD isn't publishing it, so "live" currents
-# switch on by themselves if the forecast comes back.
+# Builds the /currents data off-Render (UMass Dartmouth NECOFS model + NOAA
+# CO-OPS predictions) and uploads it to the live app via /api/currents/upload.
+#
+#   hindcast  rebuild the curated example weeks in data/currents_weeks.json
+#   forecast  latest NECOFS run (the daily schedule; exits quietly while UMassD
+#             isn't publishing it, so "live" currents switch on by themselves)
+#   atlas     the tide-stage atlas behind the "Today" / "Tide cycle" views
+#             (tools/build_tide_atlas.py). Kept as a workflow artifact; uploaded
+#             to the live site only with publish=true. Model frames + NOAA
+#             responses are cached between runs, so a publish run after a
+#             test run downloads nothing.
 on:
   workflow_dispatch:
     inputs:
       source:
-        description: "hindcast = curated weeks; forecast = latest NECOFS run"
+        description: "hindcast = example weeks; forecast = latest NECOFS run; atlas = tide-stage atlas"
         type: choice
-        options: [hindcast, forecast]
+        options: [hindcast, forecast, atlas]
         default: hindcast
       weeks:
-        description: "Week ids from data/currents_weeks.json (comma-separated) or 'all'"
+        description: "hindcast only: week ids from data/currents_weeks.json (comma-separated) or 'all'"
         default: all
+      publish:
+        description: "atlas only: upload to the live site (otherwise just build + artifact)"
+        type: boolean
+        default: false
   schedule:
     - cron: '30 12 * * *'   # daily ~08:30 ET
 
@@ -27,7 +36,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,12 +46,39 @@ jobs:
           cache-dependency-path: requirements-tools.txt
       - name: Install build dependencies
         run: pip install -r requirements-tools.txt
+      - name: Restore atlas work cache
+        if: inputs.source == 'atlas'
+        uses: actions/cache/restore@v4
+        with:
+          path: build/atlas-work
+          key: atlas-work-v1-${{ github.run_id }}
+          restore-keys: atlas-work-v1-
       - name: Build and upload
         env:
           CACHE_UPLOAD_TOKEN: ${{ secrets.CACHE_UPLOAD_TOKEN }}
           # Inputs go through env vars, never inlined into the script.
           SOURCE: ${{ github.event_name == 'schedule' && 'forecast' || inputs.source }}
           WEEKS: ${{ inputs.weeks || 'all' }}
-        run: >-
-          python tools/build_currents.py --source "$SOURCE" --weeks "$WEEKS"
-          --upload --base-url https://sst.gotoneapp.com
+          PUBLISH: ${{ inputs.publish && 'yes' || '' }}
+        run: |
+          if [ "$SOURCE" = atlas ]; then
+            python tools/build_tide_atlas.py --out-dir build/atlas-out \
+              ${PUBLISH:+--upload} --base-url https://sst.gotoneapp.com
+          else
+            python tools/build_currents.py --source "$SOURCE" --weeks "$WEEKS" \
+              --upload --base-url https://sst.gotoneapp.com
+          fi
+      - name: Save atlas work cache
+        if: always() && inputs.source == 'atlas'
+        uses: actions/cache/save@v4
+        with:
+          path: build/atlas-work
+          key: atlas-work-v1-${{ github.run_id }}
+      - name: Keep the atlas as an artifact
+        if: always() && inputs.source == 'atlas'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tide-atlas
+          path: build/atlas-out
+          if-no-files-found: warn
+          retention-days: 14
