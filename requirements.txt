@@ -1,6 +1,9 @@
 dash>=2.14.0
-dash-leaflet>=1.0.0
+# <2: /currents relies on dash-leaflet's bundled global Leaflet (window.L)
+dash-leaflet>=1.1.3,<2
+dash-extensions>=2.0.0
 dash-bootstrap-components>=1.5.0
+plotly>=5.0.0
 gunicorn>=21.2.0
 pandas>=2.1.0
 numpy>=1.26.0

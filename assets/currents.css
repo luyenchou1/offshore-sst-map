@@ -1,0 +1,165 @@
+/* ===== Currents page (/currents) + shared header nav link =====
+   Dash loads every assets/*.css on every page, so all rules are scoped to
+   currents-* classes. The page can't scroll (gotone.css sets body overflow
+   hidden), so map + chart share the viewport below the 72px header. */
+
+.header-nav-link {
+    margin-left: auto;
+    align-self: center;
+    padding-left: 1rem;
+    color: #0183fe;
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+    text-decoration: none;
+}
+.header-nav-link:hover { color: #4da6ff; text-decoration: underline; }
+
+.currents-wrapper {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 72px);
+    background: #05080f;
+}
+.currents-map-box {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+.currents-map-box .leaflet-container {
+    background: #0b0f17;
+    font-family: inherit;
+}
+.currents-chart-box {
+    flex: 0 0 auto;
+    height: 31%;
+    min-height: 200px;
+    max-height: 310px;
+    display: flex;
+    flex-direction: column;
+    background: #0a1628;
+    border-top: 1px solid #1e293b;
+}
+.currents-badge {
+    flex: 0 0 auto;
+    min-height: 1.6rem;
+    padding: 0.3rem 0.75rem 0;
+    color: #e2e8f0;
+    font-size: 0.78rem;
+    line-height: 1.35;
+}
+.currents-badge b { color: #fbbf24; font-weight: 600; }
+.currents-badge .muted { color: #94a3b8; }
+.currents-chart-area {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+.currents-chart {
+    position: absolute;
+    inset: 0;
+    cursor: col-resize;
+}
+.currents-cursor-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+.currents-cursor {
+    position: absolute;
+    top: 6px;
+    bottom: 26px;
+    width: 2px;
+    margin-left: -1px;
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 0 6px rgba(255, 255, 255, 0.6);
+}
+
+/* Overlays created by currents.js inside the Leaflet container */
+.currents-clock {
+    background: rgba(10, 22, 40, 0.82);
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 0.45rem 0.65rem;
+    color: #e2e8f0;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    min-width: 13rem;
+    pointer-events: none;
+}
+.currents-clock .time { font-size: 0.92rem; font-weight: 600; color: #ffffff; }
+.currents-clock .cur-row { color: #cbd5e1; }   /* not .row: Bootstrap owns that */
+.currents-clock .flood { color: #2dd4bf; }
+.currents-clock .ebb { color: #fb923c; }
+.currents-clock .slack { color: #e2e8f0; }
+.currents-legend {
+    background: rgba(10, 22, 40, 0.82);
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 0.4rem 0.6rem;
+    color: #cbd5e1;
+    font-size: 0.7rem;
+    pointer-events: none;
+}
+.currents-legend .bar {
+    width: 150px;
+    height: 8px;
+    border-radius: 4px;
+    margin: 0.25rem 0 0.15rem;
+}
+.currents-legend .ticks { display: flex; justify-content: space-between; }
+.currents-status {
+    position: absolute;
+    left: 50%;
+    top: 45%;
+    transform: translate(-50%, -50%);
+    z-index: 900;
+    max-width: 80%;
+    padding: 0.7rem 1rem;
+    border-radius: 10px;
+    background: rgba(10, 22, 40, 0.9);
+    border: 1px solid #334155;
+    color: #e2e8f0;
+    font-size: 0.85rem;
+    text-align: center;
+    pointer-events: none;
+}
+.currents-status.error { border-color: #f87171; color: #fecaca; }
+.currents-canvas { pointer-events: none; }
+.leaflet-tooltip.currents-tip {
+    background: rgba(10, 22, 40, 0.92);
+    border: 1px solid #334155;
+    color: #e2e8f0;
+    font-size: 0.75rem;
+    line-height: 1.35;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+.leaflet-tooltip.currents-tip::before { border-top-color: #334155; }
+
+/* Sidebar dropdowns: the dark sidebar's light text colour is inherited by Dash
+   4's white dropdown trigger, making the selected value invisible. Force the
+   brand navy (gotone.css only covers the date picker's dropdowns). */
+#currents-week,
+#currents-station,
+#currents-week .dash-dropdown-value,
+#currents-station .dash-dropdown-value,
+#currents-week .dash-dropdown-value span,
+#currents-station .dash-dropdown-value span {
+    color: #0a1628 !important;
+}
+
+/* Radio/checkbox spacing in the dark sidebar */
+.currents-radio .form-check-inline { margin-right: 0.6rem; }
+
+@media (max-width: 767.98px), (max-height: 500px) {
+    .header-nav-link { font-size: 0.78rem; padding-left: 0.5rem; }
+    .currents-wrapper {
+        height: calc(100vh - 52px);
+        height: calc(100dvh - 52px);
+    }
+    .currents-chart-box { height: 36%; min-height: 160px; }
+    .currents-badge { font-size: 0.7rem; padding: 0.25rem 0.6rem 0; }
+    .currents-clock { min-width: 0; font-size: 0.7rem; padding: 0.35rem 0.5rem; }
+    .currents-clock .time { font-size: 0.8rem; }
+    .currents-legend { display: none; }
+}

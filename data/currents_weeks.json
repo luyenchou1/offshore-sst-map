@@ -1,0 +1,59 @@
+{
+  "_comment": "Curated weeks for the /currents page. Built by tools/build_currents.py from the NECOFS GOM3 hourly hindcast (1978-01-01 to 2017-01-01). 'start' is local midnight; 'hours' is the window length (frames = hours + 1). Add a week here, then rebuild.",
+  "default_station": "LIS1001",
+  "featured_stations": {
+    "LIS1001": "The Race",
+    "LIS1012": "Plum Gut",
+    "ACT2596": "Race Point",
+    "ACT2406": "Montauk Point (1 mi NE)",
+    "ACT2426": "Shagwong Reef – Cerberus Shoal",
+    "LIS1010": "Great Gull Island (SW)",
+    "LIS1002": "Wicopesset Island (Fishers)",
+    "ACT2386": "Watch Hill (5 mi SSE)",
+    "ACT2371": "Southwest Ledge (Block Is.)",
+    "ACT2451": "Gardiners Island (3 mi NE)",
+    "ACT2541": "Little Peconic Bay entrance"
+  },
+  "weeks": [
+    {
+      "id": "2015-09-supermoon",
+      "order": 10,
+      "kind": "spring",
+      "title": "Supermoon spring tide",
+      "subtitle": "Sep 25 – Oct 2, 2015",
+      "start": "2015-09-25T00:00:00-04:00",
+      "hours": 168,
+      "lesson": "The Sept 27–28 supermoon eclipse put a full moon at perigee — its closest approach — so these are some of the biggest tides of the year. Watch The Race run over 4 knots, and notice that slack water there comes roughly two hours after high and low tide at Montauk, not at them."
+    },
+    {
+      "id": "2016-08-spring",
+      "order": 20,
+      "kind": "spring",
+      "title": "Summer spring tide",
+      "subtitle": "Aug 16 – 23, 2016",
+      "start": "2016-08-16T00:00:00-04:00",
+      "hours": 168,
+      "lesson": "The Aug 18 full moon lines up sun and moon, so currents peak. Flip between this week and the neap week just before it: same season, same weather — the difference in strength comes from the moon phase alone."
+    },
+    {
+      "id": "2016-08-neap",
+      "order": 30,
+      "kind": "neap",
+      "title": "Summer neap tide",
+      "subtitle": "Aug 7 – 14, 2016",
+      "start": "2016-08-07T00:00:00-04:00",
+      "hours": 168,
+      "lesson": "Around the first-quarter moon the sun and moon pull at right angles, so the tidal range shrinks and currents ease. The timing pattern is the same as at springs — slack still lags high and low water — but the water moves far less."
+    },
+    {
+      "id": "2016-01-jonas",
+      "order": 40,
+      "kind": "storm",
+      "title": "Blizzard Jonas",
+      "subtitle": "Jan 20 – 27, 2016",
+      "start": "2016-01-20T00:00:00-05:00",
+      "hours": 168,
+      "lesson": "A powerful nor'easter arrived on a full-moon spring tide. NOAA's predictions know only the moon; the model also feels the wind. Where the dashed model line pulls away from NOAA's solid line, wind and storm surge are overriding the tide table — exactly the kind of day a tide app gets wrong."
+    }
+  ]
+}

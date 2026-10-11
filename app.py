@@ -18,7 +18,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 
 import requests as http_requests
-from flask import Response, request
+from flask import Response, request, send_from_directory
 
 import dash
 import dash_bootstrap_components as dbc
@@ -32,10 +32,12 @@ from data.catches import (
     get_all_groups,
     load_catches,
 )
+from data import currents as currents_data
 from data.convert import upsample_visual
 from data.erddap import get_sst_multiday
 from data.geo import mask_aoi_rasterized, mask_land_rasterized, orient_to_leaflet
 from layout.catchview import build_catch_page
+from layout.currentsview import build_currents_page
 from layout.mapview import build_map
 from layout.sidebar import build_sidebar
 from map.colorscale import build_legend_component, compute_color_bounds
@@ -446,6 +448,85 @@ def cache_upload():
             200, {"Content-Type": "application/json"})
 
 
+# ---- Currents page data (/currents) ----
+# Prebuilt by tools/build_currents.py (off-Render) and stored on the persistent
+# disk (data.currents.CURRENTS_DIR). Served as-is — no request-time processing
+# on the single worker. Frame/meta files are stored gzip-compressed and sent
+# with Content-Encoding: gzip so the browser inflates them transparently.
+_JSON = {"Content-Type": "application/json"}
+
+
+@server.route("/api/currents/manifest.json")
+def currents_manifest():
+    if not (currents_data.CURRENTS_DIR / "manifest.json").is_file():
+        return (json.dumps({"version": 1, "weeks": [], "stations": []}),
+                200, {**_JSON, "Cache-Control": "no-cache"})
+    return send_from_directory(currents_data.CURRENTS_DIR, "manifest.json",
+                               mimetype="application/json", max_age=60)
+
+
+@server.route("/api/currents/<fname>")
+def currents_file(fname):
+    if fname == "manifest.json" or not currents_data.FILE_RE.fullmatch(fname):
+        return "not found", 404
+    if not (currents_data.CURRENTS_DIR / fname).is_file():
+        return "not found", 404
+    mimetype = ("application/json" if fname.endswith(".json.gz")
+                else "application/octet-stream")
+    resp = send_from_directory(currents_data.CURRENTS_DIR, fname,
+                               mimetype=mimetype, max_age=86400)
+    resp.headers["Content-Encoding"] = "gzip"
+    return resp
+
+
+@server.route("/api/currents/upload", methods=["POST"])
+def currents_upload():
+    """Receive a prebuilt currents file from tools/build_currents.py.
+
+    Same auth as /api/cache/upload (CACHE_UPLOAD_TOKEN; 403 if unset, 401 on
+    mismatch). X-Currents-Filename is validated against data.currents.FILE_RE
+    and the body against the GOCUR1 / meta / manifest formats before an
+    atomic write. The builder uploads manifest.json last, so a partial run
+    never goes live.
+    """
+    import hmac
+
+    token = os.environ.get("CACHE_UPLOAD_TOKEN")
+    if not token:
+        return (json.dumps({"error": "upload disabled (CACHE_UPLOAD_TOKEN not set)"}),
+                403, _JSON)
+    supplied = request.headers.get("X-Upload-Token", "")
+    if not (supplied and hmac.compare_digest(supplied, token)):
+        return json.dumps({"error": "unauthorized"}), 401, _JSON
+
+    fname = request.headers.get("X-Currents-Filename", "")
+    if not currents_data.FILE_RE.fullmatch(fname):
+        return json.dumps({"error": f"invalid filename: {fname!r}"}), 400, _JSON
+    # Check the declared size BEFORE buffering the body (512 MB instance).
+    if (request.content_length or 0) > currents_data.MAX_UPLOAD_BYTES:
+        return json.dumps({"error": "file too large"}), 413, _JSON
+    data = request.get_data()
+    if len(data) > currents_data.MAX_UPLOAD_BYTES:
+        return json.dumps({"error": "file too large"}), 413, _JSON
+    err = currents_data.validate_upload(fname, data)
+    if err:
+        return json.dumps({"error": err}), 400, _JSON
+
+    target_dir = currents_data.CURRENTS_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    tmp = target_dir / (fname + ".uploading")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, target_dir / fname)
+    finally:
+        tmp.unlink(missing_ok=True)
+    size_kb = len(data) / 1024
+    logger.info("Currents UPLOAD: %s (%.0f KB)", fname, size_kb)
+    return (json.dumps({"ok": True, "file": fname, "size_kb": round(size_kb, 1)}),
+            200, _JSON)
+
+
 # ---- Server-side raw data cache ----
 # Raw float arrays are too large (~18 MB) for dcc.Store / browser transport.
 # Keep them server-side; click callbacks read from here instead.
@@ -837,6 +918,7 @@ def build_sst_page():
                 ),
                 # No public link to the catch map — it's reachable only by
                 # navigating to /catches directly, then entering the access key.
+                dcc.Link("Currents →", href="/currents", className="header-nav-link"),
             ],
             className="gotone-header",
         ),
@@ -954,11 +1036,13 @@ app.layout = serve_layout
     State("url", "search"),
 )
 def route_page(pathname, search):
-    """Render the catch map at /catches (gated), the SST map everywhere else."""
+    """Render /catches (gated), /currents, and the SST map everywhere else."""
     if pathname and pathname.rstrip("/").endswith("/catches"):
         if not _catch_authorized(search):
             return _catch_restricted_page(attempted=bool(search and "key=" in search))
         return build_catch_page()
+    if (pathname or "").rstrip("/") == "/currents":
+        return build_currents_page()
     return build_sst_page()
 
 
@@ -2006,6 +2090,73 @@ app.clientside_callback(
 def update_sst_opacity(opacity):
     """Adjust SST overlay transparency via sidebar slider."""
     return opacity
+
+
+# ---- Currents page (route: /currents) ----
+# All animation, station markers and the chart run in assets/currents.js
+# (window.Currents). These clientside callbacks only forward control changes —
+# no server work and nothing per frame. Each writes "" to its own hidden sink.
+# Initial calls are wanted: they hand the default control values to the engine,
+# which queues them until the map is ready.
+_CURRENTS_FORWARD = """
+function(value) {
+    if (window.Currents) { window.Currents.%s(value); }
+    return "";
+}
+"""
+for _ctrl, _method in (
+    ("week", "setWeek"),
+    ("depth", "setDepth"),
+    ("rate", "setRate"),
+    ("station", "selectStation"),
+    ("options", "setOptions"),
+):
+    app.clientside_callback(
+        _CURRENTS_FORWARD % _method,
+        Output(f"currents-sink-{_ctrl}", "children"),
+        Input(f"currents-{_ctrl}", "value"),
+    )
+
+app.clientside_callback(
+    """
+    function(n) {
+        if (!window.Currents) { return window.dash_clientside.no_update; }
+        return window.Currents.togglePlay() ? "Pause" : "Play";
+    }
+    """,
+    Output("currents-play", "children"),
+    Input("currents-play", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+app.clientside_callback(
+    """
+    function(back, fwd) {
+        var t = window.dash_clientside.callback_context.triggered[0];
+        if (window.Currents && t) {
+            window.Currents.step(t.prop_id.indexOf("back") >= 0 ? -3600 : 3600);
+        }
+        return "";
+    }
+    """,
+    Output("currents-sink-step", "children"),
+    Input("currents-step-back", "n_clicks"),
+    Input("currents-step-fwd", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+app.clientside_callback(
+    """
+    function(week, lessons) {
+        var w = (lessons || []).find(function(x) { return x.id === week; });
+        if (!w) { return ""; }
+        return (w.subtitle ? w.subtitle + " — " : "") + w.lesson;
+    }
+    """,
+    Output("currents-lesson", "children"),
+    Input("currents-week", "value"),
+    State("currents-weeks", "data"),
+)
 
 
 # ---- Mobile drawer toggle (clientside — no server round-trip) ----
