@@ -436,16 +436,58 @@
         return interpSeries(c.t, c.v, tSec);
     }
 
-    // Slack (zero crossings) and peak flood / ebb of a signed series.
+    // NOAA publishes only slack / max-current times for *subordinate* stations
+    // (72 of the 86 here), whatever interval is asked for; joining those with
+    // straight lines drew a zigzag. Rebuild the curve as NOAA's tables do: a
+    // quarter sine from slack to max and back (Tidal Current Tables, Table
+    // 3), a half cosine between two maxima. Same as tools/build_tide_atlas.py.
+    function eventsOnly(ts) {
+        if (ts.length < 3) { return false; }
+        var gaps = [];
+        for (var i = 1; i < ts.length; i++) { gaps.push(ts[i] - ts[i - 1]); }
+        return median(gaps) > 2700;
+    }
+
+    function densify(ts, vs) {
+        var T = [], V = [], step = 360;
+        for (var i = 0; i < ts.length - 1; i++) {
+            var t0 = ts[i], t1 = ts[i + 1], v0 = vs[i], v1 = vs[i + 1];
+            var n = Math.max(1, Math.round((t1 - t0) / step));
+            for (var k = 0; k < n; k++) {
+                var f = k / n, v;
+                if (Math.abs(v0) < 0.05 && Math.abs(v1) >= 0.05) { v = v1 * Math.sin(Math.PI / 2 * f); }
+                else if (Math.abs(v1) < 0.05 && Math.abs(v0) >= 0.05) { v = v0 * Math.cos(Math.PI / 2 * f); }
+                else { v = v0 + (v1 - v0) * (1 - Math.cos(Math.PI * f)) / 2; }
+                T.push(t0 + f * (t1 - t0));
+                V.push(Math.round(v * 100) / 100);
+            }
+        }
+        T.push(ts[ts.length - 1]);
+        V.push(vs[vs.length - 1]);
+        return { t: T, v: V };
+    }
+
+    // Slack (zero crossings) and peak flood / ebb of a signed series. Exact
+    // zeros count (NOAA's slack points are 0.0); a run of zeros counts once.
     function deriveEvents(ts, vs) {
-        var out = [], xs = [], i;
-        for (i = 0; i < vs.length - 1; i++) {
-            var a = vs[i], b = vs[i + 1];
-            if (a !== 0 && (a < 0) !== (b < 0)) {
-                var tc = ts[i] + (ts[i + 1] - ts[i]) * a / (a - b);
+        var out = [], xs = [], i, j, last = -1, n = vs.length;
+        for (i = 0; i < n; i++) {
+            if (vs[i] === 0 || vs[i] == null) {
+                for (j = i; j < n && (vs[j] === 0 || vs[j] == null); j++) { /* zero run */ }
+                if (last >= 0 && j < n && (vs[last] < 0) !== (vs[j] < 0)) {
+                    var tz = (ts[i] + ts[j - 1]) / 2;
+                    xs.push(tz);
+                    out.push({ t: tz, type: "slack", v: 0 });
+                }
+                i = j - 1;
+                continue;
+            }
+            if (last === i - 1 && last >= 0 && (vs[last] < 0) !== (vs[i] < 0)) {
+                var a = vs[last], b = vs[i], tc = ts[last] + (ts[i] - ts[last]) * a / (a - b);
                 xs.push(tc);
                 out.push({ t: tc, type: "slack", v: 0 });
             }
+            last = i;
         }
         for (var s = 0; s < xs.length - 1; s++) {
             var best = -1, bv = 0;
@@ -614,10 +656,12 @@
             var ctrl = window.AbortController ? new AbortController() : null;
             S.live.ctrl = ctrl;
             S.live.key = key;
+            // +-7 h: subordinate stations return only slack/max events, and the
+            // day's curve needs the events on both sides of midnight.
             var q = { product: "currents_predictions", station: st.id, interval: "6",
                       units: "english", time_zone: "gmt", format: "json",
                       application: "gotone_currents",
-                      begin_date: ymdhmUTC(tl.t0 - 1800), end_date: ymdhmUTC(tl.t1 + 1800) };
+                      begin_date: ymdhmUTC(tl.t0 - 7 * HOUR), end_date: ymdhmUTC(tl.t1 + 7 * HOUR) };
             if (st.bin) { q.bin = st.bin; }
             var url = NOAA + "?" + Object.keys(q).map(function (k) {
                 return k + "=" + encodeURIComponent(q[k]);
@@ -633,9 +677,19 @@
                 if (j.error) { throw new Error(j.error.message || "no predictions"); }
                 var cp = (j.current_predictions || {}).cp || [];
                 if (cp.length < 10) { throw new Error("no predictions"); }
-                var t = new Float64Array(cp.length), v = new Float64Array(cp.length);
-                cp.forEach(function (r, i) { t[i] = parseNoaa(r.Time); v[i] = +r.Velocity_Major; });
-                S.live.data[key] = { t: t, v: v, events: deriveEvents(t, v) };
+                var t = cp.map(function (r) { return parseNoaa(r.Time); });
+                var v = cp.map(function (r) { return +r.Velocity_Major; });
+                if (eventsOnly(t)) {
+                    // Subordinate station: the rows *are* the slack / max events.
+                    var evs = t.map(function (tt, i) {
+                        return { t: tt, v: v[i],
+                                 type: Math.abs(v[i]) < 0.05 ? "slack" : (v[i] > 0 ? "flood" : "ebb") };
+                    });
+                    var d = densify(t, v);
+                    S.live.data[key] = { t: d.t, v: d.v, events: evs };
+                } else {
+                    S.live.data[key] = { t: t, v: v, events: deriveEvents(t, v) };
+                }
                 liveArrived(key);
             }).catch(function (e) {
                 if (e && e.name === "AbortError") { return; }
@@ -1600,7 +1654,15 @@
         var haveMeta = S.weekMeta && S.weekMeta.week.id === w.id;
         if (!haveMeta || !S.fields[key]) { showStatus("Loading " + w.title + "…"); }
         return Promise.all([
-            haveMeta ? Promise.resolve(S.weekMeta) : fetchJson(API + w.files.meta + v),
+            haveMeta ? Promise.resolve(S.weekMeta) : fetchJson(API + w.files.meta + v).then(function (m) {
+                // Subordinate stations' stored "curves" are slack/max events.
+                (m.stations || []).forEach(function (s) {
+                    if (s.curve && s.curve.t && eventsOnly(s.curve.t)) {
+                        s.curve = densify(s.curve.t, s.curve.v);
+                    }
+                });
+                return m;
+            }),
             S.fields[key] ? Promise.resolve(S.fields[key])
                           : fetchBuf(API + w.files[depth] + v).then(decodeFrames)
         ]).then(function (res) {

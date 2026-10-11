@@ -257,13 +257,54 @@ def region_stations(cache, bbox):
 
 
 def crossings(t, v):
-    """Linear zero crossings of a signed series: [(time, rising?)]."""
-    out = []
-    for i in range(len(v) - 1):
-        a, b = v[i], v[i + 1]
-        if a != 0 and (a < 0) != (b < 0):
-            out.append((t[i] + (t[i + 1] - t[i]) * a / (a - b), b > a))
+    """Zero crossings of a signed series: [(time, rising?)]. Exact zeros count
+    (NOAA's slack events are 0.0); a run of zeros counts once, at its middle."""
+    out, last, i, n = [], None, 0, len(v)
+    while i < n:
+        if v[i] == 0:
+            j = i
+            while j < n and v[j] == 0:
+                j += 1
+            if last is not None and j < n and (v[last] < 0) != (v[j] < 0):
+                out.append(((t[i] + t[j - 1]) / 2, bool(v[j] > 0)))
+            i = j
+            continue
+        if last is not None and last == i - 1 and (v[last] < 0) != (v[i] < 0):
+            a, b = v[last], v[i]
+            out.append((t[last] + (t[i] - t[last]) * a / (a - b), bool(b > a)))
+        last = i
+        i += 1
     return out
+
+
+def densify(t, v, step=360.0):
+    """NOAA publishes only slack / max-current events for *subordinate* current
+    stations (72 of the region's 86), whatever interval is requested. Rebuild
+    the curve between events the way NOAA's tables do: a quarter sine from
+    slack to max and back (Tidal Current Tables, Table 3); a half cosine
+    between two maxima. Returns (t, v) every `step` seconds."""
+    t, v = np.asarray(t, np.float64), np.asarray(v, np.float64)
+    ts, vs = [], []
+    for i in range(len(t) - 1):
+        t0, t1, v0, v1 = t[i], t[i + 1], v[i], v[i + 1]
+        n = max(1, int(round((t1 - t0) / step)))
+        f = np.arange(n) / n
+        if abs(v0) < 0.05 <= abs(v1):
+            seg = v1 * np.sin(np.pi / 2 * f)                 # slack -> max
+        elif abs(v1) < 0.05 <= abs(v0):
+            seg = v0 * np.cos(np.pi / 2 * f)                 # max -> slack
+        else:
+            seg = v0 + (v1 - v0) * (1 - np.cos(np.pi * f)) / 2
+        ts.append(t0 + f * (t1 - t0))
+        vs.append(seg)
+    ts.append(t[-1:])
+    vs.append(v[-1:])
+    return np.concatenate(ts), np.concatenate(vs)
+
+
+def events_only(t):
+    """True when a 'curve' is really NOAA's slack/max list (hours apart)."""
+    return len(t) > 2 and float(np.median(np.diff(t))) > 2700
 
 
 def extremes(t, v, xs):
@@ -328,11 +369,15 @@ def station_records(cache, g, tide, centres, clamp, labels, begin, end):
         except (B.NoRetry, KeyError, TypeError, ValueError) as e:
             log(f"    skip {st['id']} ({st['name']}): {e}")
             continue
-        if len(rows) < 200:
+        if len(rows) < 40:          # a 30-day window has ~230 slack/max events
             log(f"    skip {st['id']} ({st['name']}): only {len(rows)} predictions")
             continue
         t = np.array([B.parse_t(r["Time"]) for r in rows], np.float64)
         v = np.array([float(r["Velocity_Major"]) for r in rows])
+        if events_only(t):
+            # Fitting the sparse events directly left most phase bins empty
+            # (0 kn): subordinate spots read "slack" most of the time.
+            t, v = densify(t, v)
         phi, rng = tide(t)
         fit = Fit(1, 1)
         fit.add(phi, tent(rng, centres), v[None, :, None])
