@@ -124,6 +124,7 @@
 }
 .currents-readout .sw.tide { border-top-color: #60a5fa; }
 .currents-readout .sw.mod { border-top-style: dotted; }
+.currents-readout .sw.dash { border-top-style: dashed; }
 .currents-readout .flood { color: #2dd4bf; }
 .currents-readout .ebb { color: #fb923c; }
 .currents-readout .hint { margin-top: 0.15rem; color: #94a3b8; font-size: 0.66rem; }
@@ -190,6 +191,39 @@
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
 }
 .leaflet-tooltip.currents-tip::before { border-top-color: #334155; }
+
+/* Harbor-inlet estimate: an arrow the way the water runs (colour = flood /
+   ebb, set inline by currents.js, as is the rotation); a dot at slack. */
+.currents-inlet { cursor: pointer; }
+.currents-inlet .arrow {
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.25s ease-out;
+}
+.currents-inlet svg path {
+    fill: currentColor;
+    stroke: #0a1628;
+    stroke-width: 1.4;
+    stroke-linejoin: round;
+}
+.currents-inlet .dot {
+    display: none;
+    position: absolute;
+    left: 9px;
+    top: 9px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: currentColor;
+    border: 1.5px solid #0a1628;
+}
+.currents-inlet.slack .arrow { display: none; }
+.currents-inlet.slack .dot { display: block; }
+.currents-inlet.sel svg path { stroke: #ffffff; stroke-width: 2; }
+.currents-inlet.sel .dot { border: 2.5px solid #ffffff; }
 
 /* Sidebar dropdowns: the dark sidebar's light text colour is inherited by Dash
    4's white dropdown trigger, making the selected value invisible. Force the
@@ -293,6 +327,9 @@
 .conf-good { color: #86efac; }
 .conf-moderate { color: #fbbf24; }
 .conf-low { color: #f87171; }
+.conf-rough,
+.conf-estimate { color: #c4b5fd; }   /* computed, not modelled: its own colour */
+.conf-estimate { cursor: help; }
 
 /* "How it works" modal, dark like the page */
 .currents-about { background: #0a1628; color: #e2e8f0; border: 1px solid #1e293b; }

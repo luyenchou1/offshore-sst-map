@@ -7,7 +7,7 @@ Dash 4.0 web app ("GotOne Offshore SST Analyzer") branded for [gotoneapp.com](ht
 - **Current version**: v1.0 (displayed in sidebar UI; next release: v1.01)
 - **Dash 4.0** + **dash-leaflet** + **dash-bootstrap-components** (Flatly theme + GotOne CSS overrides)
 - **Basemap**: Esri World Light Gray Canvas — keyless raster tiles, `{z}/{y}/{x}` scheme. Replaced CARTO Positron (`basemaps.cartocdn.com/light_all`), which began requiring an API key and served "API KEY REQUIRED" watermarks. Defined in `layout/mapview.py` (SST map) and `layout/catchview.py` (catch map). `/currents` uses the dark counterpart (`World_Dark_Gray_Base` + `World_Dark_Gray_Reference` labels), also keyless.
-- **Pages** (one Dash app; hand-written router `route_page` in `app.py`): `/` SST map · `/currents` tidal currents — Today / Tide cycle / Example weeks (public, linked from the SST header) · `/catches` catch map (gated by `CATCHES_ACCESS_KEY`, no public link)
+- **Pages** (one Dash app; hand-written router `route_page` in `app.py`): `/` SST map · `/currents` tidal currents — Today / Tide cycle / Example weeks, plus estimated harbor-inlet currents (Napeague) (public, linked from the SST header) · `/catches` catch map (gated by `CATCHES_ACCESS_KEY`, no public link)
 - **NOAA CoastWatch ERDDAP** — MUR GHRSST (1km, preferred) with OISST (25km) fallback
 - Data available from 2002-06-01 to ~2 days ago (MUR has ~2-day latency)
 - Python 3.12, venv at `.venv/`
@@ -152,6 +152,26 @@ Each week ≈ 2–2.5 MB per depth + ~70 KB meta (under Render's ~7 MB response 
 
 Atlas accuracy (full-season build, Oct 2026): share of the model's flow the typical cycle reproduces in weeks it wasn't built from — Race/Plum Gut/Fishers 87–96%, Gardiners/Peconics 78–89%, Block Island Sound 65–83%, ocean side S of Montauk 28–58% (hazed). Slack timing vs NOAA over all of 2026: The Race median 26 min, **biased late** (+26 min mean — the model's own timing at The Race; 90% within 46 min); Plum Gut median 13 min (90% within 33). The "How it works" modal (`layout/currentsview.py:_about_body`) quotes these — update it if the atlas is rebuilt.
 
+#### Harbor-inlet estimates (prototype: Napeague)
+NECOFS's ~400 m grid has no water inside Napeague, Three Mile Harbor or Lake Montauk (Accabonac: 3 cells), so their inlet currents are computed from the tide, client-side, in every view:
+```
+Build (local; tools/build_inlets.py → data/inlets.json, committed — ships with the code)
+  harbor area by water level (NAVD88 −1.2…+0.8 m): NCEI DEM_all ImageServer (CUDEM 1/9″),
+    flood-filled from a point inside with the inlet cut off
+  inlet: survey dimensions (Napeague: PEP 2012 — 160 m² min section, 55 m wide, 670 m channel);
+    the DEM's throat is logged only (it misses the channel — see Lessons)
+  bay tide outside: Montauk 8510560 high/lows shifted toward Threemile 8511171 (+29/+17 min, ×1.08)
+  datum: Montauk MLLW/MSL vs NAVD88 (mdapi) + sea-level rise since the 1983–2001 epoch (0.12 m)
+  report (typical timing vs Montauk), Lake Montauk check vs NOAA inside/entrance, selftest
+Page (dcc.Store currents-inlets → Currents.setInlets)
+  inletRun(): (L/g) dv/dt = Δη − r v|v|,  d(harbor)/dt = Ac v / A(harbor level);
+    backward Euler (quadratic in v), dt 60 s, 24 h spin-up (cycle view: 3 cycles);
+    tide from each view's tl.hilo() (bundled / week / synthetic cycle high-lows, cosine rule)
+  inlet spots join S.stations (estimate: true); arrow marker in S.inletLayer (always shown);
+  chart = view's tide traces + harbor tide (dashed) + inlet current; badge tagged "Rough estimate"
+```
+Napeague result: slack ≈ 1h10 after Montauk HW / 1h05 after LW (≈1h30 on supermoon tides), strongest flood ≈ 1½ h before HW, ~2.3 kn section-average peaks. To add Accabonac / Three Mile / Lake Montauk: an `INLETS` entry (seed point, cut line, inlet dimensions from a survey or chart, outside-tide offsets), rerun the builder, commit `data/inlets.json`.
+
 ### Key Files
 | File | Purpose |
 |------|---------|
@@ -174,10 +194,12 @@ Atlas accuracy (full-season build, Oct 2026): share of the model's flow the typi
 | `data/currents_weeks.json` | Curated hindcast weeks (+ lesson text) and featured NOAA stations for /currents |
 | `tools/build_currents.py` | Off-Render builder for the example weeks: NECOFS → gridded frames + NOAA predictions → upload |
 | `tools/build_tide_atlas.py` | Off-Render builder for the tide-stage atlas behind Today / Tide cycle (see Architecture → Currents Page) |
+| `tools/build_inlets.py` | Builder for the harbor-inlet estimates (DEM hypsometry, inlet survey, outside-tide offsets, report, Lake Montauk check, selftest) → `data/inlets.json` |
+| `data/inlets.json` | Harbor-inlet model inputs (committed; read by `data/currents.read_inlets()`, run in the browser) |
 | `layout/currentsview.py` | /currents layout: view switch, date / strength / week panels, controls, dark map, chart, "How it works" modal (accuracy text) |
-| `assets/currents.js` | /currents engine: view timelines, atlas math (mirrors build_tide_atlas.py), particles, haze, stations, chart, cursor, badge, live NOAA fetch |
+| `assets/currents.js` | /currents engine: view timelines, atlas math (mirrors build_tide_atlas.py), harbor-inlet model (mirrors build_inlets.py), particles, haze, stations, chart, cursor, badge, live NOAA fetch |
 | `assets/currents.css` | /currents styles + the shared header nav link |
-| `requirements-tools.txt` | Build-only deps (`netCDF4` etc.) — never installed on Render |
+| `requirements-tools.txt` | Build-only deps (`netCDF4`, Pillow for DEM TIFFs, etc.) — never installed on Render |
 | `.github/workflows/` | `seed-sst-cache.yml` (daily SST seed), `build-currents.yml` (currents), `keepalive.yml` (heartbeat), `sync-catches.yml` (catch sync — not wired up yet) |
 
 ### Callback Structure
@@ -199,7 +221,7 @@ Atlas accuracy (full-season build, Oct 2026): share of the model's flow the typi
 16. **clientside: POI collapse toggle** — Expands/collapses POI checklist, flips chevron (▾/▴)
 17. **poi_select_all** — Server callback for Select all / Deselect all links in POI checklist
 18. **route_page** — Router: `/catches` (gated), `/currents`, else the SST page.
-19. **Currents (clientside only)** — week / depth / rate / station / options / strength / date forward to `window.Currents.*` (each writes `''` to a `currents-sink-*` div; initial calls hand the engine its defaults; setters only record state and one coalesced apply() loads data once the map exists); the view switch (`currents-mode`) also returns the three panels' `style`; "Now" calls `goNow()` and returns today (ET) to the date picker; "How it works" opens the modal (auto-opens once per browser via a localStorage flag); play/pause toggles and returns the button label; step ±1 h; lesson text comes from the `currents-weeks` store. All per-frame work is in `assets/currents.js`, which pushes back into Dash only via `dash_clientside.set_props` (station click → dropdown, auto-play → button label).
+19. **Currents (clientside only)** — week / depth / rate / station / options / strength / date forward to `window.Currents.*` (each writes `''` to a `currents-sink-*` div; initial calls hand the engine its defaults; setters only record state and one coalesced apply() loads data once the map exists); the view switch (`currents-mode`) also returns the three panels' `style`; "Now" calls `goNow()` and returns today (ET) to the date picker; the `currents-inlets` store (data/inlets.json) goes to `setInlets()`; "How it works" opens the modal (auto-opens once per browser via a localStorage flag); play/pause toggles and returns the button label; step ±1 h; lesson text comes from the `currents-weeks` store. All per-frame work is in `assets/currents.js`, which pushes back into Dash only via `dash_clientside.set_props` (station click → dropdown, auto-play → button label).
 
 ## Critical Lessons Learned
 
@@ -230,6 +252,16 @@ Atlas accuracy (full-season build, Oct 2026): share of the model's flow the typi
 - **NOAA "no predictions" errors are deterministic** — don't retry them (`NoRetry`); retrying cost ~18 s per station. `LIS1001` The Race and `LIS1012` Plum Gut are harmonic (pass `bin=<currbin>`); most `ACT*` stations are subordinate. 86 current-prediction stations fall in the region.
 - **NOAA CO-OPS rate-limits per IP (~160 calls, then `403 Forbidden`)**: the first GitHub Actions build fetched a week's ~175 prediction calls with 4 threads (~21 req/s) and the runner was 403'd on the next week; a sequential 2 req/s test from home internet also got one 403, at call #162. Calls are now sequential, `NOAA_MIN_INTERVAL` = 1 s apart (~3 min/week), the spacing doubles (max 4 s) after each 403/429, and throttled calls back off 60/120/240 s (`Throttled`). Only "no data" responses skip a station — a network error or throttle fails the week, so a throttled run can't publish a week with stations silently missing. A failed week is skipped (its old version stays live), the rest still publish, and the run exits 1.
 - **NOAA can return an empty list for a station it covers**: in the first production build ACT2776 (Mulford Point) came back with zero rows in one week, beside a 504 for another station, and was dropped without a log line. `station_cp()` retries an empty answer once, and every dropped station is now logged. The page tolerates a station missing from one week (selection is ignored; switching weeks falls back to The Race), but the dropdown label won't match, so rebuild that week.
+
+### Harbor Inlets (estimates)
+- **Lidar DEMs miss inlet channels.** NCEI's 2015 CUDEM (topobathy lidar) shows Napeague's west inlet as a 21 m², 0.4 m-deep gap; the 2012 bathymetric survey measured 160 m² (8–10 ft deep, 180 ft wide). Fast, turbid inlet water defeats lidar and the gap gets interpolated from the shoulders. With the DEM throat the model "chokes" the harbor to a tide of a few inches — a red flag that sent us looking for the survey. Use surveys or charts for the throat; the DEM only for the harbor's area. (Chart soundings agree with the DEM within ~0.35 m elsewhere, but none sit in the throat.)
+- **Napeague has one inlet now.** The east inlet by Goff Point closed around 2007 (Peconic Estuary Program report), so all exchange goes through the west inlet at Lazy Point, which widened from 64 ft (1970) to 180 ft (2010); the county dredged it in Oct 2014 and homeowners report more widening since. A bigger inlet means less lag (≈30–40 min after Montauk instead of ≈70) — the first thing to recalibrate from on-the-water observations.
+- **NOAA "Goff Point, 0.4 mile NW of" (ACT2471) is not the harbor inlet**: it sits in the bay at the head of the 10–12 m channel west of Hicks Island and floods toward 225° (along that channel). Its slack (~1h15–1h40 after Montauk HW) is the bay's.
+- **The tide arrives later westward through Gardiners Bay** (NOAA vs Montauk Fort Pond Bay): Threemile Harbor entrance HW +65 / LW +39 min, Sag Harbor +93 / +74, Little Gull +39 / −2. NECOFS agrees in direction but runs ~20–35 min later than NOAA west of Napeague, and its Napeague Bay amplitude looks wrong (coarse mesh) — so the bay tide outside each inlet is interpolated from NOAA stations, not taken from the model.
+- **Momentum matters for slack**: a friction-only (Keulegan) model puts slack at the moment bay and harbor levels cross; with the 670 m channel's inertia the water keeps running and slack comes ~13 min later. The slack window (< 0.5 kn) is ~30 min either way. Bigger tides choke more (friction ∝ v²): ~1h30 lag on supermoon tides vs ~1h10 typical.
+- **Lake Montauk is the check case** (NOAA predicts inside 8510448 and at the entrance 8510502): NOAA ±5 min, the method 0 / +2 min with the DEM's channel (deep and dredged, so lidar sees it). It shows the method doesn't invent lag; it can't validate Napeague's lag — only on-the-water slack times can.
+- **NOAA's sea-level trend API answers in `trendUnits: "inches/decade"`** (Montauk 1.42 → 3.6 mm/yr). NOAA tide predictions exclude the ~0.12 m rise since the 1983–2001 epoch; it matters when tide heights meet a NAVD88 DEM.
+- **Keep `inletRun()` in `assets/currents.js` in lockstep with `tools/build_inlets.py`**: `window.Currents._inletSelftest()` should report `maxErr` ≈ 5e-5 (the stored values' rounding). The builder computes its selftest from the *live* atlas (3-decimal heights); an older local atlas copy (2 decimals) drifts ~0.006 kn.
 
 ### Tide Height ≠ Tidal Current (the point of /currents)
 - NOAA publishes current predictions separately from tide predictions, and in the Race / Plum Gut / Montauk system slack and max flow are phase-shifted from local high/low water. Supermoon week 2015: The Race slack ≈ 2h40m after Montauk HW/LW, max flood ≈ 15 min–1 h *before* HW; Plum Gut slack ≈ 1h40m after. So "fish the slack at high tide" by a Montauk tide table is off by hours, and two passages a few miles apart turn about an hour apart.
@@ -466,6 +498,7 @@ python app.py
 .venv/bin/python -m pip install -r requirements-tools.txt
 .venv/bin/python tools/build_currents.py --weeks 2015-09-supermoon   # → ./cache/currents
 .venv/bin/python tools/build_tide_atlas.py --start 2016-08-01 --end 2016-08-15 --force  # quick dev atlas
+.venv/bin/python tools/build_inlets.py      # → data/inlets.json (commit it; ships with the code)
 # → http://localhost:8050/currents
 # Production: dispatch the workflow (uses the GitHub secret; no local token needed)
 gh workflow run build-currents.yml -f source=hindcast -f weeks=all

@@ -32,7 +32,9 @@ Currents animated as flowing particles next to NOAA's tide and current predictio
 
 The first two come from a *tide-stage atlas*: a season of UMass Dartmouth's NECOFS (FVCOM) model fitted by tide phase and tidal range, so no live model is needed. Waters where wind and ocean currents often override the tide (the ocean side south of Montauk) are hazed, and a "How it works" panel explains the views, sources and accuracy by area.
 
-Data is built off-Render by `tools/build_tide_atlas.py` and `tools/build_currents.py` (need `requirements-tools.txt`, normally run by `.github/workflows/build-currents.yml`) and uploaded to the app; see `CLAUDE.md` → *Currents Page*.
+**Harbor inlets (estimates, prototype: Napeague).** The model has no water inside small harbors, so their inlet currents are estimated from the tide with a pond-and-inlet model (harbor area from NOAA's 3 m elevation model, inlet size from a 2012 survey). They appear as arrows at the harbor mouth and as "(estimate)" spots in every view.
+
+Data is built off-Render by `tools/build_tide_atlas.py` and `tools/build_currents.py` (need `requirements-tools.txt`, normally run by `.github/workflows/build-currents.yml`) and uploaded to the app; the inlet estimates are built locally by `tools/build_inlets.py` into `data/inlets.json`, which ships with the code. See `CLAUDE.md` → *Currents Page*.
 
 ## Setup (Local)
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-10-11 — Currents: Napeague Harbor inlet (estimate, prototype)
+
+### Added
+- **Estimated harbor-inlet currents**, starting with Napeague Harbor's inlet at Lazy Point. The ocean model's ~1 km mesh has no water inside the small harbors, so their inlet currents are computed from the tide instead: a pond-and-inlet model (the harbor fills and drains through its inlet, held back by the inlet's friction and the water's momentum) driven by the same Montauk tide the page already bundles. Works in all three views with no extra data or live calls.
+- On the map: an arrow at the inlet pointing the way the water runs (teal in, orange out), larger when faster, a dot at slack; it stays up when the NOAA dots are hidden. In the Spot list as "Napeague Harbor inlet (estimate)". The chart adds the estimated tide inside the harbor (dashed) and the inlet current with its slack and peak markers; the line above it gives the day's slack and peak times, tagged "Rough estimate". "How it works" explains the method and its limits.
+- `tools/build_inlets.py` → `data/inlets.json`: harbor area at each water level from NOAA NCEI's 3 m topobathy DEM; inlet size from the 2012 Peconic Estuary Program survey (minimum section 1,720 sq ft, channel 2,200 ft × 180 ft); the bay tide outside from Montauk's high/lows shifted toward NOAA's Threemile Harbor entrance station (+29 min at high water, +17 at low, ×1.08). Writes a report and a selftest the browser reproduces (`Currents._inletSelftest()`, max error ~5e-5 kn).
+
+### Findings
+- **Slack in the Napeague inlet comes about 1 h 10 min after Montauk high water and 1 h 05 min after low water**, longer on big tides (1 h 30 m in the 2015 supermoon week); the current runs hardest about 1½ h before high water (flood) and 1¾ h before low water (ebb), peaking around 2.3 kn averaged across the inlet. The harbor's own tide is ~6% smaller than the bay's and turns 40–50 min after it.
+- NOAA's "Goff Point, 0.4 mile NW of" current station is out in the bay at the head of the deep channel west of Hicks Island (floods toward 225°), not in the harbor's inlet.
+- The lidar DEM misses the inlet channel: it shows a 21 m² throat where the survey measured 160 m². With the DEM's throat the harbor would barely have a tide; the survey dimensions are used, and the DEM only for the harbor's area.
+- Check against NOAA where both sides are predicted: the same method puts Lake Montauk's tide 0–2 min behind its entrance; NOAA says within ±5 min.
+
 ## 2026-10-11 — Currents: "Today" and "Tide cycle" views
 
 ### Added

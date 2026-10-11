@@ -184,3 +184,19 @@ def read_manifest():
             return json.load(f)
     except (OSError, ValueError):
         return None
+
+
+INLETS_FILE = Path(__file__).resolve().parent / "inlets.json"
+
+
+def read_inlets():
+    """Harbor-inlet estimates (tools/build_inlets.py), shipped with the code.
+
+    Small and static, so it rides in the page as a dcc.Store; None if absent.
+    """
+    try:
+        with open(INLETS_FILE, encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return doc if doc.get("inlets") else None

@@ -14,6 +14,9 @@ Data is prebuilt off-Render (tools/build_tide_atlas.py, tools/build_currents.py)
 and served from the persistent disk via /api/currents/*. The page reads the
 manifest on every request, so newly uploaded data appears without a restart;
 until the tide atlas exists it opens on the example weeks.
+
+Harbor-inlet estimates (data/inlets.json, tools/build_inlets.py) ship with the
+code and ride in the page as a dcc.Store; they appear as extra "spots".
 """
 
 from datetime import datetime
@@ -82,16 +85,23 @@ def _segmented(id_, options, value):
     )
 
 
-def build_currents_sidebar(manifest, today):
+def build_currents_sidebar(manifest, today, inlets=None):
     weeks = manifest.get("weeks", [])
     stations = manifest.get("stations", [])
     atlas = manifest.get("atlas")
     mode = "date" if atlas else "week"            # no atlas yet -> example weeks
     week_options = [{"label": w["title"], "value": w["id"]} for w in weeks]
-    station_options = [
-        {"label": ("★ " if s.get("featured") else "") + s["label"], "value": s["id"]}
-        for s in stations
-    ]
+
+    def station_option(s):
+        return {"label": ("★ " if s.get("featured") else "") + s["label"], "value": s["id"]}
+
+    # Key spots, then the harbor-inlet estimates, then every other station.
+    station_options = (
+        [station_option(s) for s in stations if s.get("featured")]
+        + [{"label": f"{c['label']} (estimate)", "value": c["id"]}
+           for c in (inlets or {}).get("inlets", [])]
+        + [station_option(s) for s in stations if not s.get("featured")]
+    )
     default_station = manifest.get("default_station")
     if not any(o["value"] == default_station for o in station_options):
         default_station = station_options[0]["value"] if station_options else None
@@ -220,7 +230,8 @@ def build_currents_sidebar(manifest, today):
                         value=default_station, clearable=False,
                         placeholder="Pick a NOAA station",
                     ),
-                    _small("Or click a dot on the map. ★ = key spots.", marginTop="0.35rem"),
+                    _small("Or click a dot on the map. ★ = key spots. Arrows at harbor "
+                           "mouths are estimates.", marginTop="0.35rem"),
                     dbc.Checklist(
                         id="currents-options",
                         options=[{"label": " Show NOAA stations", "value": "stations"},
@@ -233,10 +244,14 @@ def build_currents_sidebar(manifest, today):
                     _section_label("How to read this"),
                     _small("Particles trace the current: brighter and warmer means faster. "
                            "Dots are NOAA current stations: teal = flooding, orange = ebbing, "
-                           "white = slack. In the chart, blue is Montauk's tide (ft); solid "
+                           "white = slack. Arrows at harbor mouths show the estimated flow "
+                           "through the inlet (teal in, orange out): the model can't see "
+                           "inside small harbors. In the chart, blue is Montauk's tide (ft); solid "
                            "gold is NOAA's predicted current at the selected spot (above zero "
                            "= flood, below = ebb) and dotted gold is the same spot in the model "
-                           "that drives the map. Circles mark slack, triangles the strongest "
+                           "that drives the map. For a harbor inlet, gold is the estimated "
+                           "current and dashed blue the estimated tide inside the harbor. "
+                           "Circles mark slack, triangles the strongest "
                            "flood and ebb. The white line is the time on the map; red dotted is "
                            "now. Hazed water: wind and ocean currents often override the tide "
                            "there."),
@@ -336,6 +351,10 @@ def _about_body():
         ("South side of Montauk, open ocean", "Low",
          "About 30–55%. Wind and offshore currents often matter more than the tide here, "
          "so these waters are hazed on the map."),
+        ("Napeague Harbor inlet (estimate)", "Rough",
+         "Computed from the harbor's size and the inlet's shape, not measured. The timing "
+         "depends on how big the inlet is now, which storms and dredging change; until it's "
+         "checked on the water, allow 30–45 minutes either way on slack times."),
     ]
     return html.Div(
         [
@@ -379,6 +398,22 @@ def _about_body():
                    "NOAA's 2026 predictions. The line above the chart shows the confidence for "
                    "the spot you select.",
                    className="currents-about-note"),
+            h("Harbor inlets (estimates)"),
+            html.P("The ocean model's mesh is too coarse to include small harbors, so the map "
+                   "can't show the strong currents in their inlets. For Napeague Harbor we "
+                   "estimate them instead. The harbor fills and drains through its one inlet "
+                   "by Lazy Point (the east inlet near Goff Point closed around 2007), and how "
+                   "hard the water runs depends on the harbor's area, the inlet's width and "
+                   "depth, and the tide outside. A narrow inlet holds the harbor's tide back, "
+                   "so slack in the inlet comes about an hour to an hour and a quarter after "
+                   "high or low water at Montauk (longer on big spring tides), and the current "
+                   "runs hardest about an hour and a half to two hours before high or low "
+                   "water. The same method puts the tide inside Lake Montauk within about 5 "
+                   "minutes of NOAA's own prediction."),
+            html.P("Speeds are averages across the inlet; the outside of the channel's bend "
+                   "runs faster. NOAA's \"Goff Point, 0.4 mile NW\" station is out in the bay "
+                   "west of Hicks Island, not in this inlet.",
+                   className="currents-about-note"),
             h("Sources"),
             html.Ul([
                 html.Li(["Currents: NECOFS (Northeast Coastal Ocean Forecast System), the FVCOM "
@@ -387,6 +422,10 @@ def _about_body():
                          "at about 1 km resolution here."]),
                 html.Li(["Tides and tidal-current predictions: NOAA CO-OPS, Montauk station "
                          "8510560 and 86 current-prediction stations."]),
+                html.Li(["Harbor inlets: harbor area from NOAA NCEI's 3 m coastal elevation "
+                         "model; Napeague's inlet dimensions from a 2012 survey for the Suffolk "
+                         "County Peconic Estuary Program (Napeague Harbor Water Circulation "
+                         "Enhancement)."]),
             ]),
             html.P("For fishing planning and learning, not for navigation.",
                    className="currents-about-note"),
@@ -397,6 +436,7 @@ def _about_body():
 
 def build_currents_page():
     manifest = currents_data.read_manifest() or {"weeks": [], "stations": []}
+    inlets = currents_data.read_inlets()
     lessons = [{"id": w["id"], "subtitle": w.get("subtitle", ""), "lesson": w.get("lesson", "")}
                for w in manifest.get("weeks", [])]
     today = datetime.now(ET).date().isoformat()   # Render runs on UTC
@@ -429,9 +469,11 @@ def build_currents_page():
             ),
             dbc.Container(
                 [
-                    dbc.Row([build_currents_sidebar(manifest, today), build_currents_map()]),
+                    dbc.Row([build_currents_sidebar(manifest, today, inlets),
+                             build_currents_map()]),
                     html.Div(id="sidebar-backdrop", className="sidebar-backdrop"),
                     dcc.Store(id="currents-weeks", data=lessons),
+                    dcc.Store(id="currents-inlets", data=inlets),
                     dbc.Modal(
                         [
                             dbc.ModalHeader(dbc.ModalTitle("About GotOne Currents")),
@@ -452,7 +494,7 @@ def build_currents_page():
                                      "opacity": 0, "pointerEvents": "none"}),
                     *[html.Div(id=f"currents-sink-{n}", style={"display": "none"})
                       for n in ("week", "depth", "rate", "station", "options", "step",
-                                "strength", "date", "now")],
+                                "strength", "date", "now", "inlets")],
                 ],
                 fluid=True,
                 style={"padding": "0"},

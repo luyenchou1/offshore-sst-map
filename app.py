@@ -2124,6 +2124,13 @@ app.clientside_callback(
     Input("currents-date", "date"),
 )
 
+# Harbor-inlet estimates (data/inlets.json, a dcc.Store) -> extra spots.
+app.clientside_callback(
+    _CURRENTS_FORWARD % "setInlets",
+    Output("currents-sink-inlets", "children"),
+    Input("currents-inlets", "data"),
+)
+
 # View switch: show that view's panel and hand the engine the mode.
 app.clientside_callback(
     """

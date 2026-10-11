@@ -1,4 +1,5 @@
-# Build-only dependencies for tools/build_currents.py — NOT installed on Render.
+# Build-only dependencies for tools/build_currents.py, build_tide_atlas.py and
+# build_inlets.py — NOT installed on Render.
 # Local:  .venv/bin/python -m pip install -r requirements-tools.txt
 #         (use `python -m pip`: the venv's pip launcher is broken from a past move)
 # CI:     .github/workflows/build-currents.yml
@@ -7,3 +8,4 @@ scipy>=1.11.0
 matplotlib>=3.8.0
 netCDF4>=1.7
 requests>=2.31.0
+Pillow>=10.0.0          # tools/build_inlets.py reads NCEI's DEM TIFFs

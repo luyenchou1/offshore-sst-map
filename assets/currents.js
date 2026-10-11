@@ -17,6 +17,11 @@
  *          strength (Neap / Average / Spring).
  *   week   the example weeks: hourly model output incl. that week's weather.
  *
+ * Harbor inlets (estimates): the model has no water inside small harbors, so
+ * their inlet currents are computed here from the same Montauk tide (a
+ * "pond + inlet" model, data/inlets.json from tools/build_inlets.py) and
+ * shown as arrow spots in every view.
+ *
  * Data (app.py /api/currents/*, formats in data/currents.py):
  *   manifest.json            weeks, stations, "atlas" entry
  *   atlas-*_<depth>.bin.gz   basis fields per tide-phase bin (72 frames)
@@ -34,6 +39,7 @@
     var TZ = "America/New_York";
     var KNOTS = 1.943844;
     var HOUR = 3600;
+    var G = 9.81, FT = 0.3048;    // harbor-inlet model (SI inside, ft for tides)
     var FADE = 0.92;              // trail alpha kept per frame
     var MAX_AGE = 100;            // frames before a particle respawns
     var FRAME_MS = 1000 / 30;     // ~30 fps cap
@@ -53,7 +59,7 @@
 
     // -------------------------------------------------------------- state --
     var S = {
-        map: null, particles: null, stationLayer: null, markers: {}, haze: null,
+        map: null, particles: null, stationLayer: null, inletLayer: null, markers: {}, haze: null,
         clock: null, legend: null, playbar: null, fsBtn: null,
         statusEl: null, cursorEl: null, readoutEl: null, readout: null, readoutTimer: 0,
         readoutKey: "", legendRoom: false,
@@ -63,6 +69,7 @@
         opts: { stations: true, model: true },
         atlas: null, weekMeta: null, fields: {}, field: null, tl: null,
         stations: [], stationsById: {}, cur: null, curSig: "",
+        inlets: null, inletSpots: [], inletsDirty: false, pendingStation: null,
         t: 0, playing: false, wantPlay: true, fitted: false,
         raf: 0, lastFrame: 0, lastUi: 0, loadToken: 0, applyTimer: 0,
         chartReady: false, chartKind: null, scrubbing: false,
@@ -469,6 +476,7 @@
 
     // Slack (zero crossings) and peak flood / ebb of a signed series. Exact
     // zeros count (NOAA's slack points are 0.0); a run of zeros counts once.
+    // Each slack records which current it ends ("end": flood / ebb).
     function deriveEvents(ts, vs) {
         var out = [], xs = [], i, j, last = -1, n = vs.length;
         for (i = 0; i < n; i++) {
@@ -477,7 +485,7 @@
                 if (last >= 0 && j < n && (vs[last] < 0) !== (vs[j] < 0)) {
                     var tz = (ts[i] + ts[j - 1]) / 2;
                     xs.push(tz);
-                    out.push({ t: tz, type: "slack", v: 0 });
+                    out.push({ t: tz, type: "slack", v: 0, end: vs[last] > 0 ? "flood" : "ebb" });
                 }
                 i = j - 1;
                 continue;
@@ -485,7 +493,7 @@
             if (last === i - 1 && last >= 0 && (vs[last] < 0) !== (vs[i] < 0)) {
                 var a = vs[last], b = vs[i], tc = ts[last] + (ts[i] - ts[last]) * a / (a - b);
                 xs.push(tc);
-                out.push({ t: tc, type: "slack", v: 0 });
+                out.push({ t: tc, type: "slack", v: 0, end: a > 0 ? "flood" : "ebb" });
             }
             last = i;
         }
@@ -504,6 +512,173 @@
         if (Math.abs(kn) < SLACK_KN) { return { cls: "slack", text: "slack" }; }
         return { cls: kn > 0 ? "flood" : "ebb",
                  text: Math.abs(kn).toFixed(1) + " kn " + (kn > 0 ? "flood" : "ebb") };
+    }
+
+    // -------------------------------------------- harbor inlets (estimates) --
+    // NECOFS's ~1 km mesh has no water inside the small harbors, so their
+    // inlet currents are estimated from the tide (data/inlets.json): the
+    // harbor fills and drains through its inlet, the flow limited by the
+    // inlet's size and friction. Same arithmetic as tools/build_inlets.py,
+    // whose "selftest" block checks this (Currents._inletSelftest()).
+    function inletSpot(c) {
+        return { id: c.id, label: c.label, name: c.name, lat: c.lat, lon: c.lon,
+                 flood_dir: c.flood_dir, ebb_dir: c.ebb_dir, featured: true,
+                 in_model: false, estimate: true, inlet: c };
+    }
+
+    // NOAA's cosine rule between consecutive high/lows, clamped at the ends.
+    function cosTideAt(T, V, t) {
+        var n = T.length;
+        if (t <= T[0]) { return V[0]; }
+        if (t >= T[n - 1]) { return V[n - 1]; }
+        var k = Math.min(floorIndex(T, t), n - 2), f = (t - T[k]) / (T[k + 1] - T[k]);
+        return V[k] + (V[k + 1] - V[k]) * (1 - Math.cos(Math.PI * f)) / 2;
+    }
+
+    function interpLevels(x, xs, ys) {        // evenly spaced xs, clamped
+        if (x <= xs[0]) { return ys[0]; }
+        if (x >= xs[xs.length - 1]) { return ys[ys.length - 1]; }
+        var k = Math.min(Math.max(Math.floor((x - xs[0]) / (xs[1] - xs[0])), 0), xs.length - 2);
+        return ys[k] + (ys[k + 1] - ys[k]) * (x - xs[k]) / (xs[k + 1] - xs[k]);
+    }
+
+    // Montauk high/lows {T, V, H} (H[i] = 1 at high water), repeated a cycle
+    // at a time past either end so a run's spin-up has a tide to follow.
+    function padEvents(ev, t0, t1) {
+        var T = Array.from(ev.T), V = Array.from(ev.V), H = Array.from(ev.H), n, p;
+        while (T.length >= 3 && T[0] > t0) {
+            p = T[2] - T[0];
+            T.unshift(T[1] - p); V.unshift(V[1]); H.unshift(H[1]);
+        }
+        while ((n = T.length) >= 3 && T[n - 1] < t1) {
+            p = T[n - 1] - T[n - 3];
+            T.push(T[n - 2] + p); V.push(V[n - 2]); H.push(H[n - 2]);
+        }
+        return { T: T, V: V, H: H };
+    }
+
+    // Harbor level and inlet current every dt from tStart to tEnd:
+    //   (L/g) dv/dt = (bay - harbor) - r v|v|,  r = k_loss/2g + n^2 L / R^(4/3)
+    //   d(harbor)/dt = Ac v / A_harbor(level)
+    // Backward Euler for v and the harbor together, solved exactly each step
+    // (a quadratic in v): stable for the stiff friction law at any step.
+    // v: m/s (+ = flood, into the harbor); hb: ft above Montauk MLLW.
+    function inletRun(c, D, ev, tStart, tEnd) {
+        var out = c.outside, th = c.throat, Hb = c.harbor;
+        var base = D.mllw_navd88_m + D.slr_m, msl = D.msl_navd88_m + D.slr_m;
+        var n = ev.T.length, T = new Float64Array(n), V = new Float64Array(n), i;
+        for (i = 0; i < n; i++) {
+            T[i] = ev.T[i] + (ev.H[i] ? out.hw_min : out.lw_min) * 60;
+            V[i] = D.mean_ft + (ev.V[i] - D.mean_ft) * out.ratio;
+        }
+        var A0 = th.area_m2, W = th.width_m, n2L = th.manning_n * th.manning_n * th.length_m;
+        var kl = th.k_loss / (2 * G), lv = Hb.levels_m, ar = Hb.area_m2;
+        var dt = S.inlets.constants.dt_s, steps = Math.floor((tEnd - tStart) / dt) + 1;
+        var a = dt * G / th.length_m;                       // the channel's inertia
+        var ts = new Float64Array(steps), vel = new Float64Array(steps), hb = new Float64Array(steps);
+        var eo = cosTideAt(T, V, tStart) * FT + base, eb = eo, v = 0;
+        ts[0] = tStart;
+        hb[0] = (eb - base) / FT;
+        for (i = 1; i < steps; i++) {
+            var t = tStart + i * dt, et = 0.5 * (eo + eb);
+            var Ac = Math.max(A0 + W * (et - msl), 0.05 * A0);
+            var r = kl + n2L / Math.pow(Ac / W, 4 / 3), Ab = interpLevels(eb, lv, ar);
+            eo = cosTideAt(T, V, t) * FT + base;
+            var b = a * r, cc = a * dt * Ac / Ab, rhs = v + a * (eo - eb);
+            var vabs = (-(1 + cc) + Math.sqrt((1 + cc) * (1 + cc) + 4 * b * Math.abs(rhs))) / (2 * b);
+            v = rhs < 0 ? -vabs : vabs;
+            eb += dt * Ac * v / Ab;
+            ts[i] = t;
+            vel[i] = v;
+            hb[i] = (eb - base) / FT;
+        }
+        return { t: ts, v: vel, hb: hb };
+    }
+
+    // The inlet's series for a view, from tl.t0 on (kn), cached on the view.
+    function inletSeries(st, tl) {
+        var cache = tl._inlets || (tl._inlets = {});
+        if (cache[st.id] !== undefined) { return cache[st.id]; }
+        var doc = S.inlets, ev = tl.hilo && tl.hilo();
+        if (!doc || !ev || ev.T.length < 3) { return null; }
+        var dt = doc.constants.dt_s;
+        // Spin-up: a day (the harbor starts level with the bay); the looping
+        // tide cycle runs three cycles so it repeats exactly.
+        var lead = tl.kind === "cycle" ? 3 * (tl.t1 - tl.t0) : doc.constants.spinup_s;
+        var t0 = tl.t0 - lead, t1 = tl.t1 + 2 * HOUR;
+        var run = inletRun(st.inlet, doc.datum, padEvents(ev, t0 - HOUR, t1 + HOUR), t0, t1);
+        var k0 = Math.round(lead / dt), m = run.t.length - k0;
+        var res = { t: new Array(m), kn: new Array(m), hb: new Array(m) };
+        for (var i = 0; i < m; i++) {
+            res.t[i] = run.t[k0 + i];
+            res.kn[i] = run.v[k0 + i] * KNOTS;
+            res.hb[i] = run.hb[k0 + i];
+        }
+        res.events = deriveEvents(res.t, res.kn).filter(function (e) {
+            return e.t >= tl.t0 && e.t <= tl.t1;
+        });
+        return (cache[st.id] = res);
+    }
+
+    function inletKn(st, tl, t) {
+        var s = inletSeries(st, tl);
+        return s ? interpSeries(s.t, s.kn, t) : null;
+    }
+
+    function inletHarborFt(st, tl, t) {
+        var s = inletSeries(st, tl);
+        return s ? interpSeries(s.t, s.hb, t) : null;
+    }
+
+    // Chart: the view's own tide traces, plus the tide inside the harbor and
+    // the inlet current (both estimates) with their slack / peak markers.
+    function inletChart(tl, st, spec) {
+        var s = inletSeries(st, tl);
+        if (!s) { return spec; }
+        var xf = tl.kind === "cycle" ? function (t) { return Math.round(t / HOUR * 1000) / 1000; } : px;
+        var cx = [], cy = [], hy = [];
+        for (var i = 0; i < s.t.length && s.t[i] <= tl.t1 + 1; i += 5) {     // 5-min points
+            cx.push(xf(s.t[i]));
+            cy.push(Math.round(s.kn[i] * 100) / 100);
+            hy.push(Math.round(s.hb[i] * 100) / 100);
+        }
+        spec.traces.push({ x: cx, y: hy, mode: "lines",
+                           name: st.inlet.harbor_name + " tide, ft (estimate)",
+                           line: { color: "#60a5fa", width: 1.4, dash: "dash" } });
+        spec.traces.push(currentTrace(cx, cy, st.label + " current, kn (estimate)"));
+        spec.traces = spec.traces.concat(eventTraces(s.events, xf));
+        spec.maxC = maxAbs([cy]);
+        return spec;
+    }
+
+    function inletBadge(tl, st) {
+        var s = inletSeries(st, tl);
+        var tag = ' · <span class="conf conf-estimate" title="' + esc(st.inlet.notes) +
+                  '">Rough estimate</span>';
+        if (!s) { return "<b>" + esc(st.label) + "</b>" + tag; }
+        if (tl.kind === "date") {
+            return "<b>" + esc(st.label) + '</b> <span class="muted">' +
+                esc(fmtDay.format(new Date((tl.t0 + 12 * HOUR) * 1000))) + ", estimated:</span> " +
+                dayParts(s.events, tl) + tag;
+        }
+        var ev = tl.hilo(), hw = [], lw = [];
+        for (var i = 0; i < ev.T.length; i++) {
+            if (ev.T[i] < tl.t0 - 6 * HOUR || ev.T[i] > tl.t1 + 6 * HOUR) { continue; }
+            (ev.H[i] ? hw : lw).push(ev.T[i]);
+        }
+        var parts = timingParts(s.events, hw, lw);
+        return "<b>" + esc(st.label) + '</b> <span class="muted">vs Montauk tide, estimated:</span> ' +
+            (parts.length ? parts.join(" · ") : '<span class="muted">no slack in this window</span>') + tag;
+    }
+
+    // A view's stations / chart / badge, with the inlet estimates handled here.
+    function withInlets(tl) {
+        var kn = tl.stationKn, src = tl.source, chart = tl.chart, badge = tl.badge;
+        tl.stationKn = function (st, t) { return st && st.estimate ? inletKn(st, tl, t) : kn(st, t); };
+        tl.source = function (st) { return st && st.estimate ? "estimate" : src(st); };
+        tl.chart = function (st) { return st && st.estimate ? inletChart(tl, st, chart(null)) : chart(st); };
+        tl.badge = function (st) { return st && st.estimate ? inletBadge(tl, st) : badge(st); };
+        return tl;
     }
 
     // --------------------------------------------------------- timelines --
@@ -537,7 +712,12 @@
         tl.source = function () { return "NOAA"; };
         tl.chart = function (st) { return weekChart(meta, f, st); };
         tl.badge = function (st) { return weekBadge(meta, st); };
-        return tl;
+        tl.hilo = function () {
+            var h = meta.tide.hilo || [];
+            return { T: h.map(function (x) { return x.t; }), V: h.map(function (x) { return x.v; }),
+                     H: h.map(function (x) { return x.type === "H" ? 1 : 0; }) };
+        };
+        return withInlets(tl);
     }
 
     function cycleTimeline(A, key) {
@@ -559,7 +739,18 @@
         tl.source = function () { return "Typical"; };
         tl.chart = function (st) { return cycleChart(A, tl, st); };
         tl.badge = function (st) { return typicalBadge(A, st, "vs Montauk tide, typically:"); };
-        return tl;
+        // The looping cycle as high/lows: HW at 0, LW at +tEbb, every period.
+        tl.hilo = function () {
+            var P = A.tEbb + A.tFlood, hv = tl.tide(0).v, lv = tl.tide(A.tEbb).v;
+            var ev = { T: [], V: [], H: [] };
+            for (var k = -5; k <= 2; k++) {
+                ev.T.push(k * P, k * P + A.tEbb);
+                ev.V.push(hv, lv);
+                ev.H.push(1, 0);
+            }
+            return ev;
+        };
+        return withInlets(tl);
     }
 
     function cycleLabel(A, t) {            // t = seconds from Montauk high water
@@ -594,7 +785,8 @@
         tl.source = function (st) { return liveFor(st, tl) ? "NOAA" : "Typical"; };
         tl.chart = function (st) { return dateChart(A, tl, st); };
         tl.badge = function (st) { return dateBadge(A, tl, st); };
-        return tl;
+        tl.hilo = function () { return { T: A.T, V: A.V, H: A.H }; };
+        return withInlets(tl);
     }
 
     function stageLabel(A, t) {            // "2h 40m after high water"
@@ -646,7 +838,7 @@
 
     function requestLive() {
         var tl = S.tl, st = S.stationsById[S.station];
-        if (!tl || tl.kind !== "date" || !st) { return; }
+        if (!tl || tl.kind !== "date" || !st || st.estimate) { return; }
         var key = liveKey(st, tl);
         if (S.live.data[key] || S.live.failed[key] || S.live.key === key) { return; }
         if (Date.now() < S.live.blockedUntil) { return; }
@@ -993,8 +1185,8 @@
         var st = S.stationsById[S.station];
         if (st) {
             var d = describe(tl.stationKn(st, t));
-            html += '<div class="cur-row">' + esc(st.label) + ': <span class="' + d.cls + '">' +
-                    d.text + "</span></div>";
+            html += '<div class="cur-row">' + esc(st.label) + (st.estimate ? " (est.)" : "") +
+                    ': <span class="' + d.cls + '">' + d.text + "</span></div>";
         }
         S.clock.getContainer().innerHTML = html;
     }
@@ -1004,6 +1196,12 @@
         var t = viewT(), tl = S.tl, nv = tl.stationKn(st, t), d = describe(nv);
         var m = describe(modelAt(st, t));
         var dir = nv == null || Math.abs(nv) < SLACK_KN ? null : (nv > 0 ? st.flood_dir : st.ebb_dir);
+        if (st.estimate) {
+            return "<b>" + esc(st.label) + "</b><br>Estimate: " + d.text +
+                (dir != null ? " → " + Math.round(dir) + "°" : "") +
+                '<br><span style="color:#94a3b8">From the harbor\'s size, the inlet\'s shape<br>' +
+                "and Montauk's tide. Not a NOAA prediction.</span>";
+        }
         var conf = tl.kind === "week" ? null : confLabel(confidenceAt(S.atlas, S.field, st.lat, st.lon));
         return "<b>" + esc(st.label) + "</b>" +
             (st.label !== st.name ? '<br><span style="color:#94a3b8">' + esc(st.name) + "</span>" : "") +
@@ -1012,20 +1210,51 @@
             (conf ? "<br>Confidence here: " + conf : "");
     }
 
+    // Harbor inlets (estimates): an arrow the way the water runs through the
+    // inlet (teal in, orange out), larger when faster; a dot at slack.
+    var INLET_ICON = '<div class="arrow"><svg viewBox="0 0 24 24" width="26" height="26" ' +
+        'aria-hidden="true"><path d="M12 2.5 L19.5 13 H14.6 V21.5 H9.4 V13 H4.5 Z"/></svg></div>' +
+        '<span class="dot"></span>';
+
+    function inletMarker(st) {
+        return L.marker([st.lat, st.lon], {
+            pane: "currentsStations", keyboard: false, bubblingMouseEvents: false,
+            icon: L.divIcon({ className: "currents-inlet", iconSize: [30, 30],
+                              iconAnchor: [15, 15], html: INLET_ICON })
+        });
+    }
+
+    function styleInlet(st, m, kn, sel) {
+        var el = m.getElement && m.getElement();
+        if (!el) { return; }
+        var slack = kn == null || Math.abs(kn) < SLACK_KN;
+        el.classList.toggle("sel", sel);
+        el.classList.toggle("slack", slack);
+        el.style.color = kn == null ? "#64748b" : slack ? SLACK : (kn > 0 ? FLOOD : EBB);
+        if (!slack) {
+            var sc = 0.7 + 0.45 * Math.min(1, Math.abs(kn) / 2.5);
+            el.firstChild.style.transform = "rotate(" + (kn > 0 ? st.flood_dir : st.ebb_dir) +
+                "deg) scale(" + sc.toFixed(2) + ")";
+        }
+    }
+
     function buildStations() {
         if (!S.stationLayer) { return; }
         S.stationLayer.clearLayers();
+        if (S.inletLayer) { S.inletLayer.clearLayers(); }
         S.markers = {};
         S.stations.forEach(function (st) {
-            var m = L.circleMarker([st.lat, st.lon], {
+            var m = st.estimate ? inletMarker(st) : L.circleMarker([st.lat, st.lon], {
                 pane: "currentsStations", radius: st.featured ? 5.5 : 3.5, weight: 1.2,
                 color: "#0a1628", fillColor: SLACK, fillOpacity: 0.95,
                 bubblingMouseEvents: false
             });
-            m.bindTooltip("", { direction: "top", offset: [0, -4], className: "currents-tip" });
+            m.bindTooltip("", { direction: "top", offset: [0, st.estimate ? -14 : -4],
+                                className: "currents-tip" });
             m.on("tooltipopen", function () { m.setTooltipContent(stationTip(st)); });
             m.on("click", function () { selectStation(st.id, true); });
-            m.addTo(S.stationLayer);
+            // Inlet arrows stay up when the NOAA dots are switched off.
+            m.addTo(st.estimate && S.inletLayer ? S.inletLayer : S.stationLayer);
             S.markers[st.id] = m;
         });
         applyStationVisibility();
@@ -1037,10 +1266,14 @@
         var t = viewT();
         for (var id in S.markers) {
             var st = S.stationsById[id], m = S.markers[id], v = S.tl.stationKn(st, t);
-            var col = v == null ? "#64748b" : Math.abs(v) < SLACK_KN ? SLACK : (v > 0 ? FLOOD : EBB);
             var sel = id === S.station;
-            m.setStyle({ fillColor: col, color: sel ? "#ffffff" : "#0a1628", weight: sel ? 2.5 : 1.2 });
-            m.setRadius(sel ? 8 : (st.featured ? 5.5 : 3.5));
+            if (st.estimate) {
+                styleInlet(st, m, v, sel);
+            } else {
+                var col = v == null ? "#64748b" : Math.abs(v) < SLACK_KN ? SLACK : (v > 0 ? FLOOD : EBB);
+                m.setStyle({ fillColor: col, color: sel ? "#ffffff" : "#0a1628", weight: sel ? 2.5 : 1.2 });
+                m.setRadius(sel ? 8 : (st.featured ? 5.5 : 3.5));
+            }
             if (m.isTooltipOpen()) { m.setTooltipContent(stationTip(st)); }
         }
     }
@@ -1055,7 +1288,9 @@
     function selectStation(id, fromMap) {
         if (!id) { return; }
         if (!S.tl) { S.station = id; return; }              // applied once data loads
-        if (!S.stationsById[id] || id === S.station) { return; }
+        if (!S.stationsById[id]) { S.pendingStation = id; return; }   // inlets not loaded yet
+        S.pendingStation = null;
+        if (id === S.station) { return; }
         S.station = id;
         if (fromMap) { setProps("currents-station", { value: id }); }
         updateStationStyles();
@@ -1349,7 +1584,14 @@
                                                      : "vs Montauk tide, typically:";
             return typicalBadge(A, st, lead);
         }
-        var ev = L1.events.filter(function (e) { return e.t >= tl.t0 && e.t < tl.t1; });
+        return "<b>" + esc(st.label) + '</b> <span class="muted">' +
+            esc(fmtDay.format(new Date((tl.t0 + 12 * HOUR) * 1000))) + ", NOAA:</span> " +
+            dayParts(L1.events, tl) + confSpan(st);
+    }
+
+    // One day's slack times and strongest flood / ebb, for the badge.
+    function dayParts(events, tl) {
+        var ev = events.filter(function (e) { return e.t >= tl.t0 && e.t < tl.t1; });
         var hm = function (t) { return fmtHM.format(new Date(t * 1000)).replace(":00", "").replace(" ", "").toLowerCase(); };
         var slack = ev.filter(function (e) { return e.type === "slack"; }).map(function (e) { return hm(e.t); });
         var big = function (type) {
@@ -1362,10 +1604,7 @@
         var fl = big("flood"), eb = big("ebb");
         if (fl) { parts.push("max flood " + fl); }
         if (eb) { parts.push("max ebb " + eb); }
-        return "<b>" + esc(st.label) + '</b> <span class="muted">' +
-            esc(fmtDay.format(new Date((tl.t0 + 12 * HOUR) * 1000))) + ", NOAA:</span> " +
-            (parts.length ? parts.join(" · ") : '<span class="muted">no slack listed</span>') +
-            confSpan(st);
+        return parts.length ? parts.join(" · ") : '<span class="muted">no slack listed</span>';
     }
 
     // Median offset from each reference time to the nearest event (within 5 h).
@@ -1382,28 +1621,35 @@
         return median(out);
     }
 
-    // The lesson: how this station's slack / max flood line up with Montauk's tide.
-    function weekBadge(meta, st) {
-        var ev = (st.events || []).slice().sort(function (a, b) { return a.t - b.t; });
+    // How a spot's slack / strongest flood line up with Montauk's high and low water.
+    function timingParts(events, hw, lw) {
+        var ev = events.slice().sort(function (a, b) { return a.t - b.t; });
         var endFlood = [], endEbb = [], floods = [], prev = null;
         ev.forEach(function (e) {
             if (e.type === "slack") {
-                if (prev === "flood") { endFlood.push(e.t); }
-                else if (prev === "ebb") { endEbb.push(e.t); }
+                var ends = e.end || prev;          // NOAA's stored events carry no "end"
+                if (ends === "flood") { endFlood.push(e.t); }
+                else if (ends === "ebb") { endEbb.push(e.t); }
             } else {
                 prev = e.type;
                 if (e.type === "flood") { floods.push(e.t); }
             }
         });
-        var hilo = meta.tide.hilo || [];
-        var hw = hilo.filter(function (x) { return x.type === "H"; }).map(function (x) { return x.t; });
-        var lw = hilo.filter(function (x) { return x.type === "L"; }).map(function (x) { return x.t; });
         var parts = [];
         var a = phrase(typicalOffset(hw, endFlood), "high water");
         var b = phrase(typicalOffset(lw, endEbb), "low water");
         if (a || b) { parts.push("slack comes " + [a, b].filter(Boolean).join(" and ")); }
         var c = phrase(typicalOffset(hw, floods), "high water");
         if (c) { parts.push("strongest flood " + c); }
+        return parts;
+    }
+
+    // The lesson: how this station's slack / max flood line up with Montauk's tide.
+    function weekBadge(meta, st) {
+        var hilo = meta.tide.hilo || [];
+        var hw = hilo.filter(function (x) { return x.type === "H"; }).map(function (x) { return x.t; });
+        var lw = hilo.filter(function (x) { return x.type === "L"; }).map(function (x) { return x.t; });
+        var parts = timingParts(st.events || [], hw, lw);
         return parts.length
             ? "<b>" + esc(st.label) + '</b> <span class="muted">vs Montauk tide this week:</span> ' +
               parts.join(" · ")
@@ -1464,6 +1710,11 @@
             if (td) {
                 rows.push('<div><span class="sw tide"></span>Tide ' + td.v.toFixed(1) + " ft, " +
                           (td.rising ? "rising" : "falling") + "</div>");
+            }
+            var hb = st && st.estimate ? inletHarborFt(st, tl, t) : null;
+            if (hb != null) {
+                rows.push('<div><span class="sw tide dash"></span>Inside ' + esc(st.inlet.harbor_name) +
+                          " " + hb.toFixed(1) + " ft</div>");
             }
             if (st) {
                 var d = describe(tl.stationKn(st, t));
@@ -1706,10 +1957,15 @@
         } else {
             S.t = clampT(S.t);
         }
-        if (!prev || prev.stations !== tl.stations) {
-            S.stations = tl.stations;
+        if (!prev || prev.stations !== tl.stations || S.inletsDirty) {
+            S.inletsDirty = false;
+            S.stations = tl.stations.concat(S.inletSpots);
             S.stationsById = {};
             S.stations.forEach(function (s) { S.stationsById[s.id] = s; });
+            if (S.pendingStation && S.stationsById[S.pendingStation]) {
+                S.station = S.pendingStation;
+                S.pendingStation = null;
+            }
             if (!S.stationsById[S.station]) {
                 var dflt = (S.manifest && S.manifest.default_station) || "LIS1001";
                 S.station = S.stationsById[dflt] ? dflt : (S.stations[0] || {}).id;
@@ -1794,6 +2050,7 @@
         map.createPane("currentsStations").style.zIndex = 470;
         S.particles = new ParticleLayer().addTo(map);
         S.stationLayer = L.layerGroup();
+        S.inletLayer = L.layerGroup().addTo(map);
         S.clock = new Clock().addTo(map);
         S.legend = new Legend().addTo(map);
         S.playbar = new PlayBar().addTo(map);
@@ -1833,6 +2090,7 @@
         S.map = null;
         S.particles = null;
         S.stationLayer = null;
+        S.inletLayer = null;
         S.markers = {};
         S.haze = null;
         S.clock = null;
@@ -1883,6 +2141,26 @@
         });
     }
 
+    // Recompute tools/build_inlets.py's "selftest" values (the date view's
+    // run for one day, from the bundled Montauk high/lows); maxErr ~0.
+    function inletSelftest() {
+        var A = S.atlas, doc = S.inlets;
+        if (!A || !doc) { return "atlas or inlets not loaded"; }
+        var worst = 0, n = 0, ev = { T: A.T, V: A.V, H: A.H };
+        doc.inlets.forEach(function (c) {
+            var x = c.selftest;
+            if (!x) { return; }
+            var t0 = etMidnight(x.day), t1 = etMidnight(shiftDay(x.day, 1));
+            var run = inletRun(c, doc.datum, ev, t0 - doc.constants.spinup_s, t1 + 2 * HOUR);
+            x.points.forEach(function (p) {
+                var k = Math.round((p.t - run.t[0]) / doc.constants.dt_s);
+                worst = Math.max(worst, Math.abs(run.v[k] * KNOTS - p.kn), Math.abs(run.hb[k] - p.harbor_ft));
+                n++;
+            });
+        });
+        return { checked: n, maxErr: worst };
+    }
+
     // ----------------------------------------------------------------- API --
     window.Currents = {
         setMode: function (m) {
@@ -1930,6 +2208,14 @@
             }
         },
         selectStation: function (id) { selectStation(id, false); },
+        // data/inlets.json (a dcc.Store): harbor-inlet estimates as extra spots.
+        setInlets: function (doc) {
+            if (!doc || !doc.inlets || doc === S.inlets) { return; }
+            S.inlets = doc;
+            S.inletSpots = doc.inlets.map(inletSpot);
+            S.inletsDirty = true;
+            if (S.tl) { scheduleApply(); }                   // rebuild the spots
+        },
         setOptions: function (vals) {
             vals = vals || [];
             S.opts = { stations: vals.indexOf("stations") >= 0, model: vals.indexOf("model") >= 0 };
@@ -1948,6 +2234,7 @@
             seek(S.t + (+sec || 0));
         },
         _state: S,                          // for poking at in the browser console
-        _selftest: selftest
+        _selftest: selftest,
+        _inletSelftest: inletSelftest
     };
 })();

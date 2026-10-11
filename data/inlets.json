@@ -1,0 +1,234 @@
+{
+ "version": 1,
+ "built_at": "2026-10-11T20:14:04Z",
+ "method": "Pond-and-inlet model (Keulegan 1967; King 1974) driven by NOAA's Montauk high/low predictions: the harbor fills and drains through its inlet, the flow limited by the inlet's size and friction. Built by tools/build_inlets.py; run in the browser by assets/currents.js.",
+ "constants": {
+  "g": 9.81,
+  "dt_s": 60.0,
+  "spinup_s": 86400.0
+ },
+ "datum": {
+  "mllw_navd88_m": -0.4785,
+  "msl_navd88_m": -0.1006,
+  "mean_ft": 1.24,
+  "epoch": "1983-2001",
+  "slr_m": 0.123,
+  "slr_note": "NOAA's predictions are referenced to the 1983-2001 epoch; Montauk's sea level has risen ~0.123 m since (3.61 mm/yr)."
+ },
+ "validation": {
+  "lake_montauk": {
+   "throat_m2": 378,
+   "width_m": 142,
+   "harbor_km2": 4.36,
+   "model_lag_hw_min": 0,
+   "model_lag_lw_min": 2,
+   "noaa_lag_hw_min": 5.0,
+   "noaa_lag_lw_min": -5.0,
+   "model_range_ratio": 1.007,
+   "noaa_range_ratio": 1.08,
+   "model_peak_kn": [
+    1.25,
+    1.12
+   ]
+  }
+ },
+ "inlets": [
+  {
+   "id": "est-napeague",
+   "label": "Napeague Harbor inlet",
+   "harbor_name": "Napeague Harbor",
+   "name": "Napeague Harbor's west inlet, between Hicks Island and Lazy Point",
+   "lat": 41.0121,
+   "lon": -72.0614,
+   "flood_dir": 105,
+   "ebb_dir": 285,
+   "outside": {
+    "hw_min": 29,
+    "lw_min": 17,
+    "ratio": 1.08,
+    "source": "NOAA Montauk 8510560 high/low predictions, shifted 44% of the way toward NOAA Threemile Harbor entrance 8511171."
+   },
+   "notes": "Estimate from the harbor's size, the inlet's 2012 dimensions and the tide outside; not a NOAA prediction. Speeds are averages across the inlet: the outside (south side) of the channel's bend runs faster. The inlet has reportedly widened since 2012, which would make slack come sooner.",
+   "throat": {
+    "area_m2": 160.0,
+    "width_m": 55.0,
+    "length_m": 670.0,
+    "source": "2012 bathymetric survey for the Peconic Estuary Program (Napeague Harbor Water Circulation Enhancement): minimum cross-section 1,720 sq ft; a 2,200 ft long, 180 ft wide channel. The east inlet near Goff Point closed around 2007, so all of the harbor's water now moves through this one.",
+    "manning_n": 0.025,
+    "k_loss": 1.1,
+    "dem_area_m2": 21.5
+   },
+   "harbor": {
+    "levels_m": [
+     -1.2,
+     -1.15,
+     -1.1,
+     -1.05,
+     -1.0,
+     -0.95,
+     -0.9,
+     -0.85,
+     -0.8,
+     -0.75,
+     -0.7,
+     -0.65,
+     -0.6,
+     -0.55,
+     -0.5,
+     -0.45,
+     -0.4,
+     -0.35,
+     -0.3,
+     -0.25,
+     -0.2,
+     -0.15,
+     -0.1,
+     -0.05,
+     0.0,
+     0.05,
+     0.1,
+     0.15,
+     0.2,
+     0.25,
+     0.3,
+     0.35,
+     0.4,
+     0.45,
+     0.5,
+     0.55,
+     0.6,
+     0.65,
+     0.7,
+     0.75,
+     0.8
+    ],
+    "area_m2": [
+     1912700.0,
+     1912700.0,
+     1912700.0,
+     2085700.0,
+     2149700.0,
+     2380600.0,
+     2445200.0,
+     2531500.0,
+     2892600.0,
+     3044500.0,
+     3135700.0,
+     3210000.0,
+     3272800.0,
+     3337900.0,
+     3390500.0,
+     3446800.0,
+     3498700.0,
+     3523900.0,
+     3553400.0,
+     3566200.0,
+     3574900.0,
+     3613400.0,
+     3623400.0,
+     3632400.0,
+     3643200.0,
+     3659000.0,
+     3676600.0,
+     3702800.0,
+     3738000.0,
+     3792600.0,
+     3885100.0,
+     4055800.0,
+     4203200.0,
+     4334500.0,
+     4442400.0,
+     4508100.0,
+     4568600.0,
+     4743700.0,
+     4829300.0,
+     4922300.0,
+     5081800.0
+    ],
+    "source": "NOAA NCEI 1/9 arc-second topobathy DEM (CUDEM), NAVD88"
+   },
+   "confidence": "Rough",
+   "report": {
+    "slack_after_hw_min": 73,
+    "slack_after_lw_min": 66,
+    "max_flood_vs_hw_min": -89,
+    "max_ebb_vs_lw_min": -110,
+    "harbor_hw_after_montauk_min": 73,
+    "harbor_lw_after_montauk_min": 66,
+    "harbor_range_vs_bay": 0.941,
+    "peak_flood_kn": 2.38,
+    "peak_ebb_kn": 2.33
+   },
+   "selftest": {
+    "day": "2026-10-11",
+    "points": [
+     {
+      "t": 1791691200.0,
+      "kn": -1.2229,
+      "harbor_ft": 1.9956
+     },
+     {
+      "t": 1791698400.0,
+      "kn": -1.7027,
+      "harbor_ft": 1.1837
+     },
+     {
+      "t": 1791705600.0,
+      "kn": -1.2362,
+      "harbor_ft": 0.3924
+     },
+     {
+      "t": 1791712800.0,
+      "kn": 1.3733,
+      "harbor_ft": 0.4289
+     },
+     {
+      "t": 1791720000.0,
+      "kn": 2.2652,
+      "harbor_ft": 1.4424
+     },
+     {
+      "t": 1791727200.0,
+      "kn": 1.7545,
+      "harbor_ft": 2.6414
+     },
+     {
+      "t": 1791734400.0,
+      "kn": -1.3492,
+      "harbor_ft": 2.7762
+     },
+     {
+      "t": 1791741600.0,
+      "kn": -2.1235,
+      "harbor_ft": 1.8366
+     },
+     {
+      "t": 1791748800.0,
+      "kn": -2.0191,
+      "harbor_ft": 0.7267
+     },
+     {
+      "t": 1791756000.0,
+      "kn": -0.1324,
+      "harbor_ft": 0.0661
+     },
+     {
+      "t": 1791763200.0,
+      "kn": 1.8245,
+      "harbor_ft": 0.7117
+     },
+     {
+      "t": 1791770400.0,
+      "kn": 1.7204,
+      "harbor_ft": 1.7521
+     },
+     {
+      "t": 1791777600.0,
+      "kn": -0.9039,
+      "harbor_ft": 2.1151
+     }
+    ]
+   }
+  }
+ ]
+}
