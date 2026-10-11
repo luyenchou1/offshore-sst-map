@@ -26,6 +26,9 @@
 - Faint lines across the map (iPad and desktop): Leaflet's additive tile blending on the place-name layer; it now blends normally.
 - The current axis shows round numbers (it had synced to the tide axis: 5.25 / 1.81 / −1.62 kn), and the low-confidence haze fades out at the model's edge instead of ending in a hard rectangle.
 
+### Subordinate NOAA stations (72 of 86)
+- NOAA publishes only slack / max-current times for subordinate stations such as Montauk Point (The Race's prediction shifted and scaled). The page drew those few points as a zigzag, and the atlas fitted them as if they were a curve, leaving most tide-phase bins at 0 kn, so those dots showed "slack" most of the time in Today and Tide cycle and their typical slack timing was missing. Both now rebuild the curve between events with NOAA's quarter-sine rule; the atlas was republished (all 86 stations have curves and typical timing).
+
 ### Chart interaction
 - **One time line, one readout.** Plotly's own hover box and dotted spike are off. On iPad they stayed where the finger first landed while the time line followed a drag, so the chart showed two different times. On desktop, clicking left a second dashed "set time" marker. Now the white line is the only time indicator, with a readout beside it (time, Montauk tide, NOAA / typical current at the spot, model current) while you point at, tap or drag on the chart. Desktop adds a "Click to set this time" hint while previewing.
 - Clearer legend: "Montauk tide, ft (NOAA)", "<spot> current, kn (NOAA)", "<spot> current, model", plus the slack and strongest-flood/ebb markers on wide screens; the sidebar's "How to read this" explains each line.
