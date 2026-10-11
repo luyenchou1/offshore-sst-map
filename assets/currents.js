@@ -1029,7 +1029,11 @@
                 // a real current (> ~0.1 m/s): weak-flow bays stay clear.
                 var low = Math.min(1, Math.max(0, (0.7 - sk[c] / 100) / 0.3));
                 var big = Math.min(1, Math.max(0, (rs[c] * unit - 0.06) / 0.08));
-                var a = low * big;
+                // Fade out over the last ~12 cells (~5 km) so the haze doesn't
+                // end in a hard rectangle where the model grid stops.
+                var cj = (c / f.nx) | 0, ci = c - cj * f.nx;
+                var edge = Math.min(1, Math.min(ci, cj, f.nx - 1 - ci, f.ny - 1 - cj) / 12);
+                var a = low * big * edge;
                 if (a <= 0) { continue; }
                 px4[4 * c] = 148;
                 px4[4 * c + 1] = 163;
@@ -1249,8 +1253,11 @@
             yaxis: { fixedrange: true, automargin: false, zeroline: false,
                      gridcolor: "#1e293b", tickfont: { color: "#60a5fa" },
                      title: { text: wide ? "tide ft" : "", font: { size: 10, color: "#60a5fa" } } },
+            // tickmode "auto": an overlaying axis otherwise synced its ticks to
+            // the tide axis (5.25 / 1.81 / -1.62 kn on a tall iPad chart).
             yaxis2: { overlaying: "y", side: "right", fixedrange: true, automargin: false,
                       range: [-maxC * 1.15, maxC * 1.15], showgrid: false,
+                      tickmode: "auto", nticks: 6,
                       zeroline: true, zerolinecolor: "#475569", tickfont: { color: "#fbbf24" },
                       title: { text: wide ? "current kn (+flood)" : "",
                                font: { size: 10, color: "#fbbf24" } } },

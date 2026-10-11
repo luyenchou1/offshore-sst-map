@@ -22,7 +22,9 @@
 ### Tablet & full screen
 - On iPads (any touch screen) and windows narrower than 1200 px the sidebar is a slide-in drawer, as on phones, so the map and chart get the full width; it closes itself after you pick a view, date, week, strength or spot.
 - Floating Play / step buttons on the map (tablets and phones), kept in sync with the sidebar's Play button.
-- Full-screen button on the map; in full screen the header shrinks to a slim branded bar (logo, "Currents", "How it works") with room on the left for iPadOS's own exit "X". Opens the page in a new tab when embedded without fullscreen permission; not shown on iPhone, which can't full-screen a web page.
+- Full-screen button on the map; in full screen the header shrinks to a slim branded bar (logo, "Currents", "How it works"). On iPad the bar also spans the status bar iPadOS keeps on top and leaves room for Safari's own exit "X", so neither overlaps the logo or the map's zoom buttons. Opens the page in a new tab when embedded without fullscreen permission; not shown on iPhone, which can't full-screen a web page.
+- Faint lines across the map (iPad and desktop): Leaflet's additive tile blending on the place-name layer; it now blends normally.
+- The current axis shows round numbers (it had synced to the tide axis: 5.25 / 1.81 / −1.62 kn), and the low-confidence haze fades out at the model's edge instead of ending in a hard rectangle.
 
 ### Accuracy (full-season build)
 - Out-of-sample share of the model's flow reproduced: Race/Plum Gut/Fishers 87–96%, Gardiners/Peconics 78–89%, Block Island Sound 65–83%, ocean side 28–58%.

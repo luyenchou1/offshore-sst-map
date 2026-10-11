@@ -50,6 +50,10 @@
     background: #0b0f17;
     font-family: inherit;
 }
+/* Leaflet 1.9 draws tiles with mix-blend-mode: plus-lighter to hide seams in
+   opaque basemaps; on the semi-transparent place-name layer it brightens every
+   tile edge into faint lines across the map. Normal blending there. */
+#currents-map .leaflet-currents-labels-pane-pane img.leaflet-tile { mix-blend-mode: normal; }
 .currents-chart-box {
     flex: 0 0 auto;
     height: 31%;
@@ -356,10 +360,19 @@ html.currents-fs .currents-page > .gotone-header img { height: 34px; }
 html.currents-fs .currents-page > .gotone-header h1 { font-size: 1rem; }
 html.currents-fs .currents-page > .gotone-header .subtitle,
 html.currents-fs .currents-page .currents-sst-link { display: none; }
-/* iPadOS draws its own "X" (exit full screen) in the top-left corner, which
-   a page can't hide; leave it room so it doesn't sit on the logo. */
+/* iPadOS full screen keeps its status bar (time, battery) drawn over the top
+   of the page and adds its own exit "X" (~56 pt square, ~20 pt in, ~32 pt
+   down) that a page can't hide. On touch screens the bar spans both: a strip
+   behind the status bar, then a row with the X on the left, the brand after
+   it and "How it works" on the right; the map starts below, so the X can't
+   cover the zoom buttons. (Measured on an iPad in landscape.) */
 @media (hover: none) and (pointer: coarse) {
-    html.currents-fs .currents-page > .gotone-header { padding-left: 64px; }
+    html.currents-fs .currents-page > .gotone-header {
+        padding-top: max(24px, env(safe-area-inset-top));
+        padding-bottom: 0;
+        padding-left: 92px;
+        min-height: calc(max(24px, env(safe-area-inset-top)) + 60px);
+    }
 }
 
 /* ===== Tablets (any touch screen) and windows < 1200px: the sidebar becomes
