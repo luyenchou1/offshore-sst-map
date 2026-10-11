@@ -55,7 +55,8 @@
     var S = {
         map: null, particles: null, stationLayer: null, markers: {}, haze: null,
         clock: null, legend: null, playbar: null, fsBtn: null,
-        statusEl: null, cursorEl: null, homeEl: null,
+        statusEl: null, cursorEl: null, readoutEl: null, readout: null, readoutTimer: 0,
+        readoutKey: "", legendRoom: false,
         resizeObs: null, manifestP: null, manifest: null, inflight: {},
         mode: "date", week: null, depth: "surface", rate: 1800, station: null,
         strength: "average", date: null,
@@ -1057,47 +1058,40 @@
         setTimeout(function () { waitForPlotly(cb, (tries || 0) + 1); }, 100);
     }
 
+    // Slack / strongest-current markers; listed in the legend when it has room.
     function eventTraces(evs, xf) {
         var pick = function (type) { return evs.filter(function (e) { return e.type === type; }); };
         var sl = pick("slack"), fl = pick("flood"), eb = pick("ebb");
         return [{
             x: sl.map(function (e) { return xf(e.t); }), y: sl.map(function () { return 0; }),
-            yaxis: "y2", mode: "markers", showlegend: false,
-            marker: { symbol: "circle-open", size: 7, color: SLACK, line: { width: 1.5 } },
-            hovertemplate: "Slack<extra></extra>"
+            yaxis: "y2", mode: "markers", name: "slack", showlegend: S.legendRoom,
+            marker: { symbol: "circle-open", size: 7, color: SLACK, line: { width: 1.5 } }
         }, {
             x: fl.map(function (e) { return xf(e.t); }), y: fl.map(function (e) { return e.v; }),
-            yaxis: "y2", mode: "markers", showlegend: false,
-            marker: { symbol: "triangle-up", size: 7, color: FLOOD },
-            hovertemplate: "Max flood %{y:.1f} kn<extra></extra>"
+            yaxis: "y2", mode: "markers", name: "strongest flood / ebb", showlegend: S.legendRoom,
+            marker: { symbol: "triangle-up", size: 7, color: FLOOD }
         }, {
             x: eb.map(function (e) { return xf(e.t); }), y: eb.map(function (e) { return e.v; }),
             yaxis: "y2", mode: "markers", showlegend: false,
-            marker: { symbol: "triangle-down", size: 7, color: EBB },
-            hovertemplate: "Max ebb %{y:.1f} kn<extra></extra>"
+            marker: { symbol: "triangle-down", size: 7, color: EBB }
         }];
     }
 
-    function tideTrace(xs, ys, name, extra) {
-        var tr = { x: xs, y: ys, name: name, type: "scatter", mode: "lines",
-                   line: { color: "#60a5fa", width: 2 },
-                   hovertemplate: "%{y:.1f} ft<extra>Tide</extra>" };
-        for (var k in (extra || {})) { tr[k] = extra[k]; }
-        return tr;
+    function tideTrace(xs, ys, name) {
+        return { x: xs, y: ys, name: name, type: "scatter", mode: "lines",
+                 line: { color: "#60a5fa", width: 2 } };
     }
 
-    function currentTrace(xs, ys, name, src) {
+    function currentTrace(xs, ys, name) {
         return { x: xs, y: ys, yaxis: "y2", name: name, mode: "lines",
                  line: { color: "#fbbf24", width: 2 },
-                 fill: "tozeroy", fillcolor: "rgba(251,191,36,0.10)",
-                 hovertemplate: "%{y:.1f} kn<extra>" + src + "</extra>" };
+                 fill: "tozeroy", fillcolor: "rgba(251,191,36,0.10)" };
     }
 
-    function modelTrace(xs, ys) {
+    function modelTrace(xs, ys, st) {
         return { x: xs, y: ys, yaxis: "y2", mode: "lines",
-                 name: "model (" + (S.depth === "davg" ? "depth-avg" : "surface") + ")",
-                 line: { color: "#fbbf24", width: 1.3, dash: "dot" },
-                 hovertemplate: "%{y:.1f} kn<extra>Model</extra>" };
+                 name: st.label + " current, model" + (S.depth === "davg" ? " (depth-avg)" : ""),
+                 line: { color: "#fbbf24", width: 1.3, dash: "dot" } };
     }
 
     function hiloTrace(xs, ys) {
@@ -1123,13 +1117,12 @@
     }
 
     function weekChart(meta, f, st) {
-        var td = meta.tide, traces = [tideTrace(td.t.map(px), td.v, "Montauk tide (NOAA)")];
+        var td = meta.tide, traces = [tideTrace(td.t.map(px), td.v, "Montauk tide, ft (NOAA)")];
         if (S.opts.model && td.model) {
             traces.push({
                 x: td.model.v.map(function (_, i) { return px(td.model.t0 + i * td.model.dt); }),
-                y: td.model.v, name: "water level (model)", mode: "lines",
-                line: { color: "#60a5fa", width: 1.2, dash: "dot" },
-                hovertemplate: "%{y:.1f} ft<extra>Model level</extra>"
+                y: td.model.v, name: "Montauk water level, model", mode: "lines",
+                line: { color: "#60a5fa", width: 1.2, dash: "dot" }
             });
         }
         var hilo = td.hilo || [];
@@ -1138,10 +1131,10 @@
         var arrs = [];
         if (st && st.curve) {
             traces.push(currentTrace(curveTimes(st.curve).map(px), st.curve.v,
-                                     st.label + " current (NOAA)", "NOAA"));
+                                     st.label + " current, kn (NOAA)"));
             arrs.push(st.curve.v);
             var ms = modelSeries(st, f.t0, f.tEnd, f.dt, px);
-            if (ms) { traces.push(modelTrace(ms.x, ms.y)); arrs.push(ms.y); }
+            if (ms) { traces.push(modelTrace(ms.x, ms.y, st)); arrs.push(ms.y); }
             traces = traces.concat(eventTraces(st.events || [], px));
         }
         return { traces: traces, maxC: maxAbs(arrs),
@@ -1155,7 +1148,7 @@
             var td = tl.tide(t);
             if (td) { xs.push(px(t)); ys.push(Math.round(td.v * 100) / 100); }
         }
-        var traces = [tideTrace(xs, ys, "Montauk tide (NOAA)")];
+        var traces = [tideTrace(xs, ys, "Montauk tide, ft (NOAA)")];
         var hx = [], hy = [];
         for (var k = Math.max(0, floorIndex(A.T, tl.t0)); k < A.T.length && A.T[k] <= tl.t1; k++) {
             if (A.T[k] >= tl.t0) { hx.push(px(A.T[k])); hy.push(A.V[k]); }
@@ -1175,12 +1168,11 @@
                 for (t = tl.t0; t <= tl.t1 + 1; t += 600) { cx.push(t); cy.push(tl.stationKn(st, t)); }
                 evs = deriveEvents(cx, cy);
             }
-            var src = L1 ? "NOAA" : "typical";
-            traces.push(currentTrace(cx.map(px), cy, st.label + " current (" + src + ")",
-                                     L1 ? "NOAA" : "Typical"));
+            traces.push(currentTrace(cx.map(px), cy,
+                                     st.label + " current, kn (" + (L1 ? "NOAA" : "typical") + ")"));
             arrs.push(cy);
             var ms = modelSeries(st, tl.t0, tl.t1, 1200, px);
-            if (ms) { traces.push(modelTrace(ms.x, ms.y)); arrs.push(ms.y); }
+            if (ms) { traces.push(modelTrace(ms.x, ms.y, st)); arrs.push(ms.y); }
             traces = traces.concat(eventTraces(evs.filter(function (e) {
                 return e.t >= tl.t0 && e.t <= tl.t1;
             }), px));
@@ -1199,26 +1191,24 @@
     }
 
     function cycleChart(A, tl, st) {
-        var N = 124, step = (tl.t1 - tl.t0) / N, xs = [], ys = [], lab = [], t, i;
+        var N = 124, step = (tl.t1 - tl.t0) / N, xs = [], ys = [], t, i;
         var hx = function (tt) { return Math.round(tt / HOUR * 1000) / 1000; };
         for (i = 0; i <= N; i++) {
             t = tl.t0 + i * step;
             xs.push(hx(t));
             ys.push(Math.round(tl.tide(t).v * 100) / 100);
-            lab.push(cycleLabel(A, t));
         }
-        var traces = [tideTrace(xs, ys, "Montauk tide (typical)", {
-            customdata: lab, hovertemplate: "%{y:.1f} ft · %{customdata}<extra>Tide</extra>" })];
+        var traces = [tideTrace(xs, ys, "Montauk tide, ft (typical)")];
         traces.push(hiloTrace([hx(tl.t0), 0, hx(tl.t1)],
                               [ys[0], tl.tide(0).v, ys[ys.length - 1]]));
         var arrs = [];
         if (st && st.typ) {
             var cx = [], cy = [];
             for (i = 0; i <= N; i++) { t = tl.t0 + i * step; cx.push(t); cy.push(tl.stationKn(st, t)); }
-            traces.push(currentTrace(cx.map(hx), cy, st.label + " current (typical NOAA)", "Typical"));
+            traces.push(currentTrace(cx.map(hx), cy, st.label + " current, kn (typical NOAA)"));
             arrs.push(cy);
             var ms = modelSeries(st, tl.t0, tl.t1, step, hx);
-            if (ms) { traces.push(modelTrace(ms.x, ms.y)); arrs.push(ms.y); }
+            if (ms) { traces.push(modelTrace(ms.x, ms.y, st)); arrs.push(ms.y); }
             traces = traces.concat(eventTraces(deriveEvents(cx, cy), hx));
         }
         var lo = tl.t0 / HOUR, hi = tl.t1 / HOUR, tv = [lo], tt = ["LW"];
@@ -1235,8 +1225,9 @@
         var gd = $("currents-chart");
         if (!gd || !S.tl || !S.field) { return; }
         if (!window.Plotly) { waitForPlotly(buildChart); return; }
-        var st = S.stationsById[S.station], spec = S.tl.chart(st), maxC = spec.maxC;
         var wide = gd.clientWidth >= 620;   // phones: no legend / axis titles
+        S.legendRoom = gd.clientWidth >= 1000;   // room to also list the marker symbols
+        var st = S.stationsById[S.station], spec = S.tl.chart(st), maxC = spec.maxC;
         var xaxis = { range: S.tl.range, fixedrange: true, automargin: false,
                       gridcolor: "#1e293b", linecolor: "#334155" };
         for (var k in spec.xaxis) { xaxis[k] = spec.xaxis[k]; }
@@ -1246,9 +1237,8 @@
             margin: MARGIN, showlegend: wide,
             legend: { orientation: "h", x: 0, y: 1, yanchor: "bottom", font: { size: 10 },
                       bgcolor: "rgba(0,0,0,0)" },
-            hovermode: "x unified", dragmode: false,
-            hoverlabel: { bgcolor: "#0f1d32", bordercolor: "#334155",
-                          font: { color: "#e2e8f0", size: 11 } },
+            // No Plotly hover: our readout rides on the white time line instead.
+            hovermode: false, dragmode: false,
             xaxis: xaxis,
             yaxis: { fixedrange: true, automargin: false, zeroline: false,
                      gridcolor: "#1e293b", tickfont: { color: "#60a5fa" },
@@ -1374,29 +1364,74 @@
     }
 
     // -------------------------------------------- chart cursor, hover, scrub --
-    // Bright line = the moment the map shows; while previewing, a faint dashed
-    // line marks the playback time that the map returns to.
+    // One white line = the moment the map shows. While someone points at,
+    // taps or drags on the chart, a readout beside it gives that moment's tide
+    // and currents. (Plotly's own hover readout is off: on touch it stayed
+    // where the finger first landed, so the chart showed two different times.)
     function updateCursor() {
         var layer = $("currents-cursor-layer"), gd = $("currents-chart");
         if (!layer || !gd || !S.tl || !S.chartReady) { return; }
         if (!S.cursorEl || !layer.contains(S.cursorEl)) {
-            S.homeEl = document.createElement("div");
-            S.homeEl.className = "currents-cursor home";
             S.cursorEl = document.createElement("div");
             S.cursorEl.className = "currents-cursor";
-            layer.appendChild(S.homeEl);
+            S.readoutEl = document.createElement("div");
+            S.readoutEl.className = "currents-readout";
             layer.appendChild(S.cursorEl);
+            layer.appendChild(S.readoutEl);
+            S.readoutKey = "";
         }
-        placeCursor(S.cursorEl, S.tl.fracOf(viewT()), gd);
-        S.homeEl.style.display = S.preview != null ? "block" : "none";
-        if (S.preview != null) { placeCursor(S.homeEl, S.tl.fracOf(S.t), gd); }
+        var w = gd.clientWidth - MARGIN.l - MARGIN.r;
+        var x = MARGIN.l + Math.max(0, Math.min(1, S.tl.fracOf(viewT()))) * w;
+        S.cursorEl.style.left = x + "px";
+        S.cursorEl.style.top = MARGIN.t + "px";
+        S.cursorEl.style.bottom = MARGIN.b + "px";
+        updateReadout(x, gd);
     }
 
-    function placeCursor(el, frac, gd) {
-        var w = gd.clientWidth - MARGIN.l - MARGIN.r;
-        el.style.left = (MARGIN.l + Math.max(0, Math.min(1, frac)) * w) + "px";
-        el.style.top = MARGIN.t + "px";
-        el.style.bottom = MARGIN.b + "px";
+    function readoutTime(t) {
+        if (S.tl.kind === "cycle") { return cycleLabel(S.atlas, t); }
+        return (S.tl.kind === "date" ? fmtHM : fmtClock).format(new Date(t * 1000));
+    }
+
+    // S.readout: null (hidden) | "hover" (mouse over the chart) | "drag" |
+    // "touch" (finger on the chart; lingers briefly after it lifts).
+    function updateReadout(x, gd) {
+        var el = S.readoutEl;
+        if (!el) { return; }
+        if (!S.readout) { el.style.display = "none"; S.readoutKey = ""; return; }
+        var t = viewT(), tl = S.tl, st = S.stationsById[S.station];
+        // Hint only while previewing a time other than the one that's set.
+        var hint = S.readout === "hover" && S.preview != null && Math.abs(S.preview - S.t) > 60;
+        var key = [Math.round(t / 30), S.station, tl.id, hint, S.opts.model, S.depth].join("|");
+        if (key !== S.readoutKey) {
+            S.readoutKey = key;
+            var rows = ['<div class="rt">' + esc(readoutTime(t)) + "</div>"];
+            var td = tl.tide(t);
+            if (td) {
+                rows.push('<div><span class="sw tide"></span>Tide ' + td.v.toFixed(1) + " ft, " +
+                          (td.rising ? "rising" : "falling") + "</div>");
+            }
+            if (st) {
+                var d = describe(tl.stationKn(st, t));
+                rows.push('<div><span class="sw cur"></span>' + esc(st.label) + " (" + esc(tl.source(st)) +
+                          '): <span class="' + d.cls + '">' + d.text + "</span></div>");
+                if (S.opts.model && st.in_model) {
+                    rows.push('<div><span class="sw mod"></span>Model: ' + describe(modelAt(st, t)).text + "</div>");
+                }
+            }
+            if (hint) { rows.push('<div class="hint">Click to set this time</div>'); }
+            el.innerHTML = rows.join("");
+        }
+        el.style.display = "block";
+        var rw = el.offsetWidth, W = gd.clientWidth;
+        el.style.left = (x + 10 + rw > W - 4 ? Math.max(4, x - 10 - rw) : x + 10) + "px";
+        el.style.top = (MARGIN.t + 4) + "px";
+    }
+
+    function showReadout(mode) {
+        clearTimeout(S.readoutTimer);
+        S.readout = mode;
+        updateCursor();
     }
 
     function timeFromEvent(ev) {
@@ -1411,15 +1446,21 @@
 
     // Pointing at the chart (mouse only; touch has no hover) previews that
     // moment on the map. Playback holds meanwhile, and leaving the chart
-    // returns the map to the playback time. Plotly's hover line follows the
-    // mouse too, so a hover that did nothing to the map read as broken scrubbing.
+    // returns the map to the time that's set. People scrub by pointing, so a
+    // hover that did nothing to the map read as broken scrubbing.
     function hoverMove(ev) {
         if (ev.pointerType !== "mouse" || ev.buttons || S.scrubbing || !S.tl) { return; }
         var t = timeFromEvent(ev);
-        setPreview(t === null ? null : clampT(t));
+        if (t === null) { hoverEnd(); return; }
+        if (S.readout !== "hover") { showReadout("hover"); }
+        setPreview(clampT(t));
     }
 
-    function hoverEnd() { setPreview(null); }
+    function hoverEnd() {
+        if (!S.scrubbing && S.readout === "hover") { S.readout = null; }
+        setPreview(null);
+        updateCursor();
+    }
 
     function setPreview(t) {
         if (t === S.preview) { return; }
@@ -1447,6 +1488,7 @@
         if (t === null) { return; }
         S.scrubbing = true;
         S.preview = null;
+        showReadout(ev.touches ? "touch" : "drag");
         pause();
         seek(t);
         window.addEventListener("mousemove", scrubMove);
@@ -1470,6 +1512,13 @@
         window.removeEventListener("touchmove", scrubMove);
         window.removeEventListener("touchend", scrubEnd);
         window.removeEventListener("touchcancel", scrubEnd);
+        if (S.readout === "touch") {
+            // Leave the readout up a moment after the finger lifts.
+            S.readoutTimer = setTimeout(function () { S.readout = null; updateCursor(); }, 1800);
+        } else {
+            S.readout = null;                    // the next mouse move brings it back
+            updateCursor();
+        }
     }
 
     function bindScrub() {
@@ -1730,7 +1779,9 @@
         S.fsBtn = null;
         S.statusEl = null;
         S.cursorEl = null;
-        S.homeEl = null;
+        S.readoutEl = null;
+        S.readout = null;
+        clearTimeout(S.readoutTimer);
         S.preview = null;
         S.chartReady = false;
         S.chartKind = null;

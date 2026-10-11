@@ -196,8 +196,8 @@ def build_currents_sidebar(manifest, today):
                         value=1800, inline=True,
                         style={"fontSize": "0.72rem"}, className="currents-radio",
                     ),
-                    _small("Move along the chart to see any moment on the map; click "
-                           "or tap it to jump there (pauses playback).",
+                    _small("Point at the chart to preview any moment on the map; click, "
+                           "tap or drag on it to set the time (pauses playback).",
                            marginTop="0.35rem"),
 
                     _divider(),
@@ -233,10 +233,13 @@ def build_currents_sidebar(manifest, today):
                     _section_label("How to read this"),
                     _small("Particles trace the current: brighter and warmer means faster. "
                            "Dots are NOAA current stations: teal = flooding, orange = ebbing, "
-                           "white = slack. The chart compares Montauk's tide (blue) with the "
-                           "selected spot's current (gold, + flood / − ebb); the dotted gold "
-                           "line is the model. Hazed water: wind and ocean currents often "
-                           "override the tide there."),
+                           "white = slack. In the chart, blue is Montauk's tide (ft); solid "
+                           "gold is NOAA's predicted current at the selected spot (above zero "
+                           "= flood, below = ebb) and dotted gold is the same spot in the model "
+                           "that drives the map. Circles mark slack, triangles the strongest "
+                           "flood and ebb. The white line is the time on the map; red dotted is "
+                           "now. Hazed water: wind and ocean currents often override the tide "
+                           "there."),
                     html.Div(
                         [
                             html.Button("How it works", id="currents-about-open-2",

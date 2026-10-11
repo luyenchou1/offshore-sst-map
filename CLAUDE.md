@@ -138,9 +138,9 @@ Client (assets/currents.js → window.Currents)
     live NOAA for the selected spot once fetched); click → select (+ set_props)
   Plotly chart drawn into #currents-chart (purged when the axis type changes):
     Montauk tide, station current (NOAA / typical solid, model dotted), slack + max
-    markers, "now" line; overlay-div time cursor; mouse hover previews that moment
-    on the map (playback holds, dashed line marks where it resumes); click/tap/drag
-    jumps + pauses
+    markers, "now" line; Plotly hover OFF — one overlay-div time line with our own
+    readout (time, tide, currents); mouse hover previews that moment on the map
+    (playback holds, leaving returns); click/tap/drag sets the time + pauses
   badge: week = median lags this week; cycle = typical lags; date = that day's NOAA
     slack/max times; + "Confidence here" from the skill map
   setters only record state; one coalesced apply() loads what the view needs (a cold
@@ -243,6 +243,7 @@ Atlas accuracy (full-season build, Oct 2026): share of the model's flow the typi
 - **`document.hidden` pauses `requestAnimationFrame`**: the loop stops when the tab is hidden and restarts on `visibilitychange`. A hidden browser pane shows a frozen animation — to test, drive `window.Currents._state.particles.step()` manually, or shim it: override `document.hidden` to `false`, replace `requestAnimationFrame` with a 33 ms `setTimeout`, and dispatch `visibilitychange` (then real mouse hovers/drags work).
 - **Plotly reads numeric dates in the browser's local timezone**: the chart got ET wall-clock times as millisecond numbers, so Plotly shifted every tick and hover time by the viewer's UTC offset (4 h in EDT) while the map clock was right — scrubbing by the hover readout landed hours off. Pass timezone-naive date strings (`px()` in currents.js) for x data and range. Easy to miss: the curves and cursor stay mutually consistent, only the labels are wrong, and only when the browser isn't on UTC.
 - **Users scrub with the hover readout, not by dragging**: Plotly's x-unified hover line follows the mouse, so a hover that didn't move the map looked like broken scrubbing (and after a real drag, playback resumed and ran away). Now mouse hover previews the map (`S.preview`, playback holds), leaving the chart returns, and click/tap/drag jumps there and pauses.
+- **Then: one time line, one readout — Plotly's hover is off** (`hovermode: false`). With it on, a desktop click left a second (dashed "set time") marker that nobody could read, and on iPad Plotly pinned its hover box and dotted spike where the finger first landed while our line followed the drag — two lines showing two times. Now the white line is the only time indicator and our `.currents-readout` rides on it (time, tide, NOAA / typical current, model current), shown while pointing or touching (lingers ~2 s after a touch). A "Click to set this time" hint appears only while previewing a time other than the set one. Legend names say what each line is ("Montauk tide, ft (NOAA)", "<spot> current, kn (NOAA)", "<spot> current, model") and list the slack / strongest-flood markers when the chart is ≥ 1000 px wide.
 - **Dash 4 `DatePickerSingle` `display_format` doesn't take moment's `ddd`** (weekday): it rendered "Su11, Oct 1…". Use `"MMM D, YYYY"` like the SST page.
 - **Dash 4 dropdown menus render inline**, inside the dark sidebar, so they inherit its light text (white on white). `#sidebar-col .dash-dropdown-content` needs the navy override too, not just `.dash-dropdown-value`.
 - **The date input has a fixed width** and overflowed its flex slot in the narrow sidebar, covering the "Now" button (clicks hit the calendar). The date row wraps and the input is `width: 100%`.

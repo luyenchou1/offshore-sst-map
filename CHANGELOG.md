@@ -26,6 +26,10 @@
 - Faint lines across the map (iPad and desktop): Leaflet's additive tile blending on the place-name layer; it now blends normally.
 - The current axis shows round numbers (it had synced to the tide axis: 5.25 / 1.81 / −1.62 kn), and the low-confidence haze fades out at the model's edge instead of ending in a hard rectangle.
 
+### Chart interaction
+- **One time line, one readout.** Plotly's own hover box and dotted spike are off. On iPad they stayed where the finger first landed while the time line followed a drag, so the chart showed two different times. On desktop, clicking left a second dashed "set time" marker. Now the white line is the only time indicator, with a readout beside it (time, Montauk tide, NOAA / typical current at the spot, model current) while you point at, tap or drag on the chart. Desktop adds a "Click to set this time" hint while previewing.
+- Clearer legend: "Montauk tide, ft (NOAA)", "<spot> current, kn (NOAA)", "<spot> current, model", plus the slack and strongest-flood/ebb markers on wide screens; the sidebar's "How to read this" explains each line.
+
 ### Accuracy (full-season build)
 - Out-of-sample share of the model's flow reproduced: Race/Plum Gut/Fishers 87–96%, Gardiners/Peconics 78–89%, Block Island Sound 65–83%, ocean side 28–58%.
 - Slack vs NOAA over all of 2026: Plum Gut median 13 min. The Race median 26 min, biased late (the model's own timing at The Race), which the "How it works" text says plainly.
