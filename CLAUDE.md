@@ -7,7 +7,7 @@ Dash 4.0 web app ("GotOne Offshore SST Analyzer") branded for [gotoneapp.com](ht
 - **Current version**: v1.0 (displayed in sidebar UI; next release: v1.01)
 - **Dash 4.0** + **dash-leaflet** + **dash-bootstrap-components** (Flatly theme + GotOne CSS overrides)
 - **Basemap**: Esri World Light Gray Canvas — keyless raster tiles, `{z}/{y}/{x}` scheme. Replaced CARTO Positron (`basemaps.cartocdn.com/light_all`), which began requiring an API key and served "API KEY REQUIRED" watermarks. Defined in `layout/mapview.py` (SST map) and `layout/catchview.py` (catch map). `/currents` uses the dark counterpart (`World_Dark_Gray_Base` + `World_Dark_Gray_Reference` labels), also keyless.
-- **Pages** (one Dash app; hand-written router `route_page` in `app.py`): `/` SST map · `/currents` animated tidal currents (public, linked from the SST header) · `/catches` catch map (gated by `CATCHES_ACCESS_KEY`, no public link)
+- **Pages** (one Dash app; hand-written router `route_page` in `app.py`): `/` SST map · `/currents` tidal currents — Today / Tide cycle / Example weeks (public, linked from the SST header) · `/catches` catch map (gated by `CATCHES_ACCESS_KEY`, no public link)
 - **NOAA CoastWatch ERDDAP** — MUR GHRSST (1km, preferred) with OISST (25km) fallback
 - Data available from 2002-06-01 to ~2 days ago (MUR has ~2-day latency)
 - Python 3.12, venv at `.venv/`
@@ -79,10 +79,34 @@ Pre-cache (memory-efficient raw-only mode):
 ```
 
 ### Currents Page (`/currents`)
-Animated tidal-current flow for eastern Long Island (Little Peconic → east of Block Island; south of Montauk → Watch Hill / Fishers), with a time-synced tide + current chart. Built to show why currents don't follow the tide table — e.g. at The Race slack comes ~2h40m *after* Montauk high/low water, at Plum Gut ~1h40m after.
+Animated tidal-current flow for eastern Long Island (Little Peconic → east of Block Island; south of Montauk → Watch Hill / Fishers), with a time-synced tide + current chart. Built to show why currents don't follow the tide table — e.g. at The Race slack comes ~2h40m *after* Montauk high/low water, at Plum Gut ~1h35m after.
+
+Three views (sidebar "View" control; a "How it works" modal opens on a first visit):
+- **Today** (default): typical currents for any day 2024–2030 from that day's real Montauk tide times and ranges — the **tide-stage atlas** evaluated client-side from Montauk high/lows bundled in the atlas meta (no live model, no runtime dependency except an optional NOAA fetch of the selected spot's own prediction for the chart/badge, with fallback). Opens paused on "now"; "Now" button returns there.
+- **Tide cycle**: one typical Montauk cycle LW → HW → LW at Neap / Average / Spring strength.
+- **Example weeks**: hourly model output incl. weather — supermoon, summer spring + neap, Hurricane Sandy (Oct 2012; replaced Blizzard Jonas: in fishing season, biggest modeled surge at Montauk, +3.1 ft).
+- Until the atlas exists in the manifest (deploy before upload), the page opens on Example weeks with the other views disabled.
 
 ```
-Build (off-Render: local, or .github/workflows/build-currents.yml)
+Atlas build (off-Render: build-currents.yml source=atlas, or locally)
+  tools/build_tide_atlas.py
+    hindcast May 1 – Nov 1 2016 (4,416 h), surface + depth-avg, streamed week by week
+      (gridded int8 frames + NOAA JSON cached under build/atlas-work; reruns download nothing)
+    phase phi: two segments from Montauk high/lows (HW→LW = 0→0.5, LW→HW = 0.5→1), 24 bins,
+      bin centres (b+0.5)/24; range R(t): each half-cycle's |H−L| at its mid-time, linear
+      between mid-times (no step at HW/LW), clamped to the season's range
+    per bin: least squares of 3 "tent" basis fields at the 10/50/90th R percentiles
+      (linear interpolation, continued past the ends) → 72 frames (basis·24 + bin), GOCUR1
+    per-cell skill (share of variance explained) + residual RMS → haze + "Confidence here"
+    NOAA: 30-day interval=30 curve per station fitted the same way → typ[3][24] + median
+      lags; Montauk 6-min tide shape; high/lows 2024–2030 bundled; Neap/Average/Spring
+      presets = 10/50/90th R percentiles of 2024–30 (not 2016: lunar-node peak)
+    guards: fit coverage, The Race vs NOAA typical, 2026 slack check, Race-area skill,
+      sizes; report: out-of-sample replay of example weeks, day/night aliasing check
+    → atlas-2016_{surface,davg}.bin.gz (~0.9 MB each) + _meta.json.gz (~0.1 MB);
+      manifest "atlas" entry (incl. presets, dates); uploaded only with --upload / publish
+
+Week build (off-Render: local, or .github/workflows/build-currents.yml)
   tools/build_currents.py
     NECOFS FVCOM GOM3 (UMass Dartmouth) over OPeNDAP:
       hourly hindcast 1978→2016 for the curated weeks in data/currents_weeks.json,
@@ -103,18 +127,30 @@ Serve (Render; no request-time processing)
 
 Client (assets/currents.js → window.Currents)
   L.Map.addInitHook grabs the dash-leaflet map whose container id is "currents-map"
-  canvas particle layer (pane z 450): bilinear in space × linear between hourly
-    frames; trails = destination-in fade + 'lighter' strokes, coloured by speed
-  NOAA station dots (pane 470) coloured flood/ebb/slack; click → select (+ set_props)
-  Plotly chart drawn into #currents-chart: Montauk tide (+ model level, median-
-    aligned), station current (NOAA solid / model dotted), slack + max markers;
-    overlay-div time cursor; mouse hover previews that moment on the map
-    (playback holds, dashed line marks where it resumes); click/tap/drag jumps + pauses
-  lag badge: median offset of the station's slack / max flood vs Montauk HW/LW
+  views are "timelines": S.t in [t0, t1) looping; weights(t) → frame weights
+    (week: 2 hourly frames; date/cycle: 2 basis × 2 phase bins from tideAt()/tent());
+    x mapping for the chart (wall time for date/week, seconds for cycle)
+  once per animation frame the weighted frames are blended into S.cur (water cells
+    only); the particle layer (pane z 450) samples it bilinearly; trails = destination-
+    in fade + 'lighter' strokes, coloured by speed
+  low-confidence haze (pane 455): canvas from skill + residual RMS → L.imageOverlay
+  NOAA station dots (pane 470) coloured flood/ebb/slack (typical curve in date/cycle,
+    live NOAA for the selected spot once fetched); click → select (+ set_props)
+  Plotly chart drawn into #currents-chart (purged when the axis type changes):
+    Montauk tide, station current (NOAA / typical solid, model dotted), slack + max
+    markers, "now" line; overlay-div time cursor; mouse hover previews that moment
+    on the map (playback holds, dashed line marks where it resumes); click/tap/drag
+    jumps + pauses
+  badge: week = median lags this week; cycle = typical lags; date = that day's NOAA
+    slack/max times; + "Confidence here" from the skill map
+  setters only record state; one coalesced apply() loads what the view needs (a cold
+    Today load fetches only manifest + atlas meta + one atlas field + one NOAA call)
   one requestAnimationFrame loop (~30 fps); nothing per frame touches Dash
 ```
 
-Each week ≈ 2–2.5 MB per depth + ~70 KB meta (under Render's ~7 MB response limit). Validated against NOAA: model surface current at The Race / Plum Gut / Montauk correlates 0.94–0.99 with predictions and gets slack timing within ~10–35 min; peak speed in the narrowest gaps runs ~25% low (the ~1 km mesh smooths ~1.5 km-wide jets). The sidebar says so.
+Each week ≈ 2–2.5 MB per depth + ~70 KB meta (under Render's ~7 MB response limit). Validated against NOAA: model surface current at The Race / Plum Gut / Montauk correlates 0.94–0.99 with predictions and gets slack timing within ~10–35 min; peak speed in the narrowest gaps runs ~25–30% low (the ~1 km mesh smooths ~1.5 km-wide jets). The sidebar says so.
+
+Atlas accuracy (full-season build, Oct 2026): share of the model's flow the typical cycle reproduces in weeks it wasn't built from — Race/Plum Gut/Fishers 87–96%, Gardiners/Peconics 78–89%, Block Island Sound 65–83%, ocean side S of Montauk 28–58% (hazed). Slack timing vs NOAA over all of 2026: The Race median 26 min, **biased late** (+26 min mean — the model's own timing at The Race; 90% within 46 min); Plum Gut median 13 min (90% within 33). The "How it works" modal (`layout/currentsview.py:_about_body`) quotes these — update it if the atlas is rebuilt.
 
 ### Key Files
 | File | Purpose |
@@ -136,9 +172,10 @@ Each week ≈ 2–2.5 MB per depth + ~70 KB meta (under Render's ~7 MB response 
 | `assets/gotone-logo.png` | White fish logotype on transparent background |
 | `data/currents.py` | Currents data dir, GOCUR1 frame format (pack / parse / validate), filename allow-list, manifest reader |
 | `data/currents_weeks.json` | Curated hindcast weeks (+ lesson text) and featured NOAA stations for /currents |
-| `tools/build_currents.py` | Off-Render builder: NECOFS → gridded frames + NOAA predictions → upload |
-| `layout/currentsview.py` | /currents layout: sidebar controls, dark map, chart containers |
-| `assets/currents.js` | /currents engine: particles, stations, chart, time cursor, lag badge |
+| `tools/build_currents.py` | Off-Render builder for the example weeks: NECOFS → gridded frames + NOAA predictions → upload |
+| `tools/build_tide_atlas.py` | Off-Render builder for the tide-stage atlas behind Today / Tide cycle (see Architecture → Currents Page) |
+| `layout/currentsview.py` | /currents layout: view switch, date / strength / week panels, controls, dark map, chart, "How it works" modal (accuracy text) |
+| `assets/currents.js` | /currents engine: view timelines, atlas math (mirrors build_tide_atlas.py), particles, haze, stations, chart, cursor, badge, live NOAA fetch |
 | `assets/currents.css` | /currents styles + the shared header nav link |
 | `requirements-tools.txt` | Build-only deps (`netCDF4` etc.) — never installed on Render |
 | `.github/workflows/` | `seed-sst-cache.yml` (daily SST seed), `build-currents.yml` (currents), `keepalive.yml` (heartbeat), `sync-catches.yml` (catch sync — not wired up yet) |
@@ -162,7 +199,7 @@ Each week ≈ 2–2.5 MB per depth + ~70 KB meta (under Render's ~7 MB response 
 16. **clientside: POI collapse toggle** — Expands/collapses POI checklist, flips chevron (▾/▴)
 17. **poi_select_all** — Server callback for Select all / Deselect all links in POI checklist
 18. **route_page** — Router: `/catches` (gated), `/currents`, else the SST page.
-19. **Currents (clientside only)** — week / depth / rate / station / options forward to `window.Currents.*` (each writes `''` to a `currents-sink-*` div; initial calls hand the engine its defaults, which it queues until the map exists); play/pause toggles and returns the button label; step ±1 h; lesson text comes from the `currents-weeks` store. All per-frame work is in `assets/currents.js`, which pushes back into Dash only via `dash_clientside.set_props` (station click → dropdown, auto-play → button label).
+19. **Currents (clientside only)** — week / depth / rate / station / options / strength / date forward to `window.Currents.*` (each writes `''` to a `currents-sink-*` div; initial calls hand the engine its defaults; setters only record state and one coalesced apply() loads data once the map exists); the view switch (`currents-mode`) also returns the three panels' `style`; "Now" calls `goNow()` and returns today (ET) to the date picker; "How it works" opens the modal (auto-opens once per browser via a localStorage flag); play/pause toggles and returns the button label; step ±1 h; lesson text comes from the `currents-weeks` store. All per-frame work is in `assets/currents.js`, which pushes back into Dash only via `dash_clientside.set_props` (station click → dropdown, auto-play → button label).
 
 ## Critical Lessons Learned
 
@@ -180,6 +217,10 @@ Each week ≈ 2–2.5 MB per depth + ~70 KB meta (under Render's ~7 MB response 
 
 ### NECOFS / FVCOM Gotchas (currents pipeline)
 - **The live GOM3 forecast is listed but missing**: THREDDS `forecasts.xml` advertises `FVCOM/NECOFS/Forecasts/NECOFS_GOM3_FORECAST.nc`, but the file 404s (Oct 2026). The `NECOFS_FVCOM_OCEAN_GLOBAL_FORECAST.nc` that *is* live is **daily-mean** — tides average out, useless for currents. The hourly 30-year hindcast (`fvcom/hindcasts/30yr_gom3`, 1978-01-01 → 2017-01-01) works.
+- **Nothing on UMassD's THREDDS is newer than 2016**: `catalog/archives.xml` holds only 2010–2014 forecast archives (GOM3v11/v12/v13, MassBay, waves). So storms like Henri (Aug 2021, Westerly landfall) can't be example weeks; in-season storms in the hindcast, by modeled surge at Montauk: Sandy Oct 2012 +3.1 ft, Bob Aug 1991 +2.2, Hermine Sep 2016 +2.0, Irene Aug 2011 +1.8.
+- **2016 sits near a lunar-node peak**: M2 is ~7% stronger than in 2026, so tide-range presets taken from 2016 overstate today's tides. The atlas takes Neap/Average/Spring from the 2024–30 range distribution; Today mode is immune because it blends by the day's actual range in feet.
+- **The model's slack at The Race runs ~25 min late vs NOAA** (all of 2026: mean +26 min, 90% within 46) while Plum Gut is close (median 13 min). It's the model, not the atlas method — the hourly weeks show the same 16–36 min. Don't promise "slack within 20 min" at The Race; the chart/badge show NOAA's own times.
+- **NOAA current predictions are capped at 31 days per request** (`interval=30`), but `MAX_SLACK` events and Montauk high/lows come back for a whole year in one call, and 6-min tide heights for 6 months. The atlas builder fits each station from one 30-day curve (Aug 2016 covers two spring/neap cycles).
 - **Don't read `Itime`/`Itime2` on the hindcast**: it's an aggregation of ~470 monthly files, and those variables make THREDDS open every one (hung 10+ min). The aggregated `time` coordinate is cached and fast; it's float32 MJD (~6-min resolution at modern dates), so round to the hour.
 - **Month boundaries repeat an hour** in the aggregation (467 duplicate steps). A week crossing one has 170 raw steps for 169 hours; `window_steps()` keeps the first copy. Without it every later frame is shifted an hour — fatal for slack timing.
 - **Velocities are element-centred** (`lonc/latc`; `nv` is 1-based); `siglay` index 0 is the surface; `ua/va` are depth-averaged. Average elements → nodes, then barycentric interpolation inside mesh triangles; grid points outside the mesh are land.
@@ -191,7 +232,8 @@ Each week ≈ 2–2.5 MB per depth + ~70 KB meta (under Render's ~7 MB response 
 
 ### Tide Height ≠ Tidal Current (the point of /currents)
 - NOAA publishes current predictions separately from tide predictions, and in the Race / Plum Gut / Montauk system slack and max flow are phase-shifted from local high/low water. Supermoon week 2015: The Race slack ≈ 2h40m after Montauk HW/LW, max flood ≈ 15 min–1 h *before* HW; Plum Gut slack ≈ 1h40m after. So "fish the slack at high tide" by a Montauk tide table is off by hours, and two passages a few miles apart turn about an hour apart.
-- Wind and surge push real flow off the tide-only predictions: during Jonas the model's Montauk current peaked 3.2 kn vs NOAA's 2.7, and water stood ~2.3 ft above its usual offset.
+- Wind and surge push real flow off the tide-only predictions: during Blizzard Jonas (Jan 2016) the model's Montauk current peaked 3.2 kn vs NOAA's 2.7 with water ~2.3 ft above its usual offset; during Hurricane Sandy (now the storm example week) the model puts Montauk +3.1 ft above the predicted tide on the evening of Oct 29, 2012.
+- **The currents are locked to the tide cycle in the passes, so a typical cycle works there**: 2026 NOAA predictions put The Race's slack 2h38 after Montauk HW (80% within about ±20 min) and its strength varies ~±20% with the range; that's why the default view is a tide-stage atlas, not a forecast. It fails on the ocean side south of Montauk (wind and shelf currents dominate) — hazed on the map.
 
 ### Dash + Custom JS Gotchas (/currents)
 - **Leaflet is a global (`window.L`) loaded by dash-leaflet before `/assets/*.js`**, but `window.dash_clientside` is created *after* assets — look it up lazily. Grab a dash-leaflet map with `L.Map.addInitHook` (match `getContainer().id`); dash-leaflet's `eventHandlers.load` misses the initial load. react-leaflet calls `map.remove()` on page swap, which fires `unload` — clean up there.
@@ -201,6 +243,10 @@ Each week ≈ 2–2.5 MB per depth + ~70 KB meta (under Render's ~7 MB response 
 - **`document.hidden` pauses `requestAnimationFrame`**: the loop stops when the tab is hidden and restarts on `visibilitychange`. A hidden browser pane shows a frozen animation — to test, drive `window.Currents._state.particles.step()` manually, or shim it: override `document.hidden` to `false`, replace `requestAnimationFrame` with a 33 ms `setTimeout`, and dispatch `visibilitychange` (then real mouse hovers/drags work).
 - **Plotly reads numeric dates in the browser's local timezone**: the chart got ET wall-clock times as millisecond numbers, so Plotly shifted every tick and hover time by the viewer's UTC offset (4 h in EDT) while the map clock was right — scrubbing by the hover readout landed hours off. Pass timezone-naive date strings (`px()` in currents.js) for x data and range. Easy to miss: the curves and cursor stay mutually consistent, only the labels are wrong, and only when the browser isn't on UTC.
 - **Users scrub with the hover readout, not by dragging**: Plotly's x-unified hover line follows the mouse, so a hover that didn't move the map looked like broken scrubbing (and after a real drag, playback resumed and ran away). Now mouse hover previews the map (`S.preview`, playback holds), leaving the chart returns, and click/tap/drag jumps there and pauses.
+- **Dash 4 `DatePickerSingle` `display_format` doesn't take moment's `ddd`** (weekday): it rendered "Su11, Oct 1…". Use `"MMM D, YYYY"` like the SST page.
+- **Dash 4 dropdown menus render inline**, inside the dark sidebar, so they inherit its light text (white on white). `#sidebar-col .dash-dropdown-content` needs the navy override too, not just `.dash-dropdown-value`.
+- **The date input has a fixed width** and overflowed its flex slot in the narrow sidebar, covering the "Now" button (clicks hit the calendar). The date row wraps and the input is `width: 100%`.
+- **Keep the JS atlas math in lockstep with `tools/build_tide_atlas.py`** (phase, range interpolation + clamp, tent weights, bin centres). The builder writes a `selftest` block; `await window.Currents._selftest()` in the browser console should report `maxErr` ≈ 0 (store full-precision centres/clamp and NOAA's 3-decimal heights, or it drifts by ~0.002 m/s).
 
 ### Dash 4.0 Gotchas
 - **Never use clientside callbacks that manipulate DOM for elements also controlled by server callbacks.** Dash's virtual DOM reconciliation won't see the DOM change, so server callback updates get silently skipped, leaving the UI stuck. We burned multiple iterations on this with the Fetch button getting permanently disabled.
@@ -412,9 +458,13 @@ python app.py
 # Use `python -m pip`: the venv's pip launcher is broken from a past move.
 .venv/bin/python -m pip install -r requirements-tools.txt
 .venv/bin/python tools/build_currents.py --weeks 2015-09-supermoon   # → ./cache/currents
+.venv/bin/python tools/build_tide_atlas.py --start 2016-08-01 --end 2016-08-15 --force  # quick dev atlas
 # → http://localhost:8050/currents
-# Upload to production (after a deploy that has the endpoint):
-CACHE_UPLOAD_TOKEN=... .venv/bin/python tools/build_currents.py --weeks all --upload
+# Production: dispatch the workflow (uses the GitHub secret; no local token needed)
+gh workflow run build-currents.yml -f source=hindcast -f weeks=all
+gh workflow run build-currents.yml -f source=atlas -f publish=false   # build + artifact only
+gh run download <run-id> -n tide-atlas -D build/atlas-ci              # test locally first
+gh workflow run build-currents.yml -f source=atlas -f publish=true    # rebuild from cache + upload
 ```
 
 ## Environment Variables

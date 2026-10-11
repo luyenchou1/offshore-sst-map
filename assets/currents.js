@@ -8,10 +8,21 @@
  * no Dash callbacks or server requests per frame. Dash controls talk to us
  * through window.Currents (see the "Currents page" callbacks in app.py).
  *
- * Data (built by tools/build_currents.py, served by app.py /api/currents/*):
- *   manifest.json          weeks + stations
- *   <week>_<depth>.bin.gz  GOCUR1 hourly u/v frames (format: data/currents.py)
- *   <week>_meta.json.gz    NOAA tide + current predictions for the week
+ * Three views, each a "timeline" with its own clock S.t (looping):
+ *   date   typical currents for one day's real Montauk tide times and ranges:
+ *          the tide-stage atlas evaluated from bundled NOAA high/lows. Opens
+ *          on today at the current time. The selected spot's chart line is
+ *          NOAA's own prediction, fetched live (falls back to typical).
+ *   cycle  one typical Montauk tide cycle, LW -> HW -> LW, at a preset
+ *          strength (Neap / Average / Spring).
+ *   week   the example weeks: hourly model output incl. that week's weather.
+ *
+ * Data (app.py /api/currents/*, formats in data/currents.py):
+ *   manifest.json            weeks, stations, "atlas" entry
+ *   atlas-*_<depth>.bin.gz   basis fields per tide-phase bin (72 frames)
+ *   atlas-*_meta.json.gz     phase/range model, presets, skill maps, station
+ *                            curves, Montauk high/lows (tools/build_tide_atlas.py)
+ *   <week>_<depth>.bin.gz    hourly u/v frames; <week>_meta.json.gz NOAA data
  */
 (function () {
     "use strict";
@@ -19,8 +30,10 @@
 
     // ---------------------------------------------------------- constants --
     var API = "/api/currents/";
+    var NOAA = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter";
     var TZ = "America/New_York";
     var KNOTS = 1.943844;
+    var HOUR = 3600;
     var FADE = 0.92;              // trail alpha kept per frame
     var MAX_AGE = 100;            // frames before a particle respawns
     var FRAME_MS = 1000 / 30;     // ~30 fps cap
@@ -34,18 +47,25 @@
         "rgba(255,240,205,1.0)"];
     var FLOOD = "#2dd4bf", EBB = "#fb923c", SLACK = "#e2e8f0";
     var MARGIN = { l: 44, r: 50, t: 24, b: 26 };   // chart plot-area margins (px)
+    // Confidence bands for the tide-only views (share of the current the
+    // typical cycle explains at a spot, from the atlas build).
+    var CONF = [[0.85, "High"], [0.7, "Good"], [0.5, "Moderate"], [-1, "Low"]];
 
     // -------------------------------------------------------------- state --
     var S = {
-        map: null, particles: null, stationLayer: null, markers: {},
-        clock: null, statusEl: null, cursorEl: null, homeEl: null, resizeObs: null,
-        manifestP: null, week: null, depth: "surface", rate: 1800, station: null,
+        map: null, particles: null, stationLayer: null, markers: {}, haze: null,
+        clock: null, legend: null, statusEl: null, cursorEl: null, homeEl: null,
+        resizeObs: null, manifestP: null, manifest: null, inflight: {},
+        mode: "date", week: null, depth: "surface", rate: 1800, station: null,
+        strength: "average", date: null,
         opts: { stations: true, model: true },
-        meta: null, field: null, fields: {}, stationsById: {},
+        atlas: null, weekMeta: null, fields: {}, field: null, tl: null,
+        stations: [], stationsById: {}, cur: null, curSig: "",
         t: 0, playing: false, wantPlay: true, fitted: false,
-        raf: 0, lastFrame: 0, lastUi: 0, loadToken: 0,
-        chartReady: false, xr: null, scrubbing: false,
-        preview: null                       // chart time under the mouse, else null
+        raf: 0, lastFrame: 0, lastUi: 0, loadToken: 0, applyTimer: 0,
+        chartReady: false, chartKind: null, scrubbing: false,
+        preview: null,                      // chart time under the mouse, else null
+        live: { data: {}, failed: {}, key: null, ctrl: null, timer: 0, blockedUntil: 0 }
     };
 
     // The moment the map shows: the chart time under the mouse while the user
@@ -79,8 +99,7 @@
         var asUtc = Date.UTC(+p.year, +p.month - 1, +p.day, (+p.hour) % 24, +p.minute, +p.second);
         return (_off[k] = asUtc - k * 3600000);
     }
-    // Eastern wall-clock time expressed as a UTC timestamp. Plotly date axes
-    // ignore time zones, so these make the chart read in local (ET) time.
+    // Eastern wall-clock time expressed as a UTC timestamp (ms).
     function wall(tSec) { return tSec * 1000 + etOffsetMs(tSec); }
     function unwall(ms) { var t = ms / 1000; return t - etOffsetMs(t) / 1000; }
     // Chart x values. Plotly reads numeric dates in the *browser's* zone, so
@@ -92,6 +111,23 @@
     var fmtClock = new Intl.DateTimeFormat("en-US", {
         timeZone: TZ, weekday: "short", month: "short", day: "numeric",
         hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+    var fmtHM = new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+    var fmtDay = new Intl.DateTimeFormat("en-US", {
+        timeZone: TZ, weekday: "short", month: "short", day: "numeric" });
+    var _ymd = new Intl.DateTimeFormat("en-CA", {
+        timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" });
+    function todayET() { return _ymd.format(new Date()); }          // "YYYY-MM-DD"
+
+    function shiftDay(day, n) {
+        var p = day.split("-"), d = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2] + n));
+        return d.toISOString().slice(0, 10);
+    }
+    // Epoch seconds of 00:00 Eastern on `day`.
+    function etMidnight(day) {
+        var p = day.split("-"), utc = Date.UTC(+p[0], +p[1] - 1, +p[2]) / 1000, t = utc + 5 * HOUR;
+        for (var i = 0; i < 3; i++) { t = utc - etOffsetMs(t) / 1000; }
+        return t;
+    }
 
     function fmtDur(sec) {
         var m = Math.round(Math.abs(sec) / 60), h = Math.floor(m / 60), r = m % 60;
@@ -100,9 +136,42 @@
 
     function mercY(lat) { return Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)); }
 
+    function median(a) {
+        if (!a.length) { return null; }
+        a = a.slice().sort(function (x, y) { return x - y; });
+        var m = a.length >> 1;
+        return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+    }
+
+    // Largest k with arr[k] <= x (-1 if none).
+    function floorIndex(arr, x) {
+        var lo = 0, hi = arr.length;
+        while (lo < hi) {
+            var m = (lo + hi) >> 1;
+            if (arr[m] <= x) { lo = m + 1; } else { hi = m; }
+        }
+        return lo - 1;
+    }
+
+    function interpSeries(ts, vs, tSec) {       // linear, clamped at the ends
+        var n = vs.length;
+        if (!n) { return null; }
+        if (tSec <= ts[0]) { return vs[0]; }
+        if (tSec >= ts[n - 1]) { return vs[n - 1]; }
+        var k = floorIndex(ts, tSec);
+        return vs[k] + (vs[k + 1] - vs[k]) * (tSec - ts[k]) / (ts[k + 1] - ts[k]);
+    }
+
+    function b64bytes(s) {
+        var bin = atob(s || ""), out = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) { out[i] = bin.charCodeAt(i); }
+        return out;
+    }
+
     // --------------------------------------------------------------- data --
     function fetchBuf(url) {
-        return fetch(url, { credentials: "same-origin" }).then(function (r) {
+        if (S.inflight[url]) { return S.inflight[url]; }   // one download per file
+        var p = fetch(url, { credentials: "same-origin" }).then(function (r) {
             if (!r.ok) { throw new Error("HTTP " + r.status); }
             return r.arrayBuffer();
         }).then(function (buf) {
@@ -117,6 +186,10 @@
             }
             return buf;
         });
+        S.inflight[url] = p;
+        var done = function () { delete S.inflight[url]; };
+        p.then(done, done);
+        return p;
     }
 
     function fetchJson(url) {
@@ -155,31 +228,189 @@
         return f;
     }
 
-    // Mask-aware bilinear sample in space, linear between hourly frames.
-    // Returns OUT = [u, v] in m/s (reused array), or null over land/outside.
-    var OUT = [0, 0];
-    function sample(f, lat, lon, tSec) {
+    // ------------------------------------------- tide-stage atlas (model) --
+    // Mirrors tools/build_tide_atlas.py; its "selftest" block checks this.
+    function prepAtlas(meta, builtAt) {
+        var a = meta.atlas, h = meta.tide.hilo, n = h.t.length;
+        var A = {
+            meta: meta, a: a, builtAt: builtAt, NB: a.bins, c: a.centres_ft, clamp: a.clamp_ft,
+            T: new Float64Array(n), V: new Float64Array(n), H: new Uint8Array(n),
+            mid: new Float64Array(n - 1), rng: new Float64Array(n - 1),
+            stations: meta.stations || [], tideTyp: meta.tide.typ,
+            tEbb: a.t_ebb_s, tFlood: a.t_flood_s, presets: a.presets || [],
+            skill: {}, hazeUrl: {}
+        };
+        for (var i = 0; i < n; i++) {
+            A.T[i] = h.t[i];
+            A.V[i] = h.v[i];
+            A.H[i] = h.type.charCodeAt(i) === 72 ? 1 : 0;           // "H"
+        }
+        for (i = 0; i < n - 1; i++) {
+            A.mid[i] = (A.T[i] + A.T[i + 1]) / 2;
+            A.rng[i] = Math.abs(A.V[i + 1] - A.V[i]);
+        }
+        return A;
+    }
+
+    // Phase (0 = Montauk HW, 0.5 = LW) and tidal range at t; null outside
+    // the bundled high/lows. Range: each half-cycle's |H - L| at its
+    // mid-time, linear between mid-times (no step at HW/LW), clamped.
+    function tideAt(A, t) {
+        var k = floorIndex(A.T, t);
+        if (k < 0 || k >= A.T.length - 1) { return null; }
+        var frac = (t - A.T[k]) / (A.T[k + 1] - A.T[k]);
+        var R = interpSeries(A.mid, A.rng, t);
+        R = Math.max(A.clamp[0], Math.min(A.clamp[1], R));
+        return { phi: A.H[k] ? 0.5 * frac : 0.5 + 0.5 * frac, R: R, k: k, frac: frac };
+    }
+
+    var W3 = [0, 0, 0];
+    // Weights interpolating linearly between the three range centres,
+    // continued linearly past the ends (as fitted by the builder).
+    function tent(R, c) {
+        var a;
+        if (R <= c[1]) { a = (R - c[0]) / (c[1] - c[0]); W3[0] = 1 - a; W3[1] = a; W3[2] = 0; }
+        else { a = (R - c[1]) / (c[2] - c[1]); W3[0] = 0; W3[1] = 1 - a; W3[2] = a; }
+        return W3;
+    }
+
+    function binPos(phi, NB) {                  // bin centres at (b + 0.5) / NB
+        var x = phi * NB - 0.5, f = Math.floor(x), b0 = ((f % NB) + NB) % NB;
+        return { b0: b0, b1: (b0 + 1) % NB, a: x - f };
+    }
+
+    // Frame weights [[frame, weight], ...]; frame = basis * NB + bin.
+    function atlasWeights(A, phi, R) {
+        var w = tent(R, A.c), p = binPos(phi, A.NB), out = [];
+        for (var j = 0; j < 3; j++) {
+            if (w[j] === 0) { continue; }
+            out.push([j * A.NB + p.b0, w[j] * (1 - p.a)], [j * A.NB + p.b1, w[j] * p.a]);
+        }
+        return out;
+    }
+
+    // A station / tide curve stored as typ[basis][bin], at (phi, R).
+    function typAt(A, typ, phi, R) {
+        var w = tent(R, A.c), p = binPos(phi, A.NB), s = 0;
+        for (var j = 0; j < 3; j++) {
+            if (w[j]) { s += w[j] * ((1 - p.a) * typ[j][p.b0] + p.a * typ[j][p.b1]); }
+        }
+        return s;
+    }
+
+    function presetFor(A, key) {
+        var ps = A.presets;
+        return ps.filter(function (p) { return p.key === key; })[0] || ps[1] || ps[0] ||
+            { key: "average", label: "Average", range_ft: A.c[1] };
+    }
+
+    // Share of the current the typical cycle explains near a spot (0-1), or null.
+    function confidenceAt(A, f, lat, lon) {
+        if (!A || !f) { return null; }
+        if (!A.skill[S.depth]) { A.skill[S.depth] = b64bytes((A.a.skill || {})[S.depth]); }
+        var sk = A.skill[S.depth];
+        if (sk.length !== f.cells) { return null; }
+        var i = Math.round((lon - f.lon0) / f.dlon), j = Math.round((f.lat1 - lat) / f.dlat);
+        var best = -1, bd = 1e9;
+        for (var dj = -2; dj <= 2; dj++) {          // nearest water cell nearby
+            for (var di = -2; di <= 2; di++) {
+                var jj = j + dj, ii = i + di;
+                if (jj < 0 || ii < 0 || jj >= f.ny || ii >= f.nx) { continue; }
+                var c = jj * f.nx + ii;
+                if (f.mask[c] && di * di + dj * dj < bd) { bd = di * di + dj * dj; best = c; }
+            }
+        }
+        return best < 0 ? null : sk[best] / 100;
+    }
+
+    function confLabel(x) {
+        if (x == null) { return null; }
+        for (var k = 0; k < CONF.length; k++) { if (x >= CONF[k][0]) { return CONF[k][1]; } }
+        return "Low";
+    }
+
+    // ------------------------------------------------------- field sampling --
+    // Blend the frames of the moment into S.cur once per animation frame (only
+    // when the weights change); particles then sample S.cur bilinearly.
+    function blendField(f, wts) {
+        var C = f.cells, W = f.water, d = f.data, n, c;
+        if (!S.cur || S.cur.cells !== C) {
+            S.cur = { cells: C, u: new Float32Array(C), v: new Float32Array(C) };
+        }
+        var u = S.cur.u, v = S.cur.v;
+        for (n = 0; n < W.length; n++) { c = W[n]; u[c] = 0; v[c] = 0; }
+        for (var k = 0; k < wts.length; k++) {
+            var base = wts[k][0] * 2 * C, w = wts[k][1] * f.scale;
+            if (!w) { continue; }
+            for (n = 0; n < W.length; n++) {
+                c = W[n];
+                u[c] += d[base + c] * w;
+                v[c] += d[base + C + c] * w;
+            }
+        }
+    }
+
+    function refreshField() {
+        if (!S.tl || !S.field) { return false; }
+        var wts = S.tl.weights(viewT());
+        if (!wts) { S.curSig = ""; return false; }
+        var sig = S.field.key;
+        for (var k = 0; k < wts.length; k++) { sig += "|" + wts[k][0] + ":" + wts[k][1].toFixed(4); }
+        if (sig !== S.curSig) { blendField(S.field, wts); S.curSig = sig; }
+        return true;
+    }
+
+    // Mask-aware bilinear corners for a point, or null over land/outside.
+    var CORN = { c: [0, 0, 0, 0], w: [0, 0, 0, 0], ws: 0 };
+    function corners(f, lat, lon) {
         var fx = (lon - f.lon0) / f.dlon, fy = (f.lat1 - lat) / f.dlat;
         var i = Math.floor(fx), j = Math.floor(fy);
         if (i < 0 || j < 0 || i >= f.nx - 1 || j >= f.ny - 1) { return null; }
-        var ax = fx - i, ay = fy - j, m = f.mask, nx = f.nx;
-        var c00 = j * nx + i, c10 = c00 + 1, c01 = c00 + nx, c11 = c01 + 1;
-        var w00 = (1 - ax) * (1 - ay) * m[c00], w10 = ax * (1 - ay) * m[c10];
-        var w01 = (1 - ax) * ay * m[c01], w11 = ax * ay * m[c11];
-        var ws = w00 + w10 + w01 + w11;
-        if (ws < 0.5) { return null; }
-        var h = (tSec - f.t0) / f.dt;
-        if (h < 0) { h = 0; } else if (h > f.nf - 1) { h = f.nf - 1; }
-        var k0 = Math.floor(h), k1 = Math.min(k0 + 1, f.nf - 1), a = h - k0;
-        var d = f.data, C = f.cells;
-        var u0 = k0 * 2 * C, v0 = u0 + C, u1 = k1 * 2 * C, v1 = u1 + C;
-        var u = (d[u0 + c00] * w00 + d[u0 + c10] * w10 + d[u0 + c01] * w01 + d[u0 + c11] * w11) * (1 - a)
-              + (d[u1 + c00] * w00 + d[u1 + c10] * w10 + d[u1 + c01] * w01 + d[u1 + c11] * w11) * a;
-        var v = (d[v0 + c00] * w00 + d[v0 + c10] * w10 + d[v0 + c01] * w01 + d[v0 + c11] * w11) * (1 - a)
-              + (d[v1 + c00] * w00 + d[v1 + c10] * w10 + d[v1 + c01] * w01 + d[v1 + c11] * w11) * a;
-        OUT[0] = u * f.scale / ws;
-        OUT[1] = v * f.scale / ws;
+        var ax = fx - i, ay = fy - j, m = f.mask, c00 = j * f.nx + i;
+        CORN.c[0] = c00; CORN.c[1] = c00 + 1; CORN.c[2] = c00 + f.nx; CORN.c[3] = c00 + f.nx + 1;
+        CORN.w[0] = (1 - ax) * (1 - ay) * m[c00];
+        CORN.w[1] = ax * (1 - ay) * m[c00 + 1];
+        CORN.w[2] = (1 - ax) * ay * m[c00 + f.nx];
+        CORN.w[3] = ax * ay * m[c00 + f.nx + 1];
+        CORN.ws = CORN.w[0] + CORN.w[1] + CORN.w[2] + CORN.w[3];
+        return CORN.ws < 0.5 ? null : CORN;
+    }
+
+    var OUT = [0, 0];
+    function sampleCur(f, lat, lon) {
+        var q = corners(f, lat, lon);
+        if (!q) { return null; }
+        var u = S.cur.u, v = S.cur.v, c = q.c, w = q.w;
+        OUT[0] = (u[c[0]] * w[0] + u[c[1]] * w[1] + u[c[2]] * w[2] + u[c[3]] * w[3]) / q.ws;
+        OUT[1] = (v[c[0]] * w[0] + v[c[1]] * w[1] + v[c[2]] * w[2] + v[c[3]] * w[3]) / q.ws;
         return OUT;
+    }
+
+    // At an arbitrary time (charts, tooltips): blend just the 4 corner cells.
+    function samplePoint(f, lat, lon, wts) {
+        var q = corners(f, lat, lon);
+        if (!q) { return null; }
+        var d = f.data, C = f.cells, c = q.c, w = q.w, u = 0, v = 0;
+        for (var k = 0; k < wts.length; k++) {
+            var b = wts[k][0] * 2 * C, ww = wts[k][1];
+            u += ww * (d[b + c[0]] * w[0] + d[b + c[1]] * w[1] + d[b + c[2]] * w[2] + d[b + c[3]] * w[3]);
+            v += ww * (d[b + C + c[0]] * w[0] + d[b + C + c[1]] * w[1] +
+                       d[b + C + c[2]] * w[2] + d[b + C + c[3]] * w[3]);
+        }
+        OUT[0] = u * f.scale / q.ws;
+        OUT[1] = v * f.scale / q.ws;
+        return OUT;
+    }
+
+    // Model current projected onto the station's flood axis (kn, + flood).
+    function modelAt(st, t) {
+        if (!S.field || !S.tl || st.flood_dir == null || !st.in_model) { return null; }
+        var wts = S.tl.weights(t);
+        if (!wts) { return null; }
+        var uv = samplePoint(S.field, st.lat, st.lon, wts);
+        if (!uv) { return null; }
+        var th = st.flood_dir * Math.PI / 180;
+        return (uv[0] * Math.sin(th) + uv[1] * Math.cos(th)) * KNOTS;
     }
 
     function curveTimes(c) {
@@ -189,20 +420,7 @@
         return out;
     }
 
-    function interpSeries(ts, vs, tSec) {
-        var n = vs.length;
-        if (!n) { return null; }
-        if (tSec <= ts[0]) { return vs[0]; }
-        if (tSec >= ts[n - 1]) { return vs[n - 1]; }
-        var lo = 0, hi = n - 1;
-        while (hi - lo > 1) {
-            var mid = (lo + hi) >> 1;
-            if (ts[mid] <= tSec) { lo = mid; } else { hi = mid; }
-        }
-        return vs[lo] + (vs[hi] - vs[lo]) * (tSec - ts[lo]) / (ts[hi] - ts[lo]);
-    }
-
-    // NOAA predicted current (kn, + flood) at a station.
+    // NOAA predicted current (kn, + flood) from a week's stored curve.
     function noaaAt(st, tSec) {
         var c = st.curve;
         if (!c || !c.v.length) { return null; }
@@ -216,21 +434,25 @@
         return interpSeries(c.t, c.v, tSec);
     }
 
-    // Model current projected onto the station's flood axis (kn, + flood).
-    function modelAt(st, tSec) {
-        if (!S.field || st.flood_dir == null || !st.in_model) { return null; }
-        var uv = sample(S.field, st.lat, st.lon, tSec);
-        if (!uv) { return null; }
-        var th = st.flood_dir * Math.PI / 180;
-        return (uv[0] * Math.sin(th) + uv[1] * Math.cos(th)) * KNOTS;
-    }
-
-    function tideState(tSec) {
-        var td = S.meta && S.meta.tide;
-        if (!td || td.t.length < 2) { return null; }
-        var v = interpSeries(td.t, td.v, tSec);
-        var v2 = interpSeries(td.t, td.v, tSec + 360);
-        return { v: v, rising: v2 >= v };
+    // Slack (zero crossings) and peak flood / ebb of a signed series.
+    function deriveEvents(ts, vs) {
+        var out = [], xs = [], i;
+        for (i = 0; i < vs.length - 1; i++) {
+            var a = vs[i], b = vs[i + 1];
+            if (a !== 0 && (a < 0) !== (b < 0)) {
+                var tc = ts[i] + (ts[i + 1] - ts[i]) * a / (a - b);
+                xs.push(tc);
+                out.push({ t: tc, type: "slack", v: 0 });
+            }
+        }
+        for (var s = 0; s < xs.length - 1; s++) {
+            var best = -1, bv = 0;
+            for (i = 0; i < vs.length; i++) {
+                if (ts[i] > xs[s] && ts[i] < xs[s + 1] && Math.abs(vs[i]) > Math.abs(bv)) { bv = vs[i]; best = i; }
+            }
+            if (best >= 0) { out.push({ t: ts[best], type: bv > 0 ? "flood" : "ebb", v: bv }); }
+        }
+        return out.sort(function (p, q) { return p.t - q.t; });
     }
 
     function describe(kn) {
@@ -238,6 +460,197 @@
         if (Math.abs(kn) < SLACK_KN) { return { cls: "slack", text: "slack" }; }
         return { cls: kn > 0 ? "flood" : "ebb",
                  text: Math.abs(kn).toFixed(1) + " kn " + (kn > 0 ? "flood" : "ebb") };
+    }
+
+    // --------------------------------------------------------- timelines --
+    // Each view runs on its own clock S.t in [tl.t0, tl.t1) and loops.
+    // tl.weights(t) -> frame weights; tl.fracOf/tOfFrac map time <-> chart x.
+    function wallAxis(tl) {
+        var w0 = wall(tl.t0), w1 = wall(tl.t1);
+        tl.range = [px(tl.t0), px(tl.t1)];
+        tl.fracOf = function (t) { return (wall(t) - w0) / (w1 - w0); };
+        tl.tOfFrac = function (f) { return unwall(w0 + f * (w1 - w0)); };
+    }
+
+    function weekTimeline(meta, f) {
+        var tl = { kind: "week", id: "week|" + meta.week.id, t0: f.t0, t1: f.tEnd,
+                   stations: meta.stations || [], meta: meta, loop: true };
+        wallAxis(tl);
+        tl.weights = function (t) {
+            var h = (t - f.t0) / f.dt;
+            if (h < 0) { h = 0; } else if (h > f.nf - 1) { h = f.nf - 1; }
+            var k0 = Math.floor(h), k1 = Math.min(k0 + 1, f.nf - 1), a = h - k0;
+            return [[k0, 1 - a], [k1, a]];
+        };
+        tl.clockTitle = function (t) { return fmtClock.format(new Date(t * 1000)); };
+        tl.tide = function (t) {
+            var td = meta.tide;
+            if (!td || td.t.length < 2) { return null; }
+            var v = interpSeries(td.t, td.v, t), v2 = interpSeries(td.t, td.v, t + 360);
+            return { v: v, rising: v2 >= v };
+        };
+        tl.stationKn = function (st, t) { return noaaAt(st, t); };
+        tl.source = function () { return "NOAA"; };
+        tl.chart = function (st) { return weekChart(meta, f, st); };
+        tl.badge = function (st) { return weekBadge(meta, st); };
+        return tl;
+    }
+
+    function cycleTimeline(A, key) {
+        var p = presetFor(A, key), R = p.range_ft;
+        var tl = { kind: "cycle", id: "cycle", t0: -A.tFlood, t1: A.tEbb, stations: A.stations,
+                   preset: p, loop: true };
+        var phiOf = function (t) { return t >= 0 ? 0.5 * t / A.tEbb : 1 + 0.5 * t / A.tFlood; };
+        tl.phiOf = phiOf;
+        tl.range = [tl.t0 / HOUR, tl.t1 / HOUR];
+        tl.fracOf = function (t) { return (t - tl.t0) / (tl.t1 - tl.t0); };
+        tl.tOfFrac = function (fr) { return tl.t0 + fr * (tl.t1 - tl.t0); };
+        tl.weights = function (t) { return atlasWeights(A, phiOf(t), R); };
+        tl.clockTitle = function (t) { return cycleLabel(A, t); };
+        tl.clockSub = function () {
+            return "Typical " + p.label.toLowerCase() + " tide (" + R.toFixed(1) + " ft range)";
+        };
+        tl.tide = function (t) { return { v: typAt(A, A.tideTyp, phiOf(t), R), rising: t < 0 }; };
+        tl.stationKn = function (st, t) { return st.typ ? typAt(A, st.typ, phiOf(t), R) : null; };
+        tl.source = function () { return "Typical"; };
+        tl.chart = function (st) { return cycleChart(A, tl, st); };
+        tl.badge = function (st) { return typicalBadge(A, st, "vs Montauk tide, typically:"); };
+        return tl;
+    }
+
+    function cycleLabel(A, t) {            // t = seconds from Montauk high water
+        if (Math.abs(t) < 5 * 60) { return "Montauk high water"; }
+        if (t > A.tEbb - 5 * 60 || t < -A.tFlood + 5 * 60) { return "Montauk low water"; }
+        return fmtDur(t) + (t > 0 ? " after" : " before") + " high water";
+    }
+
+    function dateTimeline(A, day) {
+        var tl = { kind: "date", id: "date|" + day, day: day, t0: etMidnight(day),
+                   t1: etMidnight(shiftDay(day, 1)), stations: A.stations, loop: true };
+        wallAxis(tl);
+        tl.weights = function (t) {
+            var s = tideAt(A, t);
+            return s ? atlasWeights(A, s.phi, s.R) : null;
+        };
+        tl.clockTitle = function (t) { return fmtClock.format(new Date(t * 1000)); };
+        tl.clockSub = function (t) { return stageLabel(A, t); };
+        // Height between high/lows by NOAA's cosine rule.
+        tl.tide = function (t) {
+            var s = tideAt(A, t);
+            if (!s) { return null; }
+            var k = s.k, v = A.V[k] + (A.V[k + 1] - A.V[k]) * (1 - Math.cos(Math.PI * s.frac)) / 2;
+            return { v: v, rising: A.V[k + 1] > A.V[k] };
+        };
+        tl.stationKn = function (st, t) {
+            var L = liveFor(st, tl);
+            if (L) { return interpSeries(L.t, L.v, t); }
+            var s = tideAt(A, t);
+            return s && st.typ ? typAt(A, st.typ, s.phi, s.R) : null;
+        };
+        tl.source = function (st) { return liveFor(st, tl) ? "NOAA" : "Typical"; };
+        tl.chart = function (st) { return dateChart(A, tl, st); };
+        tl.badge = function (st) { return dateBadge(A, tl, st); };
+        return tl;
+    }
+
+    function stageLabel(A, t) {            // "2h 40m after high water"
+        var k = floorIndex(A.T, t);
+        if (k < 0 || k >= A.T.length - 1) { return ""; }
+        var name = A.H[k] ? "high" : "low", next = A.H[k] ? "low" : "high";
+        if (t - A.T[k] < 5 * 60) { return "Montauk " + name + " water"; }
+        if (A.T[k + 1] - t < 5 * 60) { return "Montauk " + next + " water"; }
+        return fmtDur(t - A.T[k]) + " after " + name + " water";
+    }
+
+    function clampT(t) {
+        var tl = S.tl;
+        if (!tl) { return t; }
+        if (tl.kind === "cycle") {
+            var span = tl.t1 - tl.t0;
+            return tl.t0 + ((((t - tl.t0) % span) + span) % span);
+        }
+        return Math.max(tl.t0, Math.min(tl.t1, t));
+    }
+
+    function startTime(tl) {
+        if (tl.kind === "date") {
+            var now = Date.now() / 1000;
+            if (now >= tl.t0 && now < tl.t1) { return now; }
+            return tl.t0 + 6 * HOUR;                        // 6 AM on other days
+        }
+        return tl.t0;
+    }
+
+    // ------------------------------------------------------ live NOAA data --
+    // The selected spot's official prediction for the chosen day (date view).
+    function liveKey(st, tl) { return st.id + "|" + tl.day; }
+    function liveFor(st, tl) {
+        return st && tl && tl.kind === "date" ? S.live.data[liveKey(st, tl)] || null : null;
+    }
+
+    function pad2(n) { return (n < 10 ? "0" : "") + n; }
+    function ymdhmUTC(t) {
+        var d = new Date(t * 1000);
+        return d.getUTCFullYear() + pad2(d.getUTCMonth() + 1) + pad2(d.getUTCDate()) + " " +
+            pad2(d.getUTCHours()) + ":" + pad2(d.getUTCMinutes());
+    }
+    // "YYYY-MM-DD HH:MM" in GMT. Parsed by hand: Safari's Date() rejects it.
+    function parseNoaa(s) {
+        return Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10),
+                        +s.slice(11, 13), +s.slice(14, 16)) / 1000;
+    }
+
+    function requestLive() {
+        var tl = S.tl, st = S.stationsById[S.station];
+        if (!tl || tl.kind !== "date" || !st) { return; }
+        var key = liveKey(st, tl);
+        if (S.live.data[key] || S.live.failed[key] || S.live.key === key) { return; }
+        if (Date.now() < S.live.blockedUntil) { return; }
+        clearTimeout(S.live.timer);                         // debounce quick switching
+        S.live.timer = setTimeout(function () {
+            if (S.live.ctrl) { S.live.ctrl.abort(); }
+            var ctrl = window.AbortController ? new AbortController() : null;
+            S.live.ctrl = ctrl;
+            S.live.key = key;
+            var q = { product: "currents_predictions", station: st.id, interval: "6",
+                      units: "english", time_zone: "gmt", format: "json",
+                      application: "gotone_currents",
+                      begin_date: ymdhmUTC(tl.t0 - 1800), end_date: ymdhmUTC(tl.t1 + 1800) };
+            if (st.bin) { q.bin = st.bin; }
+            var url = NOAA + "?" + Object.keys(q).map(function (k) {
+                return k + "=" + encodeURIComponent(q[k]);
+            }).join("&");
+            fetch(url, ctrl ? { signal: ctrl.signal } : {}).then(function (r) {
+                if (r.status === 403 || r.status === 429) {
+                    S.live.blockedUntil = Date.now() + 10 * 60 * 1000;
+                    throw new Error("NOAA rate limit");
+                }
+                if (!r.ok) { throw new Error("HTTP " + r.status); }
+                return r.json();
+            }).then(function (j) {
+                if (j.error) { throw new Error(j.error.message || "no predictions"); }
+                var cp = (j.current_predictions || {}).cp || [];
+                if (cp.length < 10) { throw new Error("no predictions"); }
+                var t = new Float64Array(cp.length), v = new Float64Array(cp.length);
+                cp.forEach(function (r, i) { t[i] = parseNoaa(r.Time); v[i] = +r.Velocity_Major; });
+                S.live.data[key] = { t: t, v: v, events: deriveEvents(t, v) };
+                liveArrived(key);
+            }).catch(function (e) {
+                if (e && e.name === "AbortError") { return; }
+                S.live.failed[key] = true;
+                liveArrived(key);
+            }).then(function () {
+                if (S.live.key === key) { S.live.key = null; }
+            });
+        }, 300);
+    }
+
+    function liveArrived(key) {
+        var st = S.stationsById[S.station];
+        if (!st || !S.tl || S.tl.kind !== "date" || liveKey(st, S.tl) !== key) { return; }
+        buildChart();
+        updateStationStyles();
+        updateClock();
     }
 
     // ------------------------------------------------------ particle layer --
@@ -338,8 +751,8 @@
         },
         step: function () {
             var n = this._n, f = S.field;
-            if (!n || !f || !this._canvas) { return; }
-            var ctx = this._ctx, w = this._w, h = this._h, k = this._k, t = viewT();
+            if (!n || !f || !this._canvas || !S.cur || !S.curSig) { return; }
+            var ctx = this._ctx, w = this._w, h = this._h, k = this._k;
             var segN = this._segN, nb = COLORS.length, b, q;
             segN.fill(0);
             for (q = 0; q < n; q++) {
@@ -349,7 +762,7 @@
                     continue;
                 }
                 var ll = this._toLatLon(x, y);
-                var uv = sample(f, ll[0], ll[1], t);
+                var uv = sampleCur(f, ll[0], ll[1]);
                 if (!uv) { this._spawn(q); continue; }
                 var u = uv[0], v = uv[1], spd = Math.sqrt(u * u + v * v);
                 var x2 = x + u * k, y2 = y - v * k;        // screen y grows downward
@@ -405,10 +818,18 @@
             d.innerHTML = "<div>Current speed</div>" +
                 '<div class="bar" style="background:linear-gradient(90deg,' + stops.join(",") +
                 ')"></div><div class="ticks"><span>0</span><span>1</span><span>2</span>' +
-                "<span>3+ kn</span></div>";
+                "<span>3+ kn</span></div>" +
+                '<div class="haze-note"><span class="swatch"></span>Hazed: wind and ocean ' +
+                "currents often override the tide</div>";
             return d;
         }
     });
+
+    function updateLegend() {
+        if (!S.legend) { return; }
+        var note = S.legend.getContainer().querySelector(".haze-note");
+        if (note) { note.style.display = S.haze ? "block" : "none"; }
+    }
 
     function showStatus(msg, isError) {
         if (!S.map) { return; }
@@ -425,17 +846,19 @@
     }
 
     function updateClock() {
-        if (!S.clock || !S.meta) { return; }
-        var t = viewT();
-        var html = '<div class="time">' + esc(fmtClock.format(new Date(t * 1000))) + "</div>";
-        var td = tideState(t);
+        if (!S.clock || !S.tl) { return; }
+        var t = viewT(), tl = S.tl;
+        var html = '<div class="time">' + esc(tl.clockTitle(t)) + "</div>";
+        var sub = tl.clockSub ? tl.clockSub(t) : "";
+        if (sub) { html += '<div class="cur-row sub">' + esc(sub) + "</div>"; }
+        var td = tl.tide(t);
         if (td) {
             html += '<div class="cur-row">Montauk tide ' + td.v.toFixed(1) + " ft, " +
                     (td.rising ? "rising" : "falling") + "</div>";
         }
         var st = S.stationsById[S.station];
         if (st) {
-            var d = describe(noaaAt(st, t));
+            var d = describe(tl.stationKn(st, t));
             html += '<div class="cur-row">' + esc(st.label) + ': <span class="' + d.cls + '">' +
                     d.text + "</span></div>";
         }
@@ -444,19 +867,22 @@
 
     // ------------------------------------------------------------ stations --
     function stationTip(st) {
-        var t = viewT(), nv = noaaAt(st, t), d = describe(nv), m = describe(modelAt(st, t));
+        var t = viewT(), tl = S.tl, nv = tl.stationKn(st, t), d = describe(nv);
+        var m = describe(modelAt(st, t));
         var dir = nv == null || Math.abs(nv) < SLACK_KN ? null : (nv > 0 ? st.flood_dir : st.ebb_dir);
+        var conf = tl.kind === "week" ? null : confLabel(confidenceAt(S.atlas, S.field, st.lat, st.lon));
         return "<b>" + esc(st.label) + "</b>" +
             (st.label !== st.name ? '<br><span style="color:#94a3b8">' + esc(st.name) + "</span>" : "") +
-            "<br>NOAA: " + d.text + (dir != null ? " → " + Math.round(dir) + "°" : "") +
-            "<br>Model: " + (st.in_model ? m.text : "outside model");
+            "<br>" + tl.source(st) + ": " + d.text + (dir != null ? " → " + Math.round(dir) + "°" : "") +
+            "<br>Model: " + (st.in_model ? m.text : "outside model") +
+            (conf ? "<br>Confidence here: " + conf : "");
     }
 
     function buildStations() {
-        if (!S.stationLayer || !S.meta) { return; }
+        if (!S.stationLayer) { return; }
         S.stationLayer.clearLayers();
         S.markers = {};
-        (S.meta.stations || []).forEach(function (st) {
+        S.stations.forEach(function (st) {
             var m = L.circleMarker([st.lat, st.lon], {
                 pane: "currentsStations", radius: st.featured ? 5.5 : 3.5, weight: 1.2,
                 color: "#0a1628", fillColor: SLACK, fillOpacity: 0.95,
@@ -473,9 +899,10 @@
     }
 
     function updateStationStyles() {
+        if (!S.tl) { return; }
         var t = viewT();
         for (var id in S.markers) {
-            var st = S.stationsById[id], m = S.markers[id], v = noaaAt(st, t);
+            var st = S.stationsById[id], m = S.markers[id], v = S.tl.stationKn(st, t);
             var col = v == null ? "#64748b" : Math.abs(v) < SLACK_KN ? SLACK : (v > 0 ? FLOOD : EBB);
             var sel = id === S.station;
             m.setStyle({ fillColor: col, color: sel ? "#ffffff" : "#0a1628", weight: sel ? 2.5 : 1.2 });
@@ -493,13 +920,51 @@
 
     function selectStation(id, fromMap) {
         if (!id) { return; }
-        if (!S.meta) { S.station = id; return; }          // applied once data loads
+        if (!S.tl) { S.station = id; return; }              // applied once data loads
         if (!S.stationsById[id] || id === S.station) { return; }
         S.station = id;
         if (fromMap) { setProps("currents-station", { value: id }); }
         updateStationStyles();
         updateClock();
         buildChart();
+        requestLive();
+    }
+
+    // ------------------------------------------- low-confidence haze (atlas) --
+    function buildHaze() {
+        if (S.haze && S.map) { S.map.removeLayer(S.haze); }
+        S.haze = null;
+        var A = S.atlas, f = S.field, d = S.depth;
+        if (!S.map || !A || !f || !S.tl || S.tl.kind === "week") { updateLegend(); return; }
+        if (!A.hazeUrl[d]) {
+            var sk = b64bytes((A.a.skill || {})[d]), rs = b64bytes((A.a.resid || {})[d]);
+            var unit = A.a.resid_unit || 0.005;
+            if (sk.length !== f.cells || rs.length !== f.cells) { updateLegend(); return; }
+            var cv = document.createElement("canvas");
+            cv.width = f.nx;
+            cv.height = f.ny;
+            var ctx = cv.getContext("2d"), img = ctx.createImageData(f.nx, f.ny), px4 = img.data;
+            for (var c = 0; c < f.cells; c++) {
+                if (!f.mask[c]) { continue; }
+                // Haze only where the tide explains < ~70% AND the leftover is
+                // a real current (> ~0.1 m/s): weak-flow bays stay clear.
+                var low = Math.min(1, Math.max(0, (0.7 - sk[c] / 100) / 0.3));
+                var big = Math.min(1, Math.max(0, (rs[c] * unit - 0.06) / 0.08));
+                var a = low * big;
+                if (a <= 0) { continue; }
+                px4[4 * c] = 148;
+                px4[4 * c + 1] = 163;
+                px4[4 * c + 2] = 184;
+                px4[4 * c + 3] = Math.round(a * 0.42 * 255);
+            }
+            ctx.putImageData(img, 0, 0);
+            A.hazeUrl[d] = cv.toDataURL("image/png");
+        }
+        var hx = f.dlon / 2, hy = f.dlat / 2;              // values sit on grid points
+        S.haze = L.imageOverlay(A.hazeUrl[d],
+            [[f.lat0 - hy, f.lon0 - hx], [f.lat1 + hy, f.lon1 + hx]],
+            { pane: "currentsHaze", interactive: false, className: "currents-haze" }).addTo(S.map);
+        updateLegend();
     }
 
     // --------------------------------------------------------------- chart --
@@ -509,11 +974,268 @@
         setTimeout(function () { waitForPlotly(cb, (tries || 0) + 1); }, 100);
     }
 
-    function median(a) {
-        if (!a.length) { return null; }
-        a = a.slice().sort(function (x, y) { return x - y; });
-        var m = a.length >> 1;
-        return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+    function eventTraces(evs, xf) {
+        var pick = function (type) { return evs.filter(function (e) { return e.type === type; }); };
+        var sl = pick("slack"), fl = pick("flood"), eb = pick("ebb");
+        return [{
+            x: sl.map(function (e) { return xf(e.t); }), y: sl.map(function () { return 0; }),
+            yaxis: "y2", mode: "markers", showlegend: false,
+            marker: { symbol: "circle-open", size: 7, color: SLACK, line: { width: 1.5 } },
+            hovertemplate: "Slack<extra></extra>"
+        }, {
+            x: fl.map(function (e) { return xf(e.t); }), y: fl.map(function (e) { return e.v; }),
+            yaxis: "y2", mode: "markers", showlegend: false,
+            marker: { symbol: "triangle-up", size: 7, color: FLOOD },
+            hovertemplate: "Max flood %{y:.1f} kn<extra></extra>"
+        }, {
+            x: eb.map(function (e) { return xf(e.t); }), y: eb.map(function (e) { return e.v; }),
+            yaxis: "y2", mode: "markers", showlegend: false,
+            marker: { symbol: "triangle-down", size: 7, color: EBB },
+            hovertemplate: "Max ebb %{y:.1f} kn<extra></extra>"
+        }];
+    }
+
+    function tideTrace(xs, ys, name, extra) {
+        var tr = { x: xs, y: ys, name: name, type: "scatter", mode: "lines",
+                   line: { color: "#60a5fa", width: 2 },
+                   hovertemplate: "%{y:.1f} ft<extra>Tide</extra>" };
+        for (var k in (extra || {})) { tr[k] = extra[k]; }
+        return tr;
+    }
+
+    function currentTrace(xs, ys, name, src) {
+        return { x: xs, y: ys, yaxis: "y2", name: name, mode: "lines",
+                 line: { color: "#fbbf24", width: 2 },
+                 fill: "tozeroy", fillcolor: "rgba(251,191,36,0.10)",
+                 hovertemplate: "%{y:.1f} kn<extra>" + src + "</extra>" };
+    }
+
+    function modelTrace(xs, ys) {
+        return { x: xs, y: ys, yaxis: "y2", mode: "lines",
+                 name: "model (" + (S.depth === "davg" ? "depth-avg" : "surface") + ")",
+                 line: { color: "#fbbf24", width: 1.3, dash: "dot" },
+                 hovertemplate: "%{y:.1f} kn<extra>Model</extra>" };
+    }
+
+    function hiloTrace(xs, ys) {
+        return { x: xs, y: ys, mode: "markers", showlegend: false, hoverinfo: "skip",
+                 marker: { size: 5, color: "#60a5fa" } };
+    }
+
+    function maxAbs(arrs) {
+        var m = 1;
+        arrs.forEach(function (a) { for (var i = 0; i < a.length; i++) { m = Math.max(m, Math.abs(a[i])); } });
+        return m;
+    }
+
+    // Model at the station over [t0, t1] every `step` s (x mapped by xf).
+    function modelSeries(st, t0, t1, step, xf) {
+        var mx = [], my = [];
+        if (!S.opts.model || !st || !st.in_model || st.flood_dir == null) { return null; }
+        for (var t = t0; t <= t1 + 1; t += step) {
+            var mv = modelAt(st, t);
+            if (mv != null) { mx.push(xf(t)); my.push(Math.round(mv * 100) / 100); }
+        }
+        return my.length ? { x: mx, y: my } : null;
+    }
+
+    function weekChart(meta, f, st) {
+        var td = meta.tide, traces = [tideTrace(td.t.map(px), td.v, "Montauk tide (NOAA)")];
+        if (S.opts.model && td.model) {
+            traces.push({
+                x: td.model.v.map(function (_, i) { return px(td.model.t0 + i * td.model.dt); }),
+                y: td.model.v, name: "water level (model)", mode: "lines",
+                line: { color: "#60a5fa", width: 1.2, dash: "dot" },
+                hovertemplate: "%{y:.1f} ft<extra>Model level</extra>"
+            });
+        }
+        var hilo = td.hilo || [];
+        traces.push(hiloTrace(hilo.map(function (h) { return px(h.t); }),
+                              hilo.map(function (h) { return h.v; })));
+        var arrs = [];
+        if (st && st.curve) {
+            traces.push(currentTrace(curveTimes(st.curve).map(px), st.curve.v,
+                                     st.label + " current (NOAA)", "NOAA"));
+            arrs.push(st.curve.v);
+            var ms = modelSeries(st, f.t0, f.tEnd, f.dt, px);
+            if (ms) { traces.push(modelTrace(ms.x, ms.y)); arrs.push(ms.y); }
+            traces = traces.concat(eventTraces(st.events || [], px));
+        }
+        return { traces: traces, maxC: maxAbs(arrs),
+                 xaxis: { type: "date", dtick: 86400000, tickformat: "%a %-d",
+                          hoverformat: "%a %b %-d, %-I:%M %p" } };
+    }
+
+    function dateChart(A, tl, st) {
+        var xs = [], ys = [], t;
+        for (t = tl.t0; t <= tl.t1 + 1; t += 600) {
+            var td = tl.tide(t);
+            if (td) { xs.push(px(t)); ys.push(Math.round(td.v * 100) / 100); }
+        }
+        var traces = [tideTrace(xs, ys, "Montauk tide (NOAA)")];
+        var hx = [], hy = [];
+        for (var k = Math.max(0, floorIndex(A.T, tl.t0)); k < A.T.length && A.T[k] <= tl.t1; k++) {
+            if (A.T[k] >= tl.t0) { hx.push(px(A.T[k])); hy.push(A.V[k]); }
+        }
+        traces.push(hiloTrace(hx, hy));
+        var arrs = [];
+        if (st) {
+            var L1 = liveFor(st, tl), cx = [], cy = [], evs;
+            if (L1) {
+                for (var i = 0; i < L1.t.length; i++) {
+                    if (L1.t[i] >= tl.t0 - 1800 && L1.t[i] <= tl.t1 + 1800) {
+                        cx.push(L1.t[i]); cy.push(L1.v[i]);
+                    }
+                }
+                evs = L1.events;
+            } else {
+                for (t = tl.t0; t <= tl.t1 + 1; t += 600) { cx.push(t); cy.push(tl.stationKn(st, t)); }
+                evs = deriveEvents(cx, cy);
+            }
+            var src = L1 ? "NOAA" : "typical";
+            traces.push(currentTrace(cx.map(px), cy, st.label + " current (" + src + ")",
+                                     L1 ? "NOAA" : "Typical"));
+            arrs.push(cy);
+            var ms = modelSeries(st, tl.t0, tl.t1, 1200, px);
+            if (ms) { traces.push(modelTrace(ms.x, ms.y)); arrs.push(ms.y); }
+            traces = traces.concat(eventTraces(evs.filter(function (e) {
+                return e.t >= tl.t0 && e.t <= tl.t1;
+            }), px));
+        }
+        var shapes = [], annotations = [], now = Date.now() / 1000;
+        if (now >= tl.t0 && now < tl.t1) {
+            shapes.push({ type: "line", xref: "x", yref: "paper", x0: px(now), x1: px(now),
+                          y0: 0, y1: 1, line: { color: "#f87171", width: 1, dash: "dot" } });
+            annotations.push({ x: px(now), y: 1, xref: "x", yref: "paper", text: "now",
+                               showarrow: false, yanchor: "top", xanchor: "left", xshift: 2,
+                               font: { size: 9, color: "#f87171" } });
+        }
+        return { traces: traces, maxC: maxAbs(arrs), shapes: shapes, annotations: annotations,
+                 xaxis: { type: "date", dtick: 3 * HOUR * 1000, tickformat: "%-I %p",
+                          hoverformat: "%a %-I:%M %p" } };
+    }
+
+    function cycleChart(A, tl, st) {
+        var N = 124, step = (tl.t1 - tl.t0) / N, xs = [], ys = [], lab = [], t, i;
+        var hx = function (tt) { return Math.round(tt / HOUR * 1000) / 1000; };
+        for (i = 0; i <= N; i++) {
+            t = tl.t0 + i * step;
+            xs.push(hx(t));
+            ys.push(Math.round(tl.tide(t).v * 100) / 100);
+            lab.push(cycleLabel(A, t));
+        }
+        var traces = [tideTrace(xs, ys, "Montauk tide (typical)", {
+            customdata: lab, hovertemplate: "%{y:.1f} ft · %{customdata}<extra>Tide</extra>" })];
+        traces.push(hiloTrace([hx(tl.t0), 0, hx(tl.t1)],
+                              [ys[0], tl.tide(0).v, ys[ys.length - 1]]));
+        var arrs = [];
+        if (st && st.typ) {
+            var cx = [], cy = [];
+            for (i = 0; i <= N; i++) { t = tl.t0 + i * step; cx.push(t); cy.push(tl.stationKn(st, t)); }
+            traces.push(currentTrace(cx.map(hx), cy, st.label + " current (typical NOAA)", "Typical"));
+            arrs.push(cy);
+            var ms = modelSeries(st, tl.t0, tl.t1, step, hx);
+            if (ms) { traces.push(modelTrace(ms.x, ms.y)); arrs.push(ms.y); }
+            traces = traces.concat(eventTraces(deriveEvents(cx, cy), hx));
+        }
+        var lo = tl.t0 / HOUR, hi = tl.t1 / HOUR, tv = [lo], tt = ["LW"];
+        [-4, -2, 0, 2, 4].forEach(function (h) {
+            if (h > lo + 0.6 && h < hi - 0.6) { tv.push(h); tt.push(h === 0 ? "HW" : (h > 0 ? "+" : "−") + Math.abs(h) + "h"); }
+        });
+        tv.push(hi);
+        tt.push("LW");
+        return { traces: traces, maxC: maxAbs(arrs),
+                 xaxis: { type: "linear", tickvals: tv, ticktext: tt, hoverformat: "+.1f" } };
+    }
+
+    function buildChart() {
+        var gd = $("currents-chart");
+        if (!gd || !S.tl || !S.field) { return; }
+        if (!window.Plotly) { waitForPlotly(buildChart); return; }
+        var st = S.stationsById[S.station], spec = S.tl.chart(st), maxC = spec.maxC;
+        var wide = gd.clientWidth >= 620;   // phones: no legend / axis titles
+        var xaxis = { range: S.tl.range, fixedrange: true, automargin: false,
+                      gridcolor: "#1e293b", linecolor: "#334155" };
+        for (var k in spec.xaxis) { xaxis[k] = spec.xaxis[k]; }
+        var layout = {
+            paper_bgcolor: "#0a1628", plot_bgcolor: "#0a1628",
+            font: { color: "#94a3b8", size: 10 },
+            margin: MARGIN, showlegend: wide,
+            legend: { orientation: "h", x: 0, y: 1, yanchor: "bottom", font: { size: 10 },
+                      bgcolor: "rgba(0,0,0,0)" },
+            hovermode: "x unified", dragmode: false,
+            hoverlabel: { bgcolor: "#0f1d32", bordercolor: "#334155",
+                          font: { color: "#e2e8f0", size: 11 } },
+            xaxis: xaxis,
+            yaxis: { fixedrange: true, automargin: false, zeroline: false,
+                     gridcolor: "#1e293b", tickfont: { color: "#60a5fa" },
+                     title: { text: wide ? "tide ft" : "", font: { size: 10, color: "#60a5fa" } } },
+            yaxis2: { overlaying: "y", side: "right", fixedrange: true, automargin: false,
+                      range: [-maxC * 1.15, maxC * 1.15], showgrid: false,
+                      zeroline: true, zerolinecolor: "#475569", tickfont: { color: "#fbbf24" },
+                      title: { text: wide ? "current kn (+flood)" : "",
+                               font: { size: 10, color: "#fbbf24" } } },
+            shapes: spec.shapes || [], annotations: spec.annotations || []
+        };
+        // Switching between date and numeric x axes: start the plot fresh.
+        if (S.chartKind && S.chartKind !== S.tl.kind) {
+            try { window.Plotly.purge(gd); } catch (e) { /* not drawn */ }
+        }
+        S.chartKind = S.tl.kind;
+        window.Plotly.react(gd, spec.traces, layout,
+                            { displayModeBar: false, responsive: true, scrollZoom: false });
+        S.chartReady = true;
+        updateBadge(st);
+        updateCursor();
+    }
+
+    // --------------------------------------------------------------- badge --
+    function phrase(off, what) {
+        if (off == null) { return null; }
+        if (Math.abs(off) < 15 * 60) { return "<b>at " + what + "</b>"; }
+        return "<b>" + fmtDur(off) + (off > 0 ? " after" : " before") + "</b> " + what;
+    }
+
+    function confSpan(st) {
+        var c = confLabel(confidenceAt(S.atlas, S.field, st.lat, st.lon));
+        return c ? ' · <span class="conf conf-' + c.toLowerCase() + '">Confidence here: ' + c + "</span>" : "";
+    }
+
+    function typicalBadge(A, st, lead) {
+        var L = st.lags || {}, parts = [];
+        var a = phrase(L.slack_ebb_vs_hw, "high water"), b = phrase(L.slack_flood_vs_lw, "low water");
+        if (a || b) { parts.push("slack comes " + [a, b].filter(Boolean).join(" and ")); }
+        var c = phrase(L.max_flood_vs_hw, "high water");
+        if (c) { parts.push("strongest flood " + c); }
+        return "<b>" + esc(st.label) + '</b> <span class="muted">' + esc(lead) + "</span> " +
+            (parts.length ? parts.join(" · ") : '<span class="muted">no typical slack timing here</span>') +
+            confSpan(st);
+    }
+
+    function dateBadge(A, tl, st) {
+        var L1 = liveFor(st, tl);
+        if (!L1) {
+            var lead = S.live.failed[liveKey(st, tl)] ? "NOAA times unavailable; typically:"
+                                                     : "vs Montauk tide, typically:";
+            return typicalBadge(A, st, lead);
+        }
+        var ev = L1.events.filter(function (e) { return e.t >= tl.t0 && e.t < tl.t1; });
+        var hm = function (t) { return fmtHM.format(new Date(t * 1000)).replace(":00", "").replace(" ", "").toLowerCase(); };
+        var slack = ev.filter(function (e) { return e.type === "slack"; }).map(function (e) { return hm(e.t); });
+        var big = function (type) {
+            var x = ev.filter(function (e) { return e.type === type; })
+                      .sort(function (p, q) { return Math.abs(q.v) - Math.abs(p.v); })[0];
+            return x ? "<b>" + Math.abs(x.v).toFixed(1) + " kn</b> at " + hm(x.t) : null;
+        };
+        var parts = [];
+        if (slack.length) { parts.push("slack <b>" + slack.join(" · ") + "</b>"); }
+        var fl = big("flood"), eb = big("ebb");
+        if (fl) { parts.push("max flood " + fl); }
+        if (eb) { parts.push("max ebb " + eb); }
+        return "<b>" + esc(st.label) + '</b> <span class="muted">' +
+            esc(fmtDay.format(new Date((tl.t0 + 12 * HOUR) * 1000))) + ", NOAA:</span> " +
+            (parts.length ? parts.join(" · ") : '<span class="muted">no slack listed</span>') +
+            confSpan(st);
     }
 
     // Median offset from each reference time to the nearest event (within 5 h).
@@ -530,17 +1252,8 @@
         return median(out);
     }
 
-    function phrase(off, what) {
-        if (off === null) { return null; }
-        if (Math.abs(off) < 15 * 60) { return "<b>at " + what + "</b>"; }
-        return "<b>" + fmtDur(off) + (off > 0 ? " after" : " before") + "</b> " + what;
-    }
-
     // The lesson: how this station's slack / max flood line up with Montauk's tide.
-    function updateBadge(st) {
-        var el = $("currents-badge");
-        if (!el) { return; }
-        if (!st || !S.meta) { el.innerHTML = ""; return; }
+    function weekBadge(meta, st) {
         var ev = (st.events || []).slice().sort(function (a, b) { return a.t - b.t; });
         var endFlood = [], endEbb = [], floods = [], prev = null;
         ev.forEach(function (e) {
@@ -552,7 +1265,7 @@
                 if (e.type === "flood") { floods.push(e.t); }
             }
         });
-        var hilo = S.meta.tide.hilo || [];
+        var hilo = meta.tide.hilo || [];
         var hw = hilo.filter(function (x) { return x.type === "H"; }).map(function (x) { return x.t; });
         var lw = hilo.filter(function (x) { return x.type === "L"; }).map(function (x) { return x.t; });
         var parts = [];
@@ -561,120 +1274,25 @@
         if (a || b) { parts.push("slack comes " + [a, b].filter(Boolean).join(" and ")); }
         var c = phrase(typicalOffset(hw, floods), "high water");
         if (c) { parts.push("strongest flood " + c); }
-        el.innerHTML = parts.length
+        return parts.length
             ? "<b>" + esc(st.label) + '</b> <span class="muted">vs Montauk tide this week:</span> ' +
               parts.join(" · ")
             : "<b>" + esc(st.label) + '</b> <span class="muted">— NOAA lists no slack/max ' +
               "times for this station.</span>";
     }
 
-    function buildChart() {
-        var gd = $("currents-chart");
-        if (!gd || !S.meta || !S.field) { return; }
-        if (!window.Plotly) { waitForPlotly(buildChart); return; }
-        var st = S.stationsById[S.station], td = S.meta.tide, f = S.field;
-        var traces = [{
-            x: td.t.map(px), y: td.v, name: "Montauk tide (NOAA)", type: "scatter",
-            mode: "lines", line: { color: "#60a5fa", width: 2 },
-            hovertemplate: "%{y:.1f} ft<extra>Tide</extra>"
-        }];
-        if (S.opts.model && td.model) {
-            traces.push({
-                x: td.model.v.map(function (_, i) { return px(td.model.t0 + i * td.model.dt); }),
-                y: td.model.v, name: "water level (model)", mode: "lines",
-                line: { color: "#60a5fa", width: 1.2, dash: "dot" },
-                hovertemplate: "%{y:.1f} ft<extra>Model level</extra>"
-            });
-        }
-        var hilo = td.hilo || [];
-        traces.push({
-            x: hilo.map(function (h) { return px(h.t); }), y: hilo.map(function (h) { return h.v; }),
-            mode: "markers", showlegend: false, hoverinfo: "skip",
-            marker: { size: 5, color: "#60a5fa" }
-        });
-        var maxC = 1;
-        if (st) {
-            st.curve.v.forEach(function (v) { maxC = Math.max(maxC, Math.abs(v)); });
-            traces.push({
-                x: curveTimes(st.curve).map(px), y: st.curve.v, yaxis: "y2",
-                name: st.label + " current (NOAA)", mode: "lines",
-                line: { color: "#fbbf24", width: 2 },
-                fill: "tozeroy", fillcolor: "rgba(251,191,36,0.10)",
-                hovertemplate: "%{y:.1f} kn<extra>NOAA</extra>"
-            });
-            if (S.opts.model && st.in_model && st.flood_dir != null) {
-                var mx = [], my = [];
-                for (var i = 0; i < f.nf; i++) {
-                    var tt = f.t0 + i * f.dt, mv = modelAt(st, tt);
-                    if (mv != null) { mx.push(px(tt)); my.push(Math.round(mv * 100) / 100); }
-                }
-                my.forEach(function (v) { maxC = Math.max(maxC, Math.abs(v)); });
-                if (my.length) {
-                    traces.push({
-                        x: mx, y: my, yaxis: "y2", mode: "lines",
-                        name: "model (" + (S.depth === "davg" ? "depth-avg" : "surface") + ")",
-                        line: { color: "#fbbf24", width: 1.3, dash: "dot" },
-                        hovertemplate: "%{y:.1f} kn<extra>Model</extra>"
-                    });
-                }
-            }
-            var ev = st.events || [];
-            var pick = function (type) { return ev.filter(function (e) { return e.type === type; }); };
-            var sl = pick("slack"), fl = pick("flood"), eb = pick("ebb");
-            traces.push({
-                x: sl.map(function (e) { return px(e.t); }), y: sl.map(function () { return 0; }),
-                yaxis: "y2", mode: "markers", showlegend: false,
-                marker: { symbol: "circle-open", size: 7, color: SLACK, line: { width: 1.5 } },
-                hovertemplate: "Slack<extra></extra>"
-            });
-            traces.push({
-                x: fl.map(function (e) { return px(e.t); }), y: fl.map(function (e) { return e.v; }),
-                yaxis: "y2", mode: "markers", showlegend: false,
-                marker: { symbol: "triangle-up", size: 7, color: FLOOD },
-                hovertemplate: "Max flood %{y:.1f} kn<extra></extra>"
-            });
-            traces.push({
-                x: eb.map(function (e) { return px(e.t); }), y: eb.map(function (e) { return e.v; }),
-                yaxis: "y2", mode: "markers", showlegend: false,
-                marker: { symbol: "triangle-down", size: 7, color: EBB },
-                hovertemplate: "Max ebb %{y:.1f} kn<extra></extra>"
-            });
-        }
-        S.xr = [wall(f.t0), wall(f.tEnd)];
-        var wide = gd.clientWidth >= 620;   // phones: no legend / axis titles
-        var layout = {
-            paper_bgcolor: "#0a1628", plot_bgcolor: "#0a1628",
-            font: { color: "#94a3b8", size: 10 },
-            margin: MARGIN, showlegend: wide,
-            legend: { orientation: "h", x: 0, y: 1, yanchor: "bottom", font: { size: 10 },
-                      bgcolor: "rgba(0,0,0,0)" },
-            hovermode: "x unified", dragmode: false,
-            hoverlabel: { bgcolor: "#0f1d32", bordercolor: "#334155",
-                          font: { color: "#e2e8f0", size: 11 } },
-            xaxis: { type: "date", range: [px(f.t0), px(f.tEnd)], fixedrange: true, automargin: false,
-                     gridcolor: "#1e293b", linecolor: "#334155", dtick: 86400000,
-                     tickformat: "%a %-d", hoverformat: "%a %b %-d, %-I:%M %p" },
-            yaxis: { fixedrange: true, automargin: false, zeroline: false,
-                     gridcolor: "#1e293b", tickfont: { color: "#60a5fa" },
-                     title: { text: wide ? "tide ft" : "", font: { size: 10, color: "#60a5fa" } } },
-            yaxis2: { overlaying: "y", side: "right", fixedrange: true, automargin: false,
-                      range: [-maxC * 1.15, maxC * 1.15], showgrid: false,
-                      zeroline: true, zerolinecolor: "#475569", tickfont: { color: "#fbbf24" },
-                      title: { text: wide ? "current kn (+flood)" : "",
-                               font: { size: 10, color: "#fbbf24" } } }
-        };
-        window.Plotly.react(gd, traces, layout,
-                            { displayModeBar: false, responsive: true, scrollZoom: false });
-        S.chartReady = true;
-        updateBadge(st);
-        updateCursor();
+    function updateBadge(st) {
+        var el = $("currents-badge");
+        if (!el) { return; }
+        el.innerHTML = st && S.tl ? S.tl.badge(st) : "";
     }
 
+    // -------------------------------------------- chart cursor, hover, scrub --
     // Bright line = the moment the map shows; while previewing, a faint dashed
     // line marks the playback time that the map returns to.
     function updateCursor() {
         var layer = $("currents-cursor-layer"), gd = $("currents-chart");
-        if (!layer || !gd || !S.xr || !S.chartReady) { return; }
+        if (!layer || !gd || !S.tl || !S.chartReady) { return; }
         if (!S.cursorEl || !layer.contains(S.cursorEl)) {
             S.homeEl = document.createElement("div");
             S.homeEl.className = "currents-cursor home";
@@ -683,17 +1301,26 @@
             layer.appendChild(S.homeEl);
             layer.appendChild(S.cursorEl);
         }
-        placeCursor(S.cursorEl, viewT(), gd);
+        placeCursor(S.cursorEl, S.tl.fracOf(viewT()), gd);
         S.homeEl.style.display = S.preview != null ? "block" : "none";
-        if (S.preview != null) { placeCursor(S.homeEl, S.t, gd); }
+        if (S.preview != null) { placeCursor(S.homeEl, S.tl.fracOf(S.t), gd); }
     }
 
-    function placeCursor(el, t, gd) {
+    function placeCursor(el, frac, gd) {
         var w = gd.clientWidth - MARGIN.l - MARGIN.r;
-        var frac = (wall(t) - S.xr[0]) / (S.xr[1] - S.xr[0]);
         el.style.left = (MARGIN.l + Math.max(0, Math.min(1, frac)) * w) + "px";
         el.style.top = MARGIN.t + "px";
         el.style.bottom = MARGIN.b + "px";
+    }
+
+    function timeFromEvent(ev) {
+        var gd = $("currents-chart");
+        if (!gd || !S.tl) { return null; }
+        var pt = ev.touches ? ev.touches[0] : ev, r = gd.getBoundingClientRect();
+        var cx = pt.clientX - r.left, cy = pt.clientY - r.top;
+        if (cy < MARGIN.t - 4 || cy > r.height - MARGIN.b + 4) { return null; }   // legend / ticks
+        var frac = (cx - MARGIN.l) / (r.width - MARGIN.l - MARGIN.r);
+        return S.tl.tOfFrac(Math.max(0, Math.min(1, frac)));
     }
 
     // Pointing at the chart (mouse only; touch has no hover) previews that
@@ -701,9 +1328,9 @@
     // returns the map to the playback time. Plotly's hover line follows the
     // mouse too, so a hover that did nothing to the map read as broken scrubbing.
     function hoverMove(ev) {
-        if (ev.pointerType !== "mouse" || ev.buttons || S.scrubbing || !S.field) { return; }
+        if (ev.pointerType !== "mouse" || ev.buttons || S.scrubbing || !S.tl) { return; }
         var t = timeFromEvent(ev);
-        setPreview(t === null ? null : Math.max(S.field.t0, Math.min(S.field.tEnd, t)));
+        setPreview(t === null ? null : clampT(t));
     }
 
     function hoverEnd() { setPreview(null); }
@@ -725,17 +1352,6 @@
 
     // Click / drag (or tap / drag) on the chart jumps there and pauses, so
     // the map stays on the moment the user picked until they press Play.
-    function timeFromEvent(ev) {
-        var gd = $("currents-chart");
-        if (!gd || !S.xr) { return null; }
-        var pt = ev.touches ? ev.touches[0] : ev, r = gd.getBoundingClientRect();
-        var cx = pt.clientX - r.left, cy = pt.clientY - r.top;
-        if (cy < MARGIN.t - 4 || cy > r.height - MARGIN.b + 4) { return null; }   // legend / ticks
-        var frac = (cx - MARGIN.l) / (r.width - MARGIN.l - MARGIN.r);
-        frac = Math.max(0, Math.min(1, frac));
-        return unwall(S.xr[0] + frac * (S.xr[1] - S.xr[0]));
-    }
-
     // Window-level move/up listeners exist only while a scrub is in progress:
     // this file loads on every page, and a permanent non-passive touchmove
     // listener would make mobile map panning wait on JS everywhere.
@@ -780,70 +1396,36 @@
     }
 
     function seek(t) {
-        var f = S.field;
-        if (!f) { return; }
-        S.t = Math.max(f.t0, Math.min(f.tEnd, t));
+        if (!S.tl) { return; }
+        S.t = clampT(t);
         updateCursor();
         updateClock();
         updateStationStyles();
     }
 
     // ------------------------------------------------------------- loading --
-    function load() {
+    // Setters only record state; one apply() then loads what the current view
+    // needs (Dash fires the initial control callbacks in no particular order).
+    function scheduleApply() {
+        if (S.applyTimer) { return; }
+        S.applyTimer = setTimeout(function () { S.applyTimer = 0; apply(); }, 0);
+    }
+
+    function apply() {
         if (!S.map) { return; }                              // attach() calls us
         var token = ++S.loadToken;
         ensureManifest().then(function (man) {
             if (token !== S.loadToken || !S.map) { return null; }
-            var weeks = man.weeks || [];
-            if (!weeks.length) {
+            S.manifest = man;
+            var mode = S.mode;
+            if (mode !== "week" && !man.atlas) { mode = "week"; }   // atlas not built yet
+            if (mode === "week" && !(man.weeks || []).length) {
                 showStatus("Current data is still being prepared — check back soon.");
                 return null;
             }
-            if (!weeks.some(function (w) { return w.id === S.week; })) { S.week = weeks[0].id; }
-            var w = weeks.filter(function (x) { return x.id === S.week; })[0];
-            var depth = w.files[S.depth] ? S.depth : (w.files.surface ? "surface" : "davg");
-            var v = "?v=" + encodeURIComponent(w.built_at || man.generated_at || "1");
-            var key = w.id + "|" + depth;
-            var weekChanged = !S.meta || S.meta.week.id !== w.id;
-            if (weekChanged || !S.fields[key]) { showStatus("Loading " + w.title + "…"); }
-            return Promise.all([
-                weekChanged ? fetchJson(API + w.files.meta + v) : Promise.resolve(S.meta),
-                S.fields[key] ? Promise.resolve(S.fields[key])
-                              : fetchBuf(API + w.files[depth] + v).then(decodeFrames)
-            ]).then(function (res) {
+            return (mode === "week" ? loadWeek(man) : loadAtlas(man)).then(function (field) {
                 if (token !== S.loadToken || !S.map) { return; }
-                S.meta = res[0];
-                S.field = res[1];
-                S.fields[key] = res[1];
-                Object.keys(S.fields).forEach(function (k) {
-                    if (k.split("|")[0] !== w.id) { delete S.fields[k]; }   // bound memory
-                });
-                S.stationsById = {};
-                (S.meta.stations || []).forEach(function (s) { S.stationsById[s.id] = s; });
-                if (!S.stationsById[S.station]) {
-                    S.station = S.stationsById[S.meta.default_station]
-                        ? S.meta.default_station : ((S.meta.stations || [])[0] || {}).id;
-                }
-                if (weekChanged) {
-                    S.t = S.field.t0;
-                    S.preview = null;
-                    buildStations();
-                }
-                if (!S.fitted) {
-                    S.fitted = true;
-                    S.map.fitBounds([[S.field.lat0, S.field.lon0], [S.field.lat1, S.field.lon1]],
-                                    { padding: [4, 4] });
-                }
-                if (S.particles) { S.particles._reset(); }
-                hideStatus();
-                buildChart();
-                updateClock();
-                updateStationStyles();
-                if (weekChanged && S.wantPlay) {
-                    S.playing = true;
-                    setProps("currents-play", { children: "Pause" });
-                }
-                startLoop();
+                install(mode, field);
             });
         }).catch(function (e) {
             if (token === S.loadToken) {
@@ -852,10 +1434,110 @@
         });
     }
 
+    function loadAtlas(man) {
+        var e = man.atlas, v = "?v=" + encodeURIComponent(e.built_at || man.generated_at || "1");
+        var depth = e.files[S.depth] ? S.depth : "surface";
+        var key = "atlas|" + depth + "|" + e.built_at;
+        var haveMeta = S.atlas && S.atlas.builtAt === e.built_at;
+        if (!haveMeta || !S.fields[key]) { showStatus("Loading tide atlas…"); }
+        return Promise.all([
+            haveMeta ? Promise.resolve(S.atlas) : fetchJson(API + e.files.meta + v).then(function (m) {
+                return prepAtlas(m, e.built_at);
+            }),
+            S.fields[key] ? Promise.resolve(S.fields[key])
+                          : fetchBuf(API + e.files[depth] + v).then(decodeFrames)
+        ]).then(function (res) {
+            S.atlas = res[0];
+            res[1].key = key;
+            S.fields[key] = res[1];
+            return res[1];
+        });
+    }
+
+    function loadWeek(man) {
+        var weeks = man.weeks;
+        if (!weeks.some(function (w) { return w.id === S.week; })) { S.week = weeks[0].id; }
+        var w = weeks.filter(function (x) { return x.id === S.week; })[0];
+        var depth = w.files[S.depth] ? S.depth : (w.files.surface ? "surface" : "davg");
+        var v = "?v=" + encodeURIComponent(w.built_at || man.generated_at || "1");
+        var key = "week|" + w.id + "|" + depth;
+        var haveMeta = S.weekMeta && S.weekMeta.week.id === w.id;
+        if (!haveMeta || !S.fields[key]) { showStatus("Loading " + w.title + "…"); }
+        return Promise.all([
+            haveMeta ? Promise.resolve(S.weekMeta) : fetchJson(API + w.files.meta + v),
+            S.fields[key] ? Promise.resolve(S.fields[key])
+                          : fetchBuf(API + w.files[depth] + v).then(decodeFrames)
+        ]).then(function (res) {
+            S.weekMeta = res[0];
+            res[1].key = key;
+            S.fields[key] = res[1];
+            Object.keys(S.fields).forEach(function (k) {        // bound memory: one week
+                if (k.indexOf("week|") === 0 && k.split("|")[1] !== w.id) { delete S.fields[k]; }
+            });
+            return res[1];
+        });
+    }
+
+    function validDay(day) {
+        var d = (S.manifest && S.manifest.atlas && S.manifest.atlas.dates) || {};
+        day = /^\d{4}-\d{2}-\d{2}$/.test(day || "") ? day : todayET();
+        if (d.min && day < d.min) { day = d.min; }
+        if (d.max && day > d.max) { day = d.max; }
+        return day;
+    }
+
+    function install(mode, field) {
+        var A = S.atlas, tl;
+        if (mode === "week") { tl = weekTimeline(S.weekMeta, field); }
+        else if (mode === "cycle") { tl = cycleTimeline(A, S.strength); }
+        else { tl = dateTimeline(A, validDay(S.date)); }
+        var prev = S.tl, fresh = !prev || prev.id !== tl.id;
+        S.field = field;
+        S.tl = tl;
+        S.curSig = "";
+        if (fresh) {
+            S.preview = null;
+            S.t = startTime(tl);
+            // Today opens paused on "now"; the other views play if wanted.
+            var play = tl.kind !== "date" && S.wantPlay;
+            if (play !== S.playing) {
+                S.playing = play;
+                setProps("currents-play", { children: play ? "Pause" : "Play" });
+            }
+        } else {
+            S.t = clampT(S.t);
+        }
+        if (!prev || prev.stations !== tl.stations) {
+            S.stations = tl.stations;
+            S.stationsById = {};
+            S.stations.forEach(function (s) { S.stationsById[s.id] = s; });
+            if (!S.stationsById[S.station]) {
+                var dflt = (S.manifest && S.manifest.default_station) || "LIS1001";
+                S.station = S.stationsById[dflt] ? dflt : (S.stations[0] || {}).id;
+                if (S.station) { setProps("currents-station", { value: S.station }); }
+            }
+            buildStations();
+        } else {
+            updateStationStyles();
+        }
+        if (!S.fitted) {
+            S.fitted = true;
+            S.map.fitBounds([[field.lat0, field.lon0], [field.lat1, field.lon1]], { padding: [4, 4] });
+        }
+        if (S.particles) { S.particles._reset(); }
+        buildHaze();
+        refreshField();
+        hideStatus();
+        buildChart();
+        updateClock();
+        requestLive();
+        startLoop();
+    }
+
     // ---------------------------------------------------------- animation --
     function frame(now) {
         S.raf = 0;
-        if (!S.map || !S.field || document.hidden) { return; }   // resumed on visibility
+        if (!S.map || !S.field || !S.tl || document.hidden) { return; }   // resumed on visibility
         if (S.lastFrame && now - S.lastFrame < FRAME_MS - 1) {
             S.raf = requestAnimationFrame(frame);
             return;
@@ -864,8 +1546,9 @@
         S.lastFrame = now;
         if (S.playing && !S.scrubbing && S.preview == null) {
             S.t += dt * S.rate;
-            if (S.t > S.field.tEnd) { S.t = S.field.t0; }        // loop the week
+            if (S.t >= S.tl.t1) { S.t = S.tl.t0 + (S.t - S.tl.t1) % (S.tl.t1 - S.tl.t0); }   // loop
         }
+        refreshField();
         if (S.particles) { S.particles.step(); }
         updateCursor();
         if (now - S.lastUi > 200) {
@@ -906,11 +1589,14 @@
         var pp = map.createPane("currentsParticles");
         pp.style.zIndex = 450;
         pp.style.pointerEvents = "none";
+        var hz = map.createPane("currentsHaze");
+        hz.style.zIndex = 455;
+        hz.style.pointerEvents = "none";
         map.createPane("currentsStations").style.zIndex = 470;
         S.particles = new ParticleLayer().addTo(map);
         S.stationLayer = L.layerGroup();
         S.clock = new Clock().addTo(map);
-        new Legend().addTo(map);
+        S.legend = new Legend().addTo(map);
         map.on("unload", detach);           // router swap -> react-leaflet map.remove()
         if (window.ResizeObserver) {
             // The chart box and mobile drawer resize the map without a window resize.
@@ -930,7 +1616,7 @@
         if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
             S.wantPlay = false;
         }
-        load();
+        apply();
     }
 
     function detach() {
@@ -943,33 +1629,96 @@
         S.particles = null;
         S.stationLayer = null;
         S.markers = {};
+        S.haze = null;
         S.clock = null;
+        S.legend = null;
         S.statusEl = null;
         S.cursorEl = null;
         S.homeEl = null;
         S.preview = null;
         S.chartReady = false;
+        S.chartKind = null;
         S.fitted = false;
         S.playing = false;
-        S.meta = null;                      // rebuild stations/chart on the next visit
+        S.tl = null;                        // rebuild stations/chart on the next visit
+        S.curSig = "";
+    }
+
+    // Recompute the builder's reference values (tools/build_tide_atlas.py
+    // "selftest") with this file's atlas math; maxErr should be ~0.
+    function selftest() {
+        var A = S.atlas, man = S.manifest;
+        if (!A || !man || !man.atlas) { return Promise.resolve("no atlas loaded"); }
+        var e = man.atlas, v = "?v=" + encodeURIComponent(e.built_at);
+        var get = function (d) {
+            var key = "atlas|" + d + "|" + e.built_at;
+            return S.fields[key] ? Promise.resolve(S.fields[key])
+                : fetchBuf(API + e.files[d] + v).then(decodeFrames).then(function (f) {
+                    f.key = key; S.fields[key] = f; return f;
+                });
+        };
+        return Promise.all([get("surface"), get("davg")]).then(function (fs) {
+            var byDepth = { surface: fs[0], davg: fs[1] }, worst = 0, n = 0;
+            (A.a.selftest || []).forEach(function (x) {
+                var s = tideAt(A, x.t), wts = atlasWeights(A, s.phi, s.R);
+                var f = byDepth[x.depth], c = x.j * f.nx + x.i, u = 0, vv = 0;
+                wts.forEach(function (w) {
+                    var b = w[0] * 2 * f.cells;
+                    u += w[1] * f.data[b + c];
+                    vv += w[1] * f.data[b + f.cells + c];
+                });
+                worst = Math.max(worst, Math.abs(u * f.scale - x.u), Math.abs(vv * f.scale - x.v));
+                n++;
+            });
+            return { checked: n, maxErr: worst };
+        });
     }
 
     // ----------------------------------------------------------------- API --
     window.Currents = {
+        setMode: function (m) {
+            m = m === "cycle" || m === "week" ? m : "date";
+            if (m === S.mode && S.tl && S.tl.kind === m) { return; }
+            S.mode = m;
+            scheduleApply();
+        },
         setWeek: function (id) {
-            if (!id || (id === S.week && S.meta && S.meta.week.id === id)) { return; }
+            if (!id || id === S.week) { return; }
             S.week = id;
-            load();
+            if (S.mode === "week") { scheduleApply(); }      // else just remember it
         },
         setDepth: function (d) {
             d = d === "davg" ? "davg" : "surface";
             if (d === S.depth && S.field) { return; }
             S.depth = d;
-            load();
+            scheduleApply();
         },
         setRate: function (r) {
             r = +r;
             if (r > 0) { S.rate = r; }
+        },
+        setStrength: function (k) {
+            if (!k || k === S.strength) { return; }
+            S.strength = k;
+            if (S.mode === "cycle") { scheduleApply(); }
+        },
+        setDate: function (d) {
+            if (!d) { return; }
+            d = String(d).slice(0, 10);
+            if (d === S.date) { return; }
+            S.date = d;
+            if (S.mode === "date") { scheduleApply(); }
+        },
+        // "Now" button: today's date (Eastern) with the clock at this moment.
+        goNow: function () {
+            var today = todayET();
+            if (S.date !== today) {
+                S.date = today;
+                if (S.mode === "date") { scheduleApply(); }   // new day opens on "now"
+            } else if (S.tl && S.tl.kind === "date") {
+                pause();
+                seek(Date.now() / 1000);
+            }
         },
         selectStation: function (id) { selectStation(id, false); },
         setOptions: function (vals) {
@@ -988,6 +1737,7 @@
             pause();
             seek(S.t + (+sec || 0));
         },
-        _state: S                           // for poking at in the browser console
+        _state: S,                          // for poking at in the browser console
+        _selftest: selftest
     };
 })();

@@ -24,9 +24,15 @@ Data: **NOAA CoastWatch ERDDAP** — MUR GHRSST 1km (preferred), OISST 25km (fal
 
 ## Currents (`/currents`)
 
-A week of modeled currents animated as flowing particles, from UMass Dartmouth's NECOFS (FVCOM) model, next to NOAA's tide and current predictions for ~86 stations. Pick a curated week (supermoon spring tide, summer spring vs. neap, Blizzard Jonas), surface or depth-averaged flow, and any station; a badge shows how that spot's slack and max flood line up with Montauk's high and low water.
+Currents animated as flowing particles next to NOAA's tide and current predictions for ~86 stations, in three views:
 
-Data is built off-Render by `tools/build_currents.py` (needs `requirements-tools.txt`) and uploaded to the app; see `CLAUDE.md` → *Currents Page*.
+- **Today** (default) — typical currents for any day 2024–2030 from that day's real Montauk tide times and ranges, opening on "now". The selected spot's chart line and slack times come straight from NOAA.
+- **Tide cycle** — one average Montauk tide cycle (low → high → low) at neap, average or spring strength.
+- **Example weeks** — hour-by-hour model reconstructions including weather: a supermoon spring tide, summer spring vs. neap, and Hurricane Sandy.
+
+The first two come from a *tide-stage atlas*: a season of UMass Dartmouth's NECOFS (FVCOM) model fitted by tide phase and tidal range, so no live model is needed. Waters where wind and ocean currents often override the tide (the ocean side south of Montauk) are hazed, and a "How it works" panel explains the views, sources and accuracy by area.
+
+Data is built off-Render by `tools/build_tide_atlas.py` and `tools/build_currents.py` (need `requirements-tools.txt`, normally run by `.github/workflows/build-currents.yml`) and uploaded to the app; see `CLAUDE.md` → *Currents Page*.
 
 ## Setup (Local)
 

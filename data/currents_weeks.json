@@ -23,7 +23,7 @@
       "subtitle": "Sep 25 – Oct 2, 2015",
       "start": "2015-09-25T00:00:00-04:00",
       "hours": 168,
-      "lesson": "The Sept 27–28 supermoon eclipse put a full moon at perigee — its closest approach — so these are some of the biggest tides of the year. Watch The Race run over 4 knots, and notice that slack water there comes roughly two hours after high and low tide at Montauk, not at them."
+      "lesson": "The Sept 27–28 supermoon eclipse put a full moon at perigee — its closest approach — so these are some of the biggest tides of the year. Watch The Race run over 4 knots, and notice that slack water there comes about two and a half hours after high and low tide at Montauk, not at them."
     },
     {
       "id": "2016-08-spring",
@@ -46,14 +46,14 @@
       "lesson": "Around the first-quarter moon the sun and moon pull at right angles, so the tidal range shrinks and currents ease. The timing pattern is the same as at springs — slack still lags high and low water — but the water moves far less."
     },
     {
-      "id": "2016-01-jonas",
+      "id": "2012-10-sandy",
       "order": 40,
       "kind": "storm",
-      "title": "Blizzard Jonas",
-      "subtitle": "Jan 20 – 27, 2016",
-      "start": "2016-01-20T00:00:00-05:00",
+      "title": "Hurricane Sandy",
+      "subtitle": "Oct 26 – Nov 2, 2012",
+      "start": "2012-10-26T00:00:00-04:00",
       "hours": 168,
-      "lesson": "A powerful nor'easter arrived on a full-moon spring tide. NOAA's predictions know only the moon; the model also feels the wind. Where the dashed model line pulls away from NOAA's solid line, wind and storm surge are overriding the tide table — exactly the kind of day a tide app gets wrong."
+      "lesson": "Sandy came ashore in New Jersey on the evening of Oct 29, on a full-moon spring tide. Days of strong easterly wind piled water into the Sound — the model puts Montauk about 3 ft above the predicted tide that night. NOAA's predictions know only the moon; the model also feels the wind. Where the dotted model lines pull away from NOAA's solid lines, wind and surge are overriding the tide table — exactly the kind of day a tide app gets wrong."
     }
   ]
 }

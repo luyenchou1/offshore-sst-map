@@ -153,15 +153,132 @@
 #currents-week .dash-dropdown-value,
 #currents-station .dash-dropdown-value,
 #currents-week .dash-dropdown-value span,
-#currents-station .dash-dropdown-value span {
+#currents-station .dash-dropdown-value span,
+/* ...and the open menu, which Dash 4 renders inline inside the sidebar */
+#sidebar-col .dash-dropdown-content,
+#sidebar-col .dash-dropdown-content .dash-dropdown-option,
+#sidebar-col .dash-dropdown-content .dash-options-list-option-text {
     color: #0a1628 !important;
 }
 
 /* Radio/checkbox spacing in the dark sidebar */
 .currents-radio .form-check-inline { margin-right: 0.6rem; }
 
+/* View switch + tide strength: radio items drawn as a pill button group */
+.currents-seg { display: flex; flex-wrap: wrap; gap: 4px; }
+.currents-seg .form-check { margin: 0; padding: 0; min-height: 0; }
+.currents-seg .form-check-input { position: absolute; opacity: 0; pointer-events: none; }
+.currents-seg-btn {
+    display: inline-block;
+    padding: 0.22rem 0.62rem;
+    border: 1px solid #334155;
+    border-radius: 100px;
+    font-size: 0.74rem;
+    line-height: 1.3;
+    color: #cbd5e1;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+.currents-seg-btn:hover { border-color: #0183fe; color: #ffffff; }
+.currents-seg-btn.active { background: #0183fe; border-color: #0183fe; color: #ffffff; }
+.currents-seg .form-check-input:disabled + .currents-seg-btn { opacity: 0.35; cursor: not-allowed; }
+#currents-panel-date, #currents-panel-cycle, #currents-panel-week { margin-top: 0.65rem; }
+/* Date + "Now" share a line when the sidebar is wide enough, else "Now" wraps
+   (the input has a fixed width and would otherwise cover the button). */
+.currents-date-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.currents-date-row .dash-datepicker { flex: 1 1 110px; min-width: 0; }
+.currents-date-row .dash-datepicker-input { width: 100% !important; min-width: 0; box-sizing: border-box; }
+.currents-now-btn {
+    border-radius: 100px !important;
+    font-size: 0.72rem !important;
+    padding: 0.2rem 0.65rem !important;
+    color: #e2e8f0 !important;
+    border-color: #475569 !important;
+}
+.currents-now-btn:hover { background: #0183fe !important; border-color: #0183fe !important; }
+.currents-blurb {
+    margin-top: 0.55rem;
+    font-size: 0.72rem;
+    line-height: 1.45;
+    color: #cbd5e1;
+}
+.currents-link-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #94a3b8;
+    font-size: 0.7rem;
+    text-decoration: underline;
+    cursor: pointer;
+}
+.currents-link-btn:hover { color: #e2e8f0; }
+
+/* Header: "How it works" + "← SST Map" */
+.currents-header-links { margin-left: auto; display: flex; align-items: center; gap: 0.25rem; }
+.currents-header-links .header-nav-link { margin-left: 0; }
+.currents-about-link { background: none; border: none; cursor: pointer; color: #cbd5e1; }
+.currents-about-link:hover { color: #ffffff; }
+
+/* Map overlays added by currents.js */
+.currents-clock .sub { color: #94a3b8; font-size: 0.72rem; }
+.currents-legend .haze-note {
+    display: none;
+    margin-top: 0.35rem;
+    max-width: 170px;
+    color: #94a3b8;
+    font-size: 0.66rem;
+    line-height: 1.3;
+}
+.currents-legend .swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 5px;
+    vertical-align: -1px;
+    border-radius: 2px;
+    background: rgba(148, 163, 184, 0.5);
+}
+.currents-haze { pointer-events: none; }
+
+/* Confidence labels (badge, tooltips, the About table) */
+.conf { font-weight: 600; white-space: nowrap; }
+.conf-high { color: #2dd4bf; }
+.conf-good { color: #86efac; }
+.conf-moderate { color: #fbbf24; }
+.conf-low { color: #f87171; }
+
+/* "How it works" modal, dark like the page */
+.currents-about { background: #0a1628; color: #e2e8f0; border: 1px solid #1e293b; }
+.currents-about .modal-header, .currents-about .modal-footer { border-color: #1e293b; }
+.currents-about .modal-title { font-size: 1.05rem; font-weight: 600; color: #ffffff; }
+.currents-about .btn-close { filter: invert(1) grayscale(1) brightness(1.6); }
+.currents-about-body { font-size: 0.86rem; line-height: 1.5; color: #cbd5e1; }
+.currents-about-body b { color: #ffffff; }
+.currents-about-body ul { padding-left: 1.1rem; margin-bottom: 0.5rem; }
+.currents-about-h {
+    margin: 1.1rem 0 0.45rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #64748b;
+}
+.currents-about-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.currents-about-table th {
+    text-align: left;
+    color: #94a3b8;
+    font-weight: 600;
+    padding: 0.35rem 0.5rem;
+    border-bottom: 1px solid #334155;
+}
+.currents-about-table td { padding: 0.45rem 0.5rem; border-bottom: 1px solid #1e293b; vertical-align: top; }
+.currents-about-table td:first-child { color: #e2e8f0; width: 30%; }
+.currents-about-note { font-size: 0.75rem; color: #94a3b8; margin-top: 0.5rem; }
+
 @media (max-width: 767.98px), (max-height: 500px) {
     .header-nav-link { font-size: 0.78rem; padding-left: 0.5rem; }
+    .currents-about-table td:first-child { width: auto; }
     .currents-wrapper {
         height: calc(100vh - 52px);
         height: calc(100dvh - 52px);

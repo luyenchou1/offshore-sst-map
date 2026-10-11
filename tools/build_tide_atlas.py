@@ -637,9 +637,9 @@ def main() -> int:
     log("  day-vs-night composite difference: " + ", ".join(
         f"{r.split(',')[0]} {p}%" for r, p in report["day_night_diff_pct"].items()))
 
-    # Replay the published example weeks (2015-09 and 2016-01 are out of season).
+    # Replay the published example weeks (2015 and 2012 are outside the fit season).
     report["replay"] = {}
-    for week in ("2015-09-supermoon", "2016-01-jonas", "2016-08-spring", "2016-08-neap"):
+    for week in ("2015-09-supermoon", "2012-10-sandy", "2016-08-spring", "2016-08-neap"):
         try:
             h, u, v, meta = load_week(week, "surface")
         except Exception as e:  # noqa: BLE001 - report only
@@ -698,8 +698,9 @@ def main() -> int:
             "bins": NB, "bin_centre": "(b + 0.5) / bins",
             "phase": "two segments: 0 = Montauk high water, 0.5 = low water",
             "frames": "basis * bins + bin",
-            "centres_ft": [round(x, 4) for x in centres],
-            "clamp_ft": [round(x, 4) for x in clamp],
+            # Full precision: the page must evaluate exactly the fitted model.
+            "centres_ft": centres,
+            "clamp_ft": list(clamp),
             "presets": presets,
             "t_ebb_s": round(t_ebb), "t_flood_s": round(t_flood),
             "skill": {d: b64(skill[d]) for d in depths},
@@ -711,7 +712,7 @@ def main() -> int:
             "station": B.TIDE_STATION, "name": tide_info.get("name", "Montauk"),
             "lat": tide_info["lat"], "lon": tide_info["lng"], "datum": "MLLW", "units": "ft",
             "typ": [[round(float(x), 3) for x in row] for row in tide_typ],
-            "hilo": {"t": [int(x) for x in bt], "v": [round(float(x), 2) for x in bundle_hl[1]],
+            "hilo": {"t": [int(x) for x in bt], "v": [round(float(x), 3) for x in bundle_hl[1]],
                      "type": "".join("H" if x else "L" for x in bh)},
         },
         "stations": stations,

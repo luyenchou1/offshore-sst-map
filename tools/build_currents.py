@@ -504,13 +504,17 @@ def build_window(ds, times, g, k0, k1, keep, spec, labels, stations_meta, tide_i
                           for s in stations]
 
 
-def merge_manifest(existing, entries, station_index, default_station):
+def merge_manifest(existing, entries, station_index, default_station, keep_ids=None):
     """Merge week entries and stations into the manifest. Keys this builder
-    doesn't own (e.g. "atlas" from build_tide_atlas.py) are kept as-is."""
+    doesn't own (e.g. "atlas" from build_tide_atlas.py) are kept as-is.
+    keep_ids: if given, weeks with other ids (removed from
+    data/currents_weeks.json) are dropped from the manifest."""
     existing = existing or {}
     weeks = {w["id"]: w for w in existing.get("weeks", []) if "id" in w}
     for e in entries:
         weeks[e["id"]] = e
+    if keep_ids is not None:
+        weeks = {k: w for k, w in weeks.items() if k in keep_ids}
     stations = {s["id"]: s for s in existing.get("stations", [])}
     for s in station_index:
         stations[s["id"]] = s
@@ -663,6 +667,8 @@ def main() -> int:
 
     for fname, blob in all_blobs.items():
         write_local(args.out_dir, fname, blob)
+    # Weeks deleted from data/currents_weeks.json drop out of the manifest.
+    keep = {w["id"] for w in cfg["weeks"]} | {"live"}
     local_manifest = None
     try:
         with open(os.path.join(args.out_dir, "manifest.json"), encoding="utf-8") as f:
@@ -670,7 +676,7 @@ def main() -> int:
     except (OSError, ValueError):
         pass
     write_local(args.out_dir, "manifest.json", json.dumps(
-        merge_manifest(local_manifest, entries, station_index, default_station),
+        merge_manifest(local_manifest, entries, station_index, default_station, keep),
         indent=1).encode("utf-8"))
     log(f"\nWrote {len(all_blobs) + 1} files to {args.out_dir}")
 
@@ -689,7 +695,7 @@ def main() -> int:
         remote = requests.get(f"{args.base_url.rstrip('/')}/api/currents/manifest.json",
                               headers=HEADERS, timeout=30)
         remote_manifest = remote.json() if remote.ok else None
-        manifest = merge_manifest(remote_manifest, entries, station_index, default_station)
+        manifest = merge_manifest(remote_manifest, entries, station_index, default_station, keep)
         upload(args.base_url, args.token, "manifest.json",
                json.dumps(manifest, indent=1).encode("utf-8"))
         log("  uploaded manifest.json (last)")

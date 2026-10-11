@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-10-11 — Currents: "Today" and "Tide cycle" views
+
+### Added
+- **Tide-stage atlas** (`tools/build_tide_atlas.py`) — every hour of May–Oct 2016 from the NECOFS model, fitted by Montauk tide phase (two segments: high → low → high, 24 bins) and tidal range (three basis patterns at the 10/50/90th range percentiles, least squares per bin). Currents in the passes are locked to the tide cycle, so this gives typical currents for any date from tide predictions alone, with no live model. Includes per-cell confidence maps, NOAA station curves fitted the same way, Montauk high/lows for 2024–2030, and Neap/Average/Spring presets from 2024–30 tides (2016 was a lunar-node peak). Built and published by the `build-currents` workflow (`source=atlas`, `publish` off by default; work cache + artifact).
+- **Today view (new default)** — typical currents for any day 2024–2030 from that day's real Montauk high/low times and ranges, opening paused on "now" (with a **Now** button). The selected spot's chart line and the day's slack/max times come live from NOAA, falling back to the typical curve if NOAA can't be reached.
+- **Tide cycle view** — one average Montauk cycle, low → high → low, at Neap / Average / Spring strength, with the spot's typical lag behind Montauk high/low water.
+- **Low-confidence haze** over waters where the tide explains less than ~70% of the flow (mainly the ocean side south of Montauk), and **"Confidence here: High / Good / Moderate / Low"** for the selected spot.
+- **"How it works" panel** — purpose, the three views, accuracy by area and sources; opens on a first visit.
+- **Hurricane Sandy (Oct 26 – Nov 2, 2012) example week**, replacing Blizzard Jonas: in fishing season, and the biggest modeled surge at Montauk in the archive (+3.1 ft). Weeks removed from `data/currents_weeks.json` now drop out of the manifest.
+
+### Changed
+- `assets/currents.js` reorganised around per-view timelines; frames are blended once per animation frame and the particles sample the result. A cold Today load fetches ~1 MB (manifest, atlas, one NOAA call) instead of a 2.5 MB week.
+- The page falls back to Example weeks until the atlas has been uploaded.
+- Supermoon lesson text: slack comes about 2½ hours (not 2) after Montauk high/low water.
+
+### Fixed
+- Sidebar dropdown menus showed light text on white (Dash 4 renders them inline in the dark sidebar).
+
+### Accuracy (full-season build)
+- Out-of-sample share of the model's flow reproduced: Race/Plum Gut/Fishers 87–96%, Gardiners/Peconics 78–89%, Block Island Sound 65–83%, ocean side 28–58%.
+- Slack vs NOAA over all of 2026: Plum Gut median 13 min. The Race median 26 min, biased late (the model's own timing at The Race), which the "How it works" text says plainly.
+
+---
+
 ## 2026-10-10 — Currents page (`/currents`)
 
 ### Added

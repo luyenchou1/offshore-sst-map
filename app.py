@@ -2110,12 +2110,70 @@ for _ctrl, _method in (
     ("rate", "setRate"),
     ("station", "selectStation"),
     ("options", "setOptions"),
+    ("strength", "setStrength"),
 ):
     app.clientside_callback(
         _CURRENTS_FORWARD % _method,
         Output(f"currents-sink-{_ctrl}", "children"),
         Input(f"currents-{_ctrl}", "value"),
     )
+
+app.clientside_callback(
+    _CURRENTS_FORWARD % "setDate",
+    Output("currents-sink-date", "children"),
+    Input("currents-date", "date"),
+)
+
+# View switch: show that view's panel and hand the engine the mode.
+app.clientside_callback(
+    """
+    function(mode) {
+        if (window.Currents) { window.Currents.setMode(mode); }
+        var on = {display: "block"}, off = {display: "none"};
+        return [mode === "date" ? on : off, mode === "cycle" ? on : off,
+                mode === "week" ? on : off];
+    }
+    """,
+    Output("currents-panel-date", "style"),
+    Output("currents-panel-cycle", "style"),
+    Output("currents-panel-week", "style"),
+    Input("currents-mode", "value"),
+)
+
+# "Now": back to today (Eastern), clock at the current time.
+app.clientside_callback(
+    """
+    function(n) {
+        if (window.Currents) { window.Currents.goNow(); }
+        return new Intl.DateTimeFormat("en-CA", {timeZone: "America/New_York",
+            year: "numeric", month: "2-digit", day: "2-digit"}).format(new Date());
+    }
+    """,
+    Output("currents-date", "date"),
+    Input("currents-now", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+# "How it works": opens by itself on someone's first visit, then on request.
+app.clientside_callback(
+    """
+    function(open1, open2, close) {
+        var t = ((window.dash_clientside.callback_context.triggered || [])[0] || {}).prop_id || "";
+        if (t.indexOf("currents-about-open") === 0) { return true; }
+        if (t.indexOf("currents-about-close") === 0) { return false; }
+        var KEY = "gotone-currents-intro-v1", seen = true;
+        try {
+            seen = !!window.localStorage.getItem(KEY);
+            window.localStorage.setItem(KEY, "1");
+        } catch (e) { seen = true; }        // storage blocked: don't nag every visit
+        return !seen;
+    }
+    """,
+    Output("currents-about", "is_open"),
+    Input("currents-about-open", "n_clicks"),
+    Input("currents-about-open-2", "n_clicks"),
+    Input("currents-about-close", "n_clicks"),
+)
 
 app.clientside_callback(
     """
