@@ -1,0 +1,36 @@
+name: Keepalive
+
+# GitHub disables scheduled workflows in a public repo after 60 days without
+# repository activity — that silently stopped "Seed SST cache" on 2026-08-30.
+# If main has had no commit for 45+ days, push a tiny heartbeat commit so the
+# schedules (SST seed, currents build, this job) keep running. Does nothing while
+# the repo is active. Auto-deploy on Render is off, so this never deploys.
+on:
+  schedule:
+    - cron: '0 9 * * 1'   # Mondays 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Heartbeat commit if the repo has been idle 45+ days
+        run: |
+          last=$(git log -1 --format=%ct)
+          age_days=$(( ($(date +%s) - last) / 86400 ))
+          echo "Last commit on main: ${age_days} days ago"
+          if [ "$age_days" -lt 45 ]; then
+            echo "Recent activity - nothing to do."
+            exit 0
+          fi
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/keepalive.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/keepalive.txt
+          git commit -m "chore: keepalive (stops GitHub disabling scheduled workflows)"
+          git push
