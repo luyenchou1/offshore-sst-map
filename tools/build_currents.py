@@ -315,20 +315,32 @@ def tide_predictions(t0, t1):
     }
 
 
+def station_cp(base, interval, what):
+    """One current-predictions call. Under load NOAA has answered a station it
+    does cover with an empty list (once, beside a 504), so retry that once."""
+    for attempt in range(2):
+        cp = coops({**base, "interval": interval}, what)["current_predictions"]["cp"]
+        if cp or attempt:
+            return cp
+        log(f"    {what}: NOAA returned no rows; retrying")
+        time.sleep(5)
+
+
 def station_predictions(st, t0, t1, labels):
     base = {"product": "currents_predictions", "station": st["id"],
             "begin_date": ymdhm(t0), "end_date": ymdhm(t1)}
     if st.get("type") == "H" and st.get("currbin"):
         base["bin"] = st["currbin"]
     try:
-        curve = coops({**base, "interval": "30"}, f"{st['id']} curve")["current_predictions"]["cp"]
-        events = coops({**base, "interval": "MAX_SLACK"}, f"{st['id']} events")["current_predictions"]["cp"]
+        curve = station_cp(base, "30", f"{st['id']} curve")
+        events = station_cp(base, "MAX_SLACK", f"{st['id']} events") if curve else []
     except (NoRetry, KeyError, TypeError, ValueError) as e:
         # No predictions for this station/window. Network errors and
         # throttling propagate instead: they would silently drop stations.
         log(f"    skip {st['id']} ({st['name']}): {e}")
         return None
     if not curve:
+        log(f"    skip {st['id']} ({st['name']}): no predictions returned")
         return None
     ts = [parse_t(r["Time"]) for r in curve]
     regular = all(b - a == 1800 for a, b in zip(ts, ts[1:]))
