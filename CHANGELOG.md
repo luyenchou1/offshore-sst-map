@@ -17,6 +17,12 @@
 
 ### Fixed
 - Sidebar dropdown menus showed light text on white (Dash 4 renders them inline in the dark sidebar).
+- **iPad: the tide chart sat below the bottom of the screen.** The page assumed a 72 px header (it's 80) and used `100vh`, which on iPad/iPhone Safari includes the area under the toolbars. /currents is now a flex column sized to the visible viewport (`100dvh`).
+
+### Tablet & full screen
+- On iPads (any touch screen) and windows narrower than 1200 px the sidebar is a slide-in drawer, as on phones, so the map and chart get the full width; it closes itself after you pick a view, date, week, strength or spot.
+- Floating Play / step buttons on the map (tablets and phones), kept in sync with the sidebar's Play button.
+- Full-screen button on the map (hides the page header); opens the page in a new tab when embedded without fullscreen permission; not shown on iPhone, which can't full-screen a web page.
 
 ### Accuracy (full-season build)
 - Out-of-sample share of the model's flow reproduced: Race/Plum Gut/Fishers 87–96%, Gardiners/Peconics 78–89%, Block Island Sound 65–83%, ocean side 28–58%.

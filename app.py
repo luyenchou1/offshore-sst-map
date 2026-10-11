@@ -2154,6 +2154,23 @@ app.clientside_callback(
     prevent_initial_call=True,
 )
 
+# Tablets / phones: the sidebar is a drawer there (assets/currents.css), so
+# picking a view, date, week, strength or spot closes it to show the result.
+# Harmless on desktop, where the sidebar never carries "drawer-open".
+app.clientside_callback(
+    """
+    function() { return ["gotone-sidebar", {"display": "none"}]; }
+    """,
+    Output("sidebar-col", "className", allow_duplicate=True),
+    Output("sidebar-backdrop", "style", allow_duplicate=True),
+    Input("currents-mode", "value"),
+    Input("currents-date", "date"),
+    Input("currents-week", "value"),
+    Input("currents-strength", "value"),
+    Input("currents-station", "value"),
+    prevent_initial_call=True,
+)
+
 # "How it works": opens by itself on someone's first visit, then on request.
 app.clientside_callback(
     """

@@ -54,7 +54,8 @@
     // -------------------------------------------------------------- state --
     var S = {
         map: null, particles: null, stationLayer: null, markers: {}, haze: null,
-        clock: null, legend: null, statusEl: null, cursorEl: null, homeEl: null,
+        clock: null, legend: null, playbar: null, fsBtn: null,
+        statusEl: null, cursorEl: null, homeEl: null,
         resizeObs: null, manifestP: null, manifest: null, inflight: {},
         mode: "date", week: null, depth: "surface", rate: 1800, station: null,
         strength: "average", date: null,
@@ -825,6 +826,84 @@
         }
     });
 
+    // Play / step on the map, shown only when the sidebar is a drawer (CSS):
+    // on tablets and phones the sidebar is hidden while you watch.
+    var PlayBar = L.Control.extend({
+        options: { position: "bottomleft" },
+        onAdd: function () {
+            var d = L.DomUtil.create("div", "currents-playbar");
+            d.innerHTML = '<button type="button" data-a="back" title="Back 1 hour" aria-label="Back 1 hour">◀</button>' +
+                '<button type="button" data-a="play" class="main">Play</button>' +
+                '<button type="button" data-a="fwd" title="Forward 1 hour" aria-label="Forward 1 hour">▶</button>';
+            L.DomEvent.disableClickPropagation(d);
+            L.DomEvent.disableScrollPropagation(d);
+            L.DomEvent.on(d, "click", function (ev) {
+                var a = ev.target && ev.target.getAttribute("data-a");
+                if (a === "play") {
+                    window.Currents.togglePlay();
+                    setProps("currents-play", { children: S.playing ? "Pause" : "Play" });
+                } else if (a === "back" || a === "fwd") {
+                    window.Currents.step(a === "back" ? -HOUR : HOUR);
+                }
+            });
+            return d;
+        }
+    });
+
+    function updatePlayBar() {
+        var b = S.playbar && S.playbar.getContainer().querySelector(".main");
+        if (b) { b.textContent = S.playing ? "Pause" : "Play"; }
+    }
+
+    // Full screen (whole page; the header hides while it's on). iPhone Safari
+    // can't full-screen a page, so no button there; inside an iframe without
+    // fullscreen permission (the Squarespace embed) it opens the page in a tab.
+    var FS_IN = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    var FS_OUT = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+    function fsEnabled() { return !!(document.fullscreenEnabled || document.webkitFullscreenEnabled); }
+    function embedded() { try { return window.self !== window.top; } catch (e) { return true; } }
+
+    function toggleFullscreen() {
+        if (fsElement()) {
+            var exit = document.exitFullscreen || document.webkitExitFullscreen;
+            if (exit) { exit.call(document); }
+        } else if (fsEnabled()) {
+            var el = document.documentElement, req = el.requestFullscreen || el.webkitRequestFullscreen;
+            var p = req && req.call(el);
+            if (p && p.catch) { p.catch(function () { /* refused: stay windowed */ }); }
+        } else if (embedded()) {
+            window.open(window.location.href, "_blank", "noopener");
+        }
+    }
+
+    function onFullscreenChange() {
+        var on = !!fsElement();
+        document.documentElement.classList.toggle("currents-fs", on);
+        if (S.fsBtn) {
+            S.fsBtn.innerHTML = on ? FS_OUT : FS_IN;
+            S.fsBtn.title = on ? "Exit full screen" : "Full screen";
+        }
+        // The map/chart boxes change size; the ResizeObserver redraws both.
+    }
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", onFullscreenChange);
+
+    var FullscreenCtl = L.Control.extend({
+        options: { position: "topright" },
+        onAdd: function () {
+            var b = L.DomUtil.create("button", "currents-fs-btn");
+            b.type = "button";
+            b.title = fsEnabled() ? "Full screen" : "Open in a new tab";
+            b.setAttribute("aria-label", b.title);
+            b.innerHTML = FS_IN;
+            L.DomEvent.disableClickPropagation(b);
+            L.DomEvent.on(b, "click", toggleFullscreen);
+            S.fsBtn = b;
+            return b;
+        }
+    });
+
     function updateLegend() {
         if (!S.legend) { return; }
         var note = S.legend.getContainer().querySelector(".haze-note");
@@ -1348,6 +1427,7 @@
         S.playing = false;
         S.wantPlay = false;
         setProps("currents-play", { children: "Play" });
+        updatePlayBar();
     }
 
     // Click / drag (or tap / drag) on the chart jumps there and pauses, so
@@ -1504,6 +1584,7 @@
                 S.playing = play;
                 setProps("currents-play", { children: play ? "Pause" : "Play" });
             }
+            updatePlayBar();
         } else {
             S.t = clampT(S.t);
         }
@@ -1597,6 +1678,12 @@
         S.stationLayer = L.layerGroup();
         S.clock = new Clock().addTo(map);
         S.legend = new Legend().addTo(map);
+        S.playbar = new PlayBar().addTo(map);
+        updatePlayBar();
+        if (fsEnabled() || embedded()) {
+            new FullscreenCtl().addTo(map);
+            onFullscreenChange();
+        }
         map.on("unload", detach);           // router swap -> react-leaflet map.remove()
         if (window.ResizeObserver) {
             // The chart box and mobile drawer resize the map without a window resize.
@@ -1632,6 +1719,8 @@
         S.haze = null;
         S.clock = null;
         S.legend = null;
+        S.playbar = null;
+        S.fsBtn = null;
         S.statusEl = null;
         S.cursorEl = null;
         S.homeEl = null;
@@ -1731,6 +1820,7 @@
             S.playing = !S.playing;
             S.wantPlay = S.playing;
             if (S.playing) { startLoop(); }
+            updatePlayBar();
             return S.playing;
         },
         step: function (sec) {

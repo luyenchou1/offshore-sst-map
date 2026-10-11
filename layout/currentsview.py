@@ -254,8 +254,8 @@ def build_currents_sidebar(manifest, today):
         id="sidebar-col",
         width=2,
         className="gotone-sidebar",
-        style={"padding": "1rem 1.25rem", "height": "calc(100vh - 72px)",
-               "position": "relative"},
+        # Height comes from the page's flex layout (assets/currents.css).
+        style={"padding": "1rem 1.25rem", "position": "relative"},
     )
 
 
@@ -453,5 +453,7 @@ def build_currents_page():
                 fluid=True,
                 style={"padding": "0"},
             ),
-        ]
+        ],
+        # Flex column filling the visible viewport: header, then map + chart.
+        className="currents-page",
     )

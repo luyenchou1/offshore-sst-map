@@ -1,7 +1,27 @@
 /* ===== Currents page (/currents) + shared header nav link =====
    Dash loads every assets/*.css on every page, so all rules are scoped to
    currents-* classes. The page can't scroll (gotone.css sets body overflow
-   hidden), so map + chart share the viewport below the 72px header. */
+   hidden), so it is a flex column exactly as tall as the *visible* viewport
+   (dvh: iPad/iPhone Safari's 100vh includes the area under its toolbars,
+   which pushed the chart off-screen): header, then map + chart. */
+
+.currents-page {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+}
+.currents-page > .gotone-header { flex: 0 0 auto; }
+.currents-page > .container-fluid {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+.currents-page > .container-fluid > .row { flex: 1 1 auto; min-height: 0; margin: 0; }
+.currents-page .map-col { height: 100%; }
+.currents-page .gotone-sidebar { height: 100%; }
 
 .header-nav-link {
     margin-left: auto;
@@ -18,7 +38,7 @@
 .currents-wrapper {
     display: flex;
     flex-direction: column;
-    height: calc(100vh - 72px);
+    height: 100%;
     background: #05080f;
 }
 .currents-map-box {
@@ -279,13 +299,118 @@
 @media (max-width: 767.98px), (max-height: 500px) {
     .header-nav-link { font-size: 0.78rem; padding-left: 0.5rem; }
     .currents-about-table td:first-child { width: auto; }
-    .currents-wrapper {
-        height: calc(100vh - 52px);
-        height: calc(100dvh - 52px);
-    }
     .currents-chart-box { height: 36%; min-height: 160px; }
     .currents-badge { font-size: 0.7rem; padding: 0.25rem 0.6rem 0; }
     .currents-clock { min-width: 0; font-size: 0.7rem; padding: 0.35rem 0.5rem; }
     .currents-clock .time { font-size: 0.8rem; }
     .currents-legend { display: none; }
+}
+
+/* ===== Floating controls on the map (created by currents.js) ===== */
+.currents-fs-btn {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    color: #0a1628;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    cursor: pointer;
+}
+.currents-playbar {
+    display: none;                      /* drawer mode only (sidebar has its own) */
+    align-items: center;
+    gap: 6px;
+    padding: 4px;
+    background: rgba(10, 22, 40, 0.85);
+    border: 1px solid #1e293b;
+    border-radius: 100px;
+}
+.currents-playbar button {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 1px solid #334155;
+    border-radius: 100px;
+    background: transparent;
+    color: #e2e8f0;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+.currents-playbar button.main {
+    width: 72px;
+    background: #ffffff;
+    border-color: #ffffff;
+    color: #0a1628;
+    font-weight: 600;
+}
+
+/* ===== Full screen: drop the page header so map + chart get it all ===== */
+html.currents-fs .currents-page > .gotone-header { display: none; }
+
+/* ===== Tablets (any touch screen) and windows < 1200px: the sidebar becomes
+   a slide-in drawer, as on phones (gotone.css), and play/pause floats on the
+   map. A fixed 2-column sidebar left the map cramped and clipped the panels. */
+@media (max-width: 1199.98px), (hover: none) and (pointer: coarse) {
+    .currents-page .gotone-sidebar {
+        position: fixed !important;
+        top: 0;
+        left: -330px;
+        width: 300px !important;
+        max-width: 85vw !important;
+        height: 100vh !important;
+        height: 100dvh !important;
+        z-index: 2000;
+        transition: left 0.3s ease;
+        flex: none !important;
+        padding-top: 2.75rem !important;
+        padding-left: max(1.25rem, env(safe-area-inset-left)) !important;
+        overflow: visible !important;
+        display: flex !important;
+        flex-direction: column !important;
+    }
+    .currents-page .gotone-sidebar.drawer-open { left: 0; box-shadow: 4px 0 20px rgba(0, 0, 0, 0.35); }
+    .currents-page .gotone-sidebar .sidebar-header { flex-shrink: 0; position: relative; z-index: 10; }
+    .currents-page .gotone-sidebar .sidebar-body {
+        flex: 1;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        touch-action: pan-y;
+        min-height: 0;
+    }
+    .currents-page .gotone-sidebar .dash-datepicker-calendar { z-index: 2100 !important; }
+    .currents-page .sidebar-close-btn { display: block !important; }
+    /* gotone.css hides the backdrop above phone width; show it while open
+       (the toggle callback's inline style can't beat that !important). */
+    .currents-page .sidebar-backdrop { display: none !important; }
+    .currents-page:has(.gotone-sidebar.drawer-open) .sidebar-backdrop {
+        display: block !important;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.4);
+        z-index: 1999;
+    }
+    .currents-page .map-col { flex: 0 0 100% !important; max-width: 100% !important; }
+    .currents-page .hamburger-btn {
+        display: block !important;
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        z-index: 1100;
+        width: 44px;
+        height: 44px;
+        background: rgba(255, 255, 255, 0.95);
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        font-size: 1.4rem;
+        color: #0a1628;
+        cursor: pointer;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    }
+    .currents-page .leaflet-top.leaflet-right { top: 54px; }   /* below the hamburger */
+    .currents-playbar { display: flex; }
 }
