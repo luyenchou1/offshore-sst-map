@@ -20,6 +20,13 @@ Data: **NOAA CoastWatch ERDDAP** — MUR GHRSST 1km (preferred), OISST 25km (fal
 - **Disk cache** — Repeat fetches return instantly from gzip-compressed cache files
 - **Adaptive or locked color scale** — Toggle between percentile-based or fixed 30–90°F range
 - **GotOne branding** — Dark navy UI with brand blue (#0183fe) accents
+- **Currents page** (`/currents`) — Animated tidal-current flow around Montauk, The Race, Plum Gut & Block Island Sound, with a synced tide/current chart showing how slack water lags high and low tide
+
+## Currents (`/currents`)
+
+A week of modeled currents animated as flowing particles, from UMass Dartmouth's NECOFS (FVCOM) model, next to NOAA's tide and current predictions for ~86 stations. Pick a curated week (supermoon spring tide, summer spring vs. neap, Blizzard Jonas), surface or depth-averaged flow, and any station; a badge shows how that spot's slack and max flood line up with Montauk's high and low water.
+
+Data is built off-Render by `tools/build_currents.py` (needs `requirements-tools.txt`) and uploaded to the app; see `CLAUDE.md` → *Currents Page*.
 
 ## Setup (Local)
 
@@ -35,11 +42,11 @@ Open http://localhost:8050
 
 1. Push repo to GitHub
 2. Connect the repo on [render.com](https://render.com) — Render auto-detects the `Procfile`
-3. Add a **persistent disk** (1 GB, mount at `/opt/render/project/src/cache`)
-4. Set env var `SST_CACHE_DIR=/opt/render/project/src/cache`
-5. Start command: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --timeout 180`
+3. Add a **persistent disk** (1 GB, mount at `/var/data/cache`)
+4. Set env vars `SST_CACHE_DIR=/var/data/cache` and `CACHE_UPLOAD_TOKEN` (shared with the GitHub repo secret of the same name, used by the seed/currents workflows)
+5. Start command: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --threads 16 --timeout 180`
 
-**Important**: Must use 1 worker — the in-memory raw data cache is per-process.
+**Important**: Must use 1 worker — the in-memory raw data cache is per-process. Auto-deploy is off; deploy manually from the Render dashboard after pushing to `main`.
 
 ## Custom Domain & Squarespace Embed
 
@@ -78,6 +85,7 @@ See `CLAUDE.md` for full architecture details, callback structure, and lessons l
 - **Backend**: Python 3.12, Dash 4.0, NumPy, SciPy
 - **Frontend**: Dash Leaflet (Leaflet.js), Dash Bootstrap Components (Flatly theme), custom CSS
 - **SST data**: NOAA CoastWatch ERDDAP — MUR GHRSST 1km (preferred), OISST 25km (fallback)
-- **Chart layers**: NOAA ENC nautical charts (WMS), GEBCO bathymetry (WMS), CARTO basemap
+- **Currents data**: NECOFS FVCOM (UMass Dartmouth) via OPeNDAP + NOAA CO-OPS tide/current predictions
+- **Chart layers**: NOAA ENC nautical charts (WMS), GEBCO bathymetry (WMS), Esri Light/Dark Gray Canvas basemaps (keyless)
 - **Hosting**: Render Starter ($7/month) — 0.5 CPU, 512 MB RAM, 1 GB persistent disk
 - **Domain**: `sst.gotoneapp.com` (CNAME → Render), embedded on Squarespace via iframe

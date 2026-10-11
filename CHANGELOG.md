@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-10-10 — Currents page (`/currents`)
+
+### Added
+- **`/currents` page** — animated tidal-current flow for eastern Long Island (Montauk, The Race, Plum Gut, Gardiners Bay, the Peconics, Fishers, Watch Hill, Block Island Sound) on a dark Esri basemap, linked from the SST header. Canvas particle animation (brightness/colour by speed), ~86 NOAA current-prediction stations coloured flood/ebb/slack, and a time-synced Plotly chart of Montauk's tide against the selected station's current (NOAA solid, model dotted) with slack/max markers and a draggable time cursor.
+- **Lag badge** — for the selected station, the week's median offset of slack water and max flood from Montauk high/low water (e.g. The Race: slack ≈ 2h40m after high and low water). This is the core lesson: the tide table's high/low/slack doesn't tell you when the current turns.
+- **Four curated weeks** (`data/currents_weeks.json`) from the NECOFS GOM3 hourly hindcast: 2015 supermoon spring tide, summer-2016 spring and neap (same season, opposite extremes), and Blizzard Jonas (Jan 2016) where wind and surge pull the model off NOAA's tide-only predictions.
+- **Surface / depth-averaged toggle** and 15 min–2 h per second playback speeds.
+- **`tools/build_currents.py`** — off-Render builder: reads NECOFS over OPeNDAP, interpolates the triangle mesh onto a ~400 m grid, packs int8 `GOCUR1` frames (~2–2.5 MB per week per depth), fetches NOAA tide + current predictions, uploads with the manifest last. Sanity guards refuse implausible builds; a physics check compares model vs NOAA at The Race / Plum Gut / Montauk (correlation 0.94–0.99, slack timing within ~10–35 min).
+- **`/api/currents/manifest.json`, `/api/currents/<file>`, `POST /api/currents/upload`** — serve prebuilt files from the persistent disk (gzip `Content-Encoding`, 1-day cache, ETag/304) and accept token-authenticated uploads (size checked before buffering, format-validated, atomic write).
+- **`.github/workflows/build-currents.yml`** — manual rebuilds of the curated weeks, plus a daily run that switches on "live" currents automatically if UMassD republishes the NECOFS forecast (exits quietly while it's offline).
+- **`.github/workflows/keepalive.yml`** — weekly heartbeat commit when `main` has been idle 45+ days, so GitHub can't silently disable scheduled workflows again.
+- **`requirements-tools.txt`** — build-only dependencies (`netCDF4` etc.), never installed on Render.
+
+### Changed
+- `requirements.txt` now lists `plotly` and `dash-extensions` explicitly (previously only transitive) and bounds `dash-leaflet<2` (the currents engine relies on its global Leaflet).
+- README: documents `/currents`, corrects the persistent-disk path (`/var/data/cache`) and adds `--threads 16` to the start command.
+
+### Fixed / Ops
+- **"Seed SST cache" had been silently disabled by GitHub since 2026-08-30** (60 days without commits). Re-enabled; the keepalive workflow prevents a repeat. The SST map kept working only because **NOAA has lifted its block on Render's IP** — Render now fetches uncached windows from ERDDAP itself (Oct 8 window loaded live in ~10 s). Docs updated.
+
+---
+
 ## 2026-10-10 — Keyless Basemap (CARTO → Esri Light Gray)
 
 ### Fixed

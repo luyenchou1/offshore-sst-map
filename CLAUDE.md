@@ -6,7 +6,8 @@ Dash 4.0 web app ("GotOne Offshore SST Analyzer") branded for [gotoneapp.com](ht
 ## Tech Stack
 - **Current version**: v1.0 (displayed in sidebar UI; next release: v1.01)
 - **Dash 4.0** + **dash-leaflet** + **dash-bootstrap-components** (Flatly theme + GotOne CSS overrides)
-- **Basemap**: Esri World Light Gray Canvas — keyless raster tiles, `{z}/{y}/{x}` scheme. Replaced CARTO Positron (`basemaps.cartocdn.com/light_all`), which began requiring an API key and served "API KEY REQUIRED" watermarks. Defined in `layout/mapview.py` (SST map) and `layout/catchview.py` (catch map).
+- **Basemap**: Esri World Light Gray Canvas — keyless raster tiles, `{z}/{y}/{x}` scheme. Replaced CARTO Positron (`basemaps.cartocdn.com/light_all`), which began requiring an API key and served "API KEY REQUIRED" watermarks. Defined in `layout/mapview.py` (SST map) and `layout/catchview.py` (catch map). `/currents` uses the dark counterpart (`World_Dark_Gray_Base` + `World_Dark_Gray_Reference` labels), also keyless.
+- **Pages** (one Dash app; hand-written router `route_page` in `app.py`): `/` SST map · `/currents` animated tidal currents (public, linked from the SST header) · `/catches` catch map (gated by `CATCHES_ACCESS_KEY`, no public link)
 - **NOAA CoastWatch ERDDAP** — MUR GHRSST (1km, preferred) with OISST (25km) fallback
 - Data available from 2002-06-01 to ~2 days ago (MUR has ~2-day latency)
 - Python 3.12, venv at `.venv/`
@@ -32,17 +33,13 @@ Dash 4.0 web app ("GotOne Offshore SST Analyzer") branded for [gotoneapp.com](ht
 
 ## Architecture
 
-### SST Data Sourcing — Render serves cache, never fetches ERDDAP
+### SST Data Sourcing — cache first, seeded off-Render as insurance
 
-**As of 2026-06-22, NOAA CoastWatch ERDDAP blocks Render's datacenter IP at the network layer.** Connections from the deployed app are refused/unreachable (`Network is unreachable`, `Connection reset by peer`, connect timeouts); `coastwatch.noaa.gov` additionally tarpits (`ReadTimeout`) from every IP. A cache-miss fetch on Render therefore hangs the full 90s budget and shows the red "SST fetch timed out after 90s" error.
+**History:** from June 2026 NOAA CoastWatch ERDDAP blocked Render's datacenter IP at the network layer (`Network is unreachable`, `Connection reset by peer`, connect timeouts; `coastwatch.noaa.gov` additionally tarpits with `ReadTimeout` from every IP), so cache misses on Render hung the full 90s and showed the red "SST fetch timed out after 90s" error. **As of 2026-10-10 the block is lifted** — Render fetched an uncached Oct 8 window live in ~10 s. The off-Render seeding stays as insurance in case it returns.
 
-**localhost and GitHub-hosted runners are NOT blocked**, so the data path is split:
-
-- **Render (production)** serves recent dates *only* from its disk cache; it never calls ERDDAP.
-- **Off-Render fetcher**: a daily GitHub Action (`.github/workflows/seed-sst-cache.yml`) runs `tools/sync_cache.py`, which fetches recent 7-day windows from ERDDAP (reachable from the runner) and POSTs raw-only cache files to `POST /api/cache/upload` (auth via the `CACHE_UPLOAD_TOKEN` env var + GitHub repo secret). Seeds end-dates today-2..today-11; the ±3-day fuzzy lookup covers the rest. Uploads retry on transient Render 502s.
-- **localhost (dev)** still fetches ERDDAP live via `get_sst_multiday()`, exactly as the Data Flow below describes.
-
-The Data Flow diagram below is the **live-fetch path**: it runs on localhost and inside the GitHub Action, but is dead on Render.
+- **Render (production)** serves from its disk cache first; on a miss it fetches ERDDAP itself via `get_sst_multiday()` (works again).
+- **Off-Render seeder**: a daily GitHub Action (`.github/workflows/seed-sst-cache.yml`) runs `tools/sync_cache.py`, which fetches recent 7-day windows from ERDDAP and POSTs raw-only cache files to `POST /api/cache/upload` (auth: `CACHE_UPLOAD_TOKEN` env var + GitHub repo secret). Seeds end-dates today-2..today-11; the ±3-day fuzzy lookup covers the rest. Uploads retry on transient Render 502s. **GitHub silently disabled this job for inactivity on 2026-08-30**; `.github/workflows/keepalive.yml` now prevents that (see Lessons).
+- **localhost (dev)** fetches ERDDAP live, exactly as the Data Flow below describes.
 
 ### Data Flow
 ```
@@ -81,6 +78,43 @@ Pre-cache (memory-efficient raw-only mode):
     → background thread upgrades cache with PNGs for instant future loads
 ```
 
+### Currents Page (`/currents`)
+Animated tidal-current flow for eastern Long Island (Little Peconic → east of Block Island; south of Montauk → Watch Hill / Fishers), with a time-synced tide + current chart. Built to show why currents don't follow the tide table — e.g. at The Race slack comes ~2h40m *after* Montauk high/low water, at Plum Gut ~1h40m after.
+
+```
+Build (off-Render: local, or .github/workflows/build-currents.yml)
+  tools/build_currents.py
+    NECOFS FVCOM GOM3 (UMass Dartmouth) over OPeNDAP:
+      hourly hindcast 1978→2016 for the curated weeks in data/currents_weeks.json,
+      or the live GOM3 forecast (offline since ~Oct 2026; daily job exits 0 until it returns)
+    → surface u,v (siglay 0) + depth-averaged ua,va for the region's mesh elements
+    → element values averaged to nodes → barycentric onto a 221×126 grid (~400 m)
+    → int8 (0.025 m/s per unit) → GOCUR1 binary (format in data/currents.py), gzip
+    + NOAA CO-OPS predictions: Montauk tide 8510560 (6-min + H/L) and ~86 current
+      stations (30-min curves + MAX_SLACK events) + model water level → <week>_meta.json.gz
+    → POST /api/currents/upload (CACHE_UPLOAD_TOKEN); manifest.json uploaded LAST
+
+Serve (Render; no request-time processing)
+  GET /api/currents/manifest.json                     max-age 60
+  GET /api/currents/<week>_<surface|davg>.bin.gz      Content-Encoding: gzip,
+  GET /api/currents/<week>_meta.json.gz               max-age 1 day, ETag/304
+  files in CURRENTS_DIR = $CURRENTS_DATA_DIR or $SST_CACHE_DIR/currents
+  (/var/data/cache/currents on Render); names checked against FILE_RE
+
+Client (assets/currents.js → window.Currents)
+  L.Map.addInitHook grabs the dash-leaflet map whose container id is "currents-map"
+  canvas particle layer (pane z 450): bilinear in space × linear between hourly
+    frames; trails = destination-in fade + 'lighter' strokes, coloured by speed
+  NOAA station dots (pane 470) coloured flood/ebb/slack; click → select (+ set_props)
+  Plotly chart drawn into #currents-chart: Montauk tide (+ model level, median-
+    aligned), station current (NOAA solid / model dotted), slack + max markers;
+    overlay-div time cursor; click/drag to scrub
+  lag badge: median offset of the station's slack / max flood vs Montauk HW/LW
+  one requestAnimationFrame loop (~30 fps); nothing per frame touches Dash
+```
+
+Each week ≈ 2–2.5 MB per depth + ~70 KB meta (under Render's ~7 MB response limit). Validated against NOAA: model surface current at The Race / Plum Gut / Montauk correlates 0.94–0.99 with predictions and gets slack timing within ~10–35 min; peak speed in the narrowest gaps runs ~25% low (the ~1 km mesh smooths ~1.5 km-wide jets). The sidebar says so.
+
 ### Key Files
 | File | Purpose |
 |------|---------|
@@ -99,6 +133,14 @@ Pre-cache (memory-efficient raw-only mode):
 | `assets/gotone.css` | GotOne brand CSS overrides (colors, dark sidebar, inputs, mobile responsive) |
 | `assets/tooltips.css` | Tooltip card styles + mobile wrapping |
 | `assets/gotone-logo.png` | White fish logotype on transparent background |
+| `data/currents.py` | Currents data dir, GOCUR1 frame format (pack / parse / validate), filename allow-list, manifest reader |
+| `data/currents_weeks.json` | Curated hindcast weeks (+ lesson text) and featured NOAA stations for /currents |
+| `tools/build_currents.py` | Off-Render builder: NECOFS → gridded frames + NOAA predictions → upload |
+| `layout/currentsview.py` | /currents layout: sidebar controls, dark map, chart containers |
+| `assets/currents.js` | /currents engine: particles, stations, chart, time cursor, lag badge |
+| `assets/currents.css` | /currents styles + the shared header nav link |
+| `requirements-tools.txt` | Build-only deps (`netCDF4` etc.) — never installed on Render |
+| `.github/workflows/` | `seed-sst-cache.yml` (daily SST seed), `build-currents.yml` (currents), `keepalive.yml` (heartbeat), `sync-catches.yml` (catch sync — not wired up yet) |
 
 ### Callback Structure
 1. **show_loading_on_fetch** — **Clientside** callback on button click / auto-fetch, shows loading overlay immediately (must be clientside — with 1 gunicorn worker, a server-side version gets blocked behind the slow fetch callback)
@@ -118,15 +160,42 @@ Pre-cache (memory-efficient raw-only mode):
 15. **clientside: drawer toggle** — Opens/closes mobile sidebar drawer + backdrop (toggles `drawer-open` class)
 16. **clientside: POI collapse toggle** — Expands/collapses POI checklist, flips chevron (▾/▴)
 17. **poi_select_all** — Server callback for Select all / Deselect all links in POI checklist
+18. **route_page** — Router: `/catches` (gated), `/currents`, else the SST page.
+19. **Currents (clientside only)** — week / depth / rate / station / options forward to `window.Currents.*` (each writes `''` to a `currents-sink-*` div; initial calls hand the engine its defaults, which it queues until the map exists); play/pause toggles and returns the button label; step ±1 h; lesson text comes from the `currents-weeks` store. All per-frame work is in `assets/currents.js`, which pushes back into Dash only via `dash_clientside.set_props` (station click → dropdown, auto-play → button label).
 
 ## Critical Lessons Learned
 
 ### NOAA Blocks Render's Datacenter IP — Data Must Be Fetched Off-Render
+*(Lifted as of 2026-10-10 — see Architecture → SST Data Sourcing. Kept for the diagnosis technique and in case it returns.)*
 - **The symptom**: recent dates on the live site show a red "SST fetch timed out after 90s" (or "No compatible SST dataset found") box, while localhost works perfectly. **The cause is not in the code** — NOAA's firewall blocks Render's datacenter IP at the network layer. Confirmed in the live Render logs: `ConnectionError: Network is unreachable` (coastwatch.pfeg), `ConnectTimeout` / `Connection reset by peer` (upwell), `ReadTimeout` (coastwatch.noaa.gov tarpit). It worked from Render months ago; NOAA tightened anti-cloud filtering since.
 - **`erddap_search` swallowed exceptions silently**, so the failures looked like a generic 90s timeout with zero log breadcrumbs. It now logs the exception type per server — that's how the block was confirmed (`ConnectTimeout`=firewall drop, `ReadTimeout`=tarpit, `403`=WAF/User-Agent).
 - **A User-Agent header is necessary but not sufficient**: NOAA's WAF 403s the default `python-requests` UA, so `data/erddap._HEADERS` sends a real one. But that only addresses the 403 variant — the network-level IP block is the real problem, and **no fetch-code change can fix it**.
 - **The fix is architectural**: fetch where ERDDAP is reachable (localhost / GitHub runners — both verified not blocked) and push cache files to Render via `POST /api/cache/upload`. See *Architecture → SST Data Sourcing*. The public AWS MUR Zarr mirror (`s3://mur-sst`) was evaluated and rejected — its time axis is frozen at ~Jan 2020.
 - **If the live map breaks for recent dates**: check the seed workflow first (`gh run list --workflow=seed-sst-cache.yml`), not Render's ERDDAP path. Re-seed manually by running `tools/sync_cache.py` from a non-blocked IP with `CACHE_UPLOAD_TOKEN` set.
+
+### GitHub Actions Schedules Die After 60 Idle Days
+- In a public repo, scheduled workflows are **silently disabled** after 60 days without repository activity. That stopped "Seed SST cache" on 2026-08-30 (last commit was July 1) and nothing alerted — the SST map only kept working because NOAA had lifted its block. Check with `gh workflow list --all` (state `disabled_inactivity`); re-enable with `gh workflow enable "<name>"`.
+- **`.github/workflows/keepalive.yml`** runs weekly and pushes a heartbeat commit (`.github/keepalive.txt`) only when `main` has been idle 45+ days. A real commit is the documented activity signal; whether an API re-enable resets the timer is undocumented, so we don't rely on it. Auto-deploy is off, so heartbeat commits never deploy.
+
+### NECOFS / FVCOM Gotchas (currents pipeline)
+- **The live GOM3 forecast is listed but missing**: THREDDS `forecasts.xml` advertises `FVCOM/NECOFS/Forecasts/NECOFS_GOM3_FORECAST.nc`, but the file 404s (Oct 2026). The `NECOFS_FVCOM_OCEAN_GLOBAL_FORECAST.nc` that *is* live is **daily-mean** — tides average out, useless for currents. The hourly 30-year hindcast (`fvcom/hindcasts/30yr_gom3`, 1978-01-01 → 2017-01-01) works.
+- **Don't read `Itime`/`Itime2` on the hindcast**: it's an aggregation of ~470 monthly files, and those variables make THREDDS open every one (hung 10+ min). The aggregated `time` coordinate is cached and fast; it's float32 MJD (~6-min resolution at modern dates), so round to the hour.
+- **Month boundaries repeat an hour** in the aggregation (467 duplicate steps). A week crossing one has 170 raw steps for 169 hours; `window_steps()` keeps the first copy. Without it every later frame is shifted an hour — fatal for slack timing.
+- **Velocities are element-centred** (`lonc/latc`; `nv` is 1-based); `siglay` index 0 is the surface; `ua/va` are depth-averaged. Average elements → nodes, then barycentric interpolation inside mesh triangles; grid points outside the mesh are land.
+- **Model water level (`zeta`) isn't on the gauge's datum** — a MSL→MLLW shift left it 0.7–1.2 ft low every week. Align by the week's median difference so only weather (surge) separates it from NOAA's prediction.
+- **~1 MB/s from smast.umassd.edu**; the region's elements span 47% of the index range, so a week (4 variables × 169 h) is ~115 MB, ~2–3 min.
+- **NOAA "no predictions" errors are deterministic** — don't retry them (`NoRetry`); retrying cost ~18 s per station. `LIS1001` The Race and `LIS1012` Plum Gut are harmonic (pass `bin=<currbin>`); most `ACT*` stations are subordinate. 86 current-prediction stations fall in the region.
+
+### Tide Height ≠ Tidal Current (the point of /currents)
+- NOAA publishes current predictions separately from tide predictions, and in the Race / Plum Gut / Montauk system slack and max flow are phase-shifted from local high/low water. Supermoon week 2015: The Race slack ≈ 2h40m after Montauk HW/LW, max flood ≈ 15 min–1 h *before* HW; Plum Gut slack ≈ 1h40m after. So "fish the slack at high tide" by a Montauk tide table is off by hours, and two passages a few miles apart turn about an hour apart.
+- Wind and surge push real flow off the tide-only predictions: during Jonas the model's Montauk current peaked 3.2 kn vs NOAA's 2.7, and water stood ~2.3 ft above its usual offset.
+
+### Dash + Custom JS Gotchas (/currents)
+- **Leaflet is a global (`window.L`) loaded by dash-leaflet before `/assets/*.js`**, but `window.dash_clientside` is created *after* assets — look it up lazily. Grab a dash-leaflet map with `L.Map.addInitHook` (match `getContainer().id`); dash-leaflet's `eventHandlers.load` misses the initial load. react-leaflet calls `map.remove()` on page swap, which fires `unload` — clean up there.
+- **Plotly isn't on the page until a `dcc.Graph` mounts** (lazy-loaded). /currents mounts a hidden 1-px `dcc.Graph` (`responsive=False`) just to load it, then draws its own chart with `Plotly.react` into a plain div.
+- **Don't drive a `dcc.Graph` at animation rate**: it pushes `relayoutData` back into Dash on every relayout. The time cursor is an absolutely-positioned div placed from the known axis range.
+- **Never use the class name `row` in custom HTML**: Bootstrap's `.row` (negative margins + flex-wrap) clipped and wrapped the map clock. Prefix custom classes (`cur-row`).
+- **`document.hidden` pauses `requestAnimationFrame`**: the loop stops when the tab is hidden and restarts on `visibilitychange`. A hidden browser pane shows a frozen animation — to test, drive `window.Currents._state.particles.step()` manually.
 
 ### Dash 4.0 Gotchas
 - **Never use clientside callbacks that manipulate DOM for elements also controlled by server callbacks.** Dash's virtual DOM reconciliation won't see the DOM change, so server callback updates get silently skipped, leaving the UI stuck. We burned multiple iterations on this with the Fetch button getting permanently disabled.
@@ -333,6 +402,14 @@ source .venv/bin/activate
 export GFW_API_TOKEN="your-token-here"  # optional, for fishing activity layer
 python app.py
 # → http://localhost:8050
+
+# /currents data (build-only deps; the app itself doesn't need them).
+# Use `python -m pip`: the venv's pip launcher is broken from a past move.
+.venv/bin/python -m pip install -r requirements-tools.txt
+.venv/bin/python tools/build_currents.py --weeks 2015-09-supermoon   # → ./cache/currents
+# → http://localhost:8050/currents
+# Upload to production (after a deploy that has the endpoint):
+CACHE_UPLOAD_TOKEN=... .venv/bin/python tools/build_currents.py --weeks all --upload
 ```
 
 ## Environment Variables
@@ -340,4 +417,9 @@ python app.py
 |----------|----------|---------|
 | `GFW_API_TOKEN` | No | Global Fishing Watch API token (JWT). Enables fishing activity overlay. Without it, layer degrades gracefully (transparent tiles). |
 | `SST_CACHE_DIR` | Yes (Render) | Cache directory path. Set to `/var/data/cache` on Render (persistent disk mount). Default `./cache` for local dev. |
+| `CACHE_UPLOAD_TOKEN` | Yes (Render) | Shared secret for `POST /api/cache/upload` and `POST /api/currents/upload`; also a GitHub repo secret for the seed and currents workflows. Unset → uploads disabled (403). |
+| `CURRENTS_DATA_DIR` | No | Override for the /currents data dir. Default `$SST_CACHE_DIR/currents` (→ `/var/data/cache/currents` on Render). |
+| `CATCH_DATA_DIR` | Yes (Render) | Directory holding the catch CSVs (`/var/data/cache` on Render). Default: the repo's `data/`. |
+| `CATCHES_ACCESS_KEY` | Yes (Render) | Access key for `/catches` (`?key=…`). Unset on Render → page closed. |
+| `CATCHES_UPLOAD_TOKEN` | No | Secret for `POST /api/catches/upload` (catch sync — not automated yet; CSVs are uploaded by hand). |
 | `PORT` | Render only | Set automatically by Render for gunicorn binding. |
