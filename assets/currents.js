@@ -38,14 +38,19 @@
     // -------------------------------------------------------------- state --
     var S = {
         map: null, particles: null, stationLayer: null, markers: {},
-        clock: null, statusEl: null, cursorEl: null, resizeObs: null,
+        clock: null, statusEl: null, cursorEl: null, homeEl: null, resizeObs: null,
         manifestP: null, week: null, depth: "surface", rate: 1800, station: null,
         opts: { stations: true, model: true },
         meta: null, field: null, fields: {}, stationsById: {},
         t: 0, playing: false, wantPlay: true, fitted: false,
         raf: 0, lastFrame: 0, lastUi: 0, loadToken: 0,
-        chartReady: false, xr: null, scrubbing: false
+        chartReady: false, xr: null, scrubbing: false,
+        preview: null                       // chart time under the mouse, else null
     };
+
+    // The moment the map shows: the chart time under the mouse while the user
+    // points at the chart, otherwise the playback time.
+    function viewT() { return S.preview != null ? S.preview : S.t; }
 
     // ---------------------------------------------------------- utilities --
     function $(id) { return document.getElementById(id); }
@@ -78,6 +83,11 @@
     // ignore time zones, so these make the chart read in local (ET) time.
     function wall(tSec) { return tSec * 1000 + etOffsetMs(tSec); }
     function unwall(ms) { var t = ms / 1000; return t - etOffsetMs(t) / 1000; }
+    // Chart x values. Plotly reads numeric dates in the *browser's* zone, so
+    // passing wall() numbers shifted every chart label (ticks, hover time) by
+    // the viewer's UTC offset (4-5 h in ET) while the map clock was right.
+    // Timezone-naive strings are taken as-is.
+    function px(tSec) { return new Date(wall(tSec)).toISOString().slice(0, 19).replace("T", " "); }
 
     var fmtClock = new Intl.DateTimeFormat("en-US", {
         timeZone: TZ, weekday: "short", month: "short", day: "numeric",
@@ -329,7 +339,7 @@
         step: function () {
             var n = this._n, f = S.field;
             if (!n || !f || !this._canvas) { return; }
-            var ctx = this._ctx, w = this._w, h = this._h, k = this._k, t = S.t;
+            var ctx = this._ctx, w = this._w, h = this._h, k = this._k, t = viewT();
             var segN = this._segN, nb = COLORS.length, b, q;
             segN.fill(0);
             for (q = 0; q < n; q++) {
@@ -416,15 +426,16 @@
 
     function updateClock() {
         if (!S.clock || !S.meta) { return; }
-        var html = '<div class="time">' + esc(fmtClock.format(new Date(S.t * 1000))) + "</div>";
-        var td = tideState(S.t);
+        var t = viewT();
+        var html = '<div class="time">' + esc(fmtClock.format(new Date(t * 1000))) + "</div>";
+        var td = tideState(t);
         if (td) {
             html += '<div class="cur-row">Montauk tide ' + td.v.toFixed(1) + " ft, " +
                     (td.rising ? "rising" : "falling") + "</div>";
         }
         var st = S.stationsById[S.station];
         if (st) {
-            var d = describe(noaaAt(st, S.t));
+            var d = describe(noaaAt(st, t));
             html += '<div class="cur-row">' + esc(st.label) + ': <span class="' + d.cls + '">' +
                     d.text + "</span></div>";
         }
@@ -433,7 +444,7 @@
 
     // ------------------------------------------------------------ stations --
     function stationTip(st) {
-        var nv = noaaAt(st, S.t), d = describe(nv), m = describe(modelAt(st, S.t));
+        var t = viewT(), nv = noaaAt(st, t), d = describe(nv), m = describe(modelAt(st, t));
         var dir = nv == null || Math.abs(nv) < SLACK_KN ? null : (nv > 0 ? st.flood_dir : st.ebb_dir);
         return "<b>" + esc(st.label) + "</b>" +
             (st.label !== st.name ? '<br><span style="color:#94a3b8">' + esc(st.name) + "</span>" : "") +
@@ -462,8 +473,9 @@
     }
 
     function updateStationStyles() {
+        var t = viewT();
         for (var id in S.markers) {
-            var st = S.stationsById[id], m = S.markers[id], v = noaaAt(st, S.t);
+            var st = S.stationsById[id], m = S.markers[id], v = noaaAt(st, t);
             var col = v == null ? "#64748b" : Math.abs(v) < SLACK_KN ? SLACK : (v > 0 ? FLOOD : EBB);
             var sel = id === S.station;
             m.setStyle({ fillColor: col, color: sel ? "#ffffff" : "#0a1628", weight: sel ? 2.5 : 1.2 });
@@ -562,13 +574,13 @@
         if (!window.Plotly) { waitForPlotly(buildChart); return; }
         var st = S.stationsById[S.station], td = S.meta.tide, f = S.field;
         var traces = [{
-            x: td.t.map(wall), y: td.v, name: "Montauk tide (NOAA)", type: "scatter",
+            x: td.t.map(px), y: td.v, name: "Montauk tide (NOAA)", type: "scatter",
             mode: "lines", line: { color: "#60a5fa", width: 2 },
             hovertemplate: "%{y:.1f} ft<extra>Tide</extra>"
         }];
         if (S.opts.model && td.model) {
             traces.push({
-                x: td.model.v.map(function (_, i) { return wall(td.model.t0 + i * td.model.dt); }),
+                x: td.model.v.map(function (_, i) { return px(td.model.t0 + i * td.model.dt); }),
                 y: td.model.v, name: "water level (model)", mode: "lines",
                 line: { color: "#60a5fa", width: 1.2, dash: "dot" },
                 hovertemplate: "%{y:.1f} ft<extra>Model level</extra>"
@@ -576,7 +588,7 @@
         }
         var hilo = td.hilo || [];
         traces.push({
-            x: hilo.map(function (h) { return wall(h.t); }), y: hilo.map(function (h) { return h.v; }),
+            x: hilo.map(function (h) { return px(h.t); }), y: hilo.map(function (h) { return h.v; }),
             mode: "markers", showlegend: false, hoverinfo: "skip",
             marker: { size: 5, color: "#60a5fa" }
         });
@@ -584,7 +596,7 @@
         if (st) {
             st.curve.v.forEach(function (v) { maxC = Math.max(maxC, Math.abs(v)); });
             traces.push({
-                x: curveTimes(st.curve).map(wall), y: st.curve.v, yaxis: "y2",
+                x: curveTimes(st.curve).map(px), y: st.curve.v, yaxis: "y2",
                 name: st.label + " current (NOAA)", mode: "lines",
                 line: { color: "#fbbf24", width: 2 },
                 fill: "tozeroy", fillcolor: "rgba(251,191,36,0.10)",
@@ -594,7 +606,7 @@
                 var mx = [], my = [];
                 for (var i = 0; i < f.nf; i++) {
                     var tt = f.t0 + i * f.dt, mv = modelAt(st, tt);
-                    if (mv != null) { mx.push(wall(tt)); my.push(Math.round(mv * 100) / 100); }
+                    if (mv != null) { mx.push(px(tt)); my.push(Math.round(mv * 100) / 100); }
                 }
                 my.forEach(function (v) { maxC = Math.max(maxC, Math.abs(v)); });
                 if (my.length) {
@@ -610,19 +622,19 @@
             var pick = function (type) { return ev.filter(function (e) { return e.type === type; }); };
             var sl = pick("slack"), fl = pick("flood"), eb = pick("ebb");
             traces.push({
-                x: sl.map(function (e) { return wall(e.t); }), y: sl.map(function () { return 0; }),
+                x: sl.map(function (e) { return px(e.t); }), y: sl.map(function () { return 0; }),
                 yaxis: "y2", mode: "markers", showlegend: false,
                 marker: { symbol: "circle-open", size: 7, color: SLACK, line: { width: 1.5 } },
                 hovertemplate: "Slack<extra></extra>"
             });
             traces.push({
-                x: fl.map(function (e) { return wall(e.t); }), y: fl.map(function (e) { return e.v; }),
+                x: fl.map(function (e) { return px(e.t); }), y: fl.map(function (e) { return e.v; }),
                 yaxis: "y2", mode: "markers", showlegend: false,
                 marker: { symbol: "triangle-up", size: 7, color: FLOOD },
                 hovertemplate: "Max flood %{y:.1f} kn<extra></extra>"
             });
             traces.push({
-                x: eb.map(function (e) { return wall(e.t); }), y: eb.map(function (e) { return e.v; }),
+                x: eb.map(function (e) { return px(e.t); }), y: eb.map(function (e) { return e.v; }),
                 yaxis: "y2", mode: "markers", showlegend: false,
                 marker: { symbol: "triangle-down", size: 7, color: EBB },
                 hovertemplate: "Max ebb %{y:.1f} kn<extra></extra>"
@@ -639,7 +651,7 @@
             hovermode: "x unified", dragmode: false,
             hoverlabel: { bgcolor: "#0f1d32", bordercolor: "#334155",
                           font: { color: "#e2e8f0", size: 11 } },
-            xaxis: { type: "date", range: S.xr, fixedrange: true, automargin: false,
+            xaxis: { type: "date", range: [px(f.t0), px(f.tEnd)], fixedrange: true, automargin: false,
                      gridcolor: "#1e293b", linecolor: "#334155", dtick: 86400000,
                      tickformat: "%a %-d", hoverformat: "%a %b %-d, %-I:%M %p" },
             yaxis: { fixedrange: true, automargin: false, zeroline: false,
@@ -658,22 +670,61 @@
         updateCursor();
     }
 
+    // Bright line = the moment the map shows; while previewing, a faint dashed
+    // line marks the playback time that the map returns to.
     function updateCursor() {
         var layer = $("currents-cursor-layer"), gd = $("currents-chart");
         if (!layer || !gd || !S.xr || !S.chartReady) { return; }
         if (!S.cursorEl || !layer.contains(S.cursorEl)) {
+            S.homeEl = document.createElement("div");
+            S.homeEl.className = "currents-cursor home";
             S.cursorEl = document.createElement("div");
             S.cursorEl.className = "currents-cursor";
+            layer.appendChild(S.homeEl);
             layer.appendChild(S.cursorEl);
         }
-        var w = gd.clientWidth - MARGIN.l - MARGIN.r;
-        var frac = (wall(S.t) - S.xr[0]) / (S.xr[1] - S.xr[0]);
-        S.cursorEl.style.left = (MARGIN.l + Math.max(0, Math.min(1, frac)) * w) + "px";
-        S.cursorEl.style.top = MARGIN.t + "px";
-        S.cursorEl.style.bottom = MARGIN.b + "px";
+        placeCursor(S.cursorEl, viewT(), gd);
+        S.homeEl.style.display = S.preview != null ? "block" : "none";
+        if (S.preview != null) { placeCursor(S.homeEl, S.t, gd); }
     }
 
-    // Click / drag across the chart to scrub time.
+    function placeCursor(el, t, gd) {
+        var w = gd.clientWidth - MARGIN.l - MARGIN.r;
+        var frac = (wall(t) - S.xr[0]) / (S.xr[1] - S.xr[0]);
+        el.style.left = (MARGIN.l + Math.max(0, Math.min(1, frac)) * w) + "px";
+        el.style.top = MARGIN.t + "px";
+        el.style.bottom = MARGIN.b + "px";
+    }
+
+    // Pointing at the chart (mouse only; touch has no hover) previews that
+    // moment on the map. Playback holds meanwhile, and leaving the chart
+    // returns the map to the playback time. Plotly's hover line follows the
+    // mouse too, so a hover that did nothing to the map read as broken scrubbing.
+    function hoverMove(ev) {
+        if (ev.pointerType !== "mouse" || ev.buttons || S.scrubbing || !S.field) { return; }
+        var t = timeFromEvent(ev);
+        setPreview(t === null ? null : Math.max(S.field.t0, Math.min(S.field.tEnd, t)));
+    }
+
+    function hoverEnd() { setPreview(null); }
+
+    function setPreview(t) {
+        if (t === S.preview) { return; }
+        var ended = t === null;
+        S.preview = t;
+        updateCursor();
+        updateClock();
+        if (ended) { updateStationStyles(); }       // during a hover the loop refreshes them
+    }
+
+    function pause() {
+        S.playing = false;
+        S.wantPlay = false;
+        setProps("currents-play", { children: "Play" });
+    }
+
+    // Click / drag (or tap / drag) on the chart jumps there and pauses, so
+    // the map stays on the moment the user picked until they press Play.
     function timeFromEvent(ev) {
         var gd = $("currents-chart");
         if (!gd || !S.xr) { return null; }
@@ -692,6 +743,8 @@
         var t = timeFromEvent(ev);
         if (t === null) { return; }
         S.scrubbing = true;
+        S.preview = null;
+        pause();
         seek(t);
         window.addEventListener("mousemove", scrubMove);
         window.addEventListener("mouseup", scrubEnd);
@@ -722,6 +775,8 @@
         gd.setAttribute("data-scrub", "1");
         gd.addEventListener("mousedown", scrubStart);
         gd.addEventListener("touchstart", scrubStart, { passive: true });
+        gd.addEventListener("pointermove", hoverMove);
+        gd.addEventListener("pointerleave", hoverEnd);
     }
 
     function seek(t) {
@@ -771,6 +826,7 @@
                 }
                 if (weekChanged) {
                     S.t = S.field.t0;
+                    S.preview = null;
                     buildStations();
                 }
                 if (!S.fitted) {
@@ -806,7 +862,7 @@
         }
         var dt = S.lastFrame ? Math.min((now - S.lastFrame) / 1000, 0.25) : 0;
         S.lastFrame = now;
-        if (S.playing && !S.scrubbing) {
+        if (S.playing && !S.scrubbing && S.preview == null) {
             S.t += dt * S.rate;
             if (S.t > S.field.tEnd) { S.t = S.field.t0; }        // loop the week
         }
@@ -890,6 +946,8 @@
         S.clock = null;
         S.statusEl = null;
         S.cursorEl = null;
+        S.homeEl = null;
+        S.preview = null;
         S.chartReady = false;
         S.fitted = false;
         S.playing = false;
@@ -927,9 +985,7 @@
             return S.playing;
         },
         step: function (sec) {
-            S.playing = false;
-            S.wantPlay = false;
-            setProps("currents-play", { children: "Play" });
+            pause();
             seek(S.t + (+sec || 0));
         },
         _state: S                           // for poking at in the browser console

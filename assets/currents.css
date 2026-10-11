@@ -74,6 +74,15 @@
     background: rgba(255, 255, 255, 0.9);
     box-shadow: 0 0 6px rgba(255, 255, 255, 0.6);
 }
+.currents-cursor.home {         /* playback time, shown while previewing */
+    display: none;
+    width: 0;
+    background: none;
+    box-shadow: none;
+    border-left: 2px dashed rgba(255, 255, 255, 0.4);
+}
+/* Plotly's drag layer sets a pointing-hand cursor; signal "slide along". */
+#currents-chart .nsewdrag { cursor: ew-resize !important; }
 
 /* Overlays created by currents.js inside the Leaflet container */
 .currents-clock {

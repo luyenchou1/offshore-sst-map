@@ -108,7 +108,8 @@ Client (assets/currents.js → window.Currents)
   NOAA station dots (pane 470) coloured flood/ebb/slack; click → select (+ set_props)
   Plotly chart drawn into #currents-chart: Montauk tide (+ model level, median-
     aligned), station current (NOAA solid / model dotted), slack + max markers;
-    overlay-div time cursor; click/drag to scrub
+    overlay-div time cursor; mouse hover previews that moment on the map
+    (playback holds, dashed line marks where it resumes); click/tap/drag jumps + pauses
   lag badge: median offset of the station's slack / max flood vs Montauk HW/LW
   one requestAnimationFrame loop (~30 fps); nothing per frame touches Dash
 ```
@@ -197,7 +198,9 @@ Each week ≈ 2–2.5 MB per depth + ~70 KB meta (under Render's ~7 MB response 
 - **Plotly isn't on the page until a `dcc.Graph` mounts** (lazy-loaded). /currents mounts a hidden 1-px `dcc.Graph` (`responsive=False`) just to load it, then draws its own chart with `Plotly.react` into a plain div.
 - **Don't drive a `dcc.Graph` at animation rate**: it pushes `relayoutData` back into Dash on every relayout. The time cursor is an absolutely-positioned div placed from the known axis range.
 - **Never use the class name `row` in custom HTML**: Bootstrap's `.row` (negative margins + flex-wrap) clipped and wrapped the map clock. Prefix custom classes (`cur-row`).
-- **`document.hidden` pauses `requestAnimationFrame`**: the loop stops when the tab is hidden and restarts on `visibilitychange`. A hidden browser pane shows a frozen animation — to test, drive `window.Currents._state.particles.step()` manually.
+- **`document.hidden` pauses `requestAnimationFrame`**: the loop stops when the tab is hidden and restarts on `visibilitychange`. A hidden browser pane shows a frozen animation — to test, drive `window.Currents._state.particles.step()` manually, or shim it: override `document.hidden` to `false`, replace `requestAnimationFrame` with a 33 ms `setTimeout`, and dispatch `visibilitychange` (then real mouse hovers/drags work).
+- **Plotly reads numeric dates in the browser's local timezone**: the chart got ET wall-clock times as millisecond numbers, so Plotly shifted every tick and hover time by the viewer's UTC offset (4 h in EDT) while the map clock was right — scrubbing by the hover readout landed hours off. Pass timezone-naive date strings (`px()` in currents.js) for x data and range. Easy to miss: the curves and cursor stay mutually consistent, only the labels are wrong, and only when the browser isn't on UTC.
+- **Users scrub with the hover readout, not by dragging**: Plotly's x-unified hover line follows the mouse, so a hover that didn't move the map looked like broken scrubbing (and after a real drag, playback resumed and ran away). Now mouse hover previews the map (`S.preview`, playback holds), leaving the chart returns, and click/tap/drag jumps there and pauses.
 
 ### Dash 4.0 Gotchas
 - **Never use clientside callbacks that manipulate DOM for elements also controlled by server callbacks.** Dash's virtual DOM reconciliation won't see the DOM change, so server callback updates get silently skipped, leaving the UI stuck. We burned multiple iterations on this with the Fetch button getting permanently disabled.

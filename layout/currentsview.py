@@ -111,7 +111,8 @@ def build_currents_sidebar(manifest):
                         value=1800, inline=True,
                         style={"fontSize": "0.72rem"}, className="currents-radio",
                     ),
-                    _small("Drag across the chart to scrub through the week.",
+                    _small("Move along the chart to see any moment on the map; click "
+                           "or tap it to jump there (pauses playback).",
                            marginTop="0.35rem"),
 
                     _divider(),
