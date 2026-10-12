@@ -2,13 +2,6 @@
    Helvetica Neue, navy #091d50, yellow #ffe000 buttons with navy text.
    Everything is scoped to .labs-page (Dash loads every asset on every page). */
 
-/* gotone.css locks html/body (overflow: hidden) for the full-screen map pages;
-   this page scrolls like a normal web page. */
-html:has(.labs-page),
-body:has(.labs-page) {
-    height: auto;
-    overflow: auto;
-}
 
 .labs-page {
     --labs-navy: #091d50;
@@ -18,8 +11,14 @@ body:has(.labs-page) {
     --labs-ink-2: #44506a;
     --labs-bg: #f3f5fa;
     --labs-line: #dfe4ee;
-    min-height: 100vh;
-    min-height: 100dvh;
+    /* gotone.css locks html/body (overflow: hidden) for the full-screen map
+       pages, so this page is its own scroller, exactly the screen's height.
+       (Unlocking body with html:has(.labs-page) failed in some browsers: the
+       page swaps in after load and :has wasn't re-checked.) */
+    height: 100vh;
+    height: 100dvh;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
     display: flex;
     flex-direction: column;
     background: var(--labs-bg);
@@ -77,7 +76,7 @@ body:has(.labs-page) {
     line-height: 1.08;
     letter-spacing: -0.015em;
     margin: 0 0 14px;
-    max-width: 18ch;
+    max-width: 21ch;
 }
 .labs-hero p {
     color: #ffffff;

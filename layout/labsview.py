@@ -82,9 +82,9 @@ def build_labs_page():
             html.Section(
                 html.Div(
                     [
-                        html.H1("Free tools for saltwater anglers"),
-                        html.P("Experiments from the GotOne team, built on NOAA and ocean-model "
-                               "data. Free to use, no sign-up, on your phone or at home."),
+                        html.H1("Try experimental tools from GotOne Labs"),
+                        html.P("Data-driven angler tools built on public data sources. Free to "
+                               "use, no sign-up required."),
                     ],
                     className="labs-wrap labs-hero-inner",
                 ),

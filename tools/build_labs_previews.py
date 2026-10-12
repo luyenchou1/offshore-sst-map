@@ -10,7 +10,8 @@ Drawn from the apps' own data so the tiles show what each tool looks like:
                 coloured by speed with the Currents page's colour ramp
   og.jpg        1200 x 630 social-share card (link previews in Facebook groups,
                 texts, forums) built from the two and gotone-wordmark.png (the
-                brand's horizontal white logotype, trimmed from GotOne/Graphics)
+                brand's horizontal white logotype from GotOne/Graphics, trimmed
+                and without its "!" - wordmark())
 
 No map tiles are baked in (Esri's terms want attribution on every use), only
 our own data. Rerun after a redesign or to refresh the SST week:
@@ -147,6 +148,31 @@ def currents_preview():
     plt.close(fig)
 
 
+LOGO_SRC = os.path.expanduser(
+    "~/Code/GotOne/Graphics/Logo Files/GotOneLogo5(Transparent_White_Logotype_Hor).png")
+
+
+def wordmark():
+    """assets/labs/gotone-wordmark.png: the brand's white horizontal logotype,
+    trimmed, without its trailing "!" (cut at the last gap between glyphs),
+    112 px tall (2x for a ~56 px header). Kept as is if the source is absent."""
+    from PIL import Image
+
+    if not os.path.exists(LOGO_SRC):
+        return
+    im = Image.open(LOGO_SRC).convert("RGBA")
+    im = im.crop(im.getbbox())
+    ink = (np.array(im)[:, :, 3] > 40).any(axis=0)
+    # Start of the last real gap between glyphs (>= 20 px; faint edge columns don't count).
+    gap = max(i for i in range(1, len(ink) - 20)
+              if ink[i - 1] and not ink[i:i + 20].any())
+    im = im.crop((0, 0, gap, im.height))
+    im = im.crop(im.getbbox())
+    h = 112
+    im = im.resize((round(im.width * h / im.height), h), Image.LANCZOS)
+    im.save(os.path.join(OUT, "gotone-wordmark.png"), optimize=True)
+
+
 def og_card():
     """1200 x 630 link-preview card: title band over the two previews."""
     from PIL import Image, ImageDraw, ImageFont
@@ -191,6 +217,7 @@ def main():
         path = cands[-1]
     day = sst_preview(path)
     currents_preview()
+    wordmark()
     og_card()
     for n in ("sst.jpg", "currents.jpg", "og.jpg"):
         print(f"assets/labs/{n}: {os.path.getsize(os.path.join(OUT, n)) / 1024:.0f} KB")
