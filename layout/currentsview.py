@@ -332,9 +332,38 @@ def build_currents_map():
     )
 
 
-def _about_body():
+def _dur(minutes):
+    """'1h 14m' / '45m' for a duration in minutes (sign dropped)."""
+    m = abs(round(minutes))
+    return f"{m // 60}h {m % 60:02d}m" if m >= 60 else f"{m}m"
+
+
+def _inlet_table(inlets):
+    """Each harbor inlet's typical timing, from tools/build_inlets.py's report."""
+    rows = []
+    for c in (inlets or {}).get("inlets", []):
+        r = c.get("report") or {}
+        if r.get("slack_after_hw_min") is None:
+            continue
+        mf = r.get("max_flood_vs_hw_min")
+        flood = "" if mf is None else f"{_dur(mf)} {'before' if mf < 0 else 'after'} high"
+        rows.append(html.Tr([
+            html.Td(c["harbor_name"]),
+            html.Td(f"{_dur(r['slack_after_hw_min'])} / {_dur(r['slack_after_lw_min'])} after"),
+            html.Td(flood),
+            html.Td(f"{max(r['peak_flood_kn'], r['peak_ebb_kn']):.1f} kn"),
+        ]))
+    if not rows:
+        return None
+    head = html.Tr([html.Th("Harbor"), html.Th("Slack after Montauk high / low"),
+                    html.Th("Strongest flood"), html.Th("Peak")])
+    return html.Table([head] + rows, className="currents-about-table")
+
+
+def _about_body(inlets=None):
     """The 'How it works' explainer. Accuracy figures come from the atlas
-    build report (tools/build_tide_atlas.py) - update them when it changes."""
+    build report (tools/build_tide_atlas.py) - update them when it changes;
+    the harbor-inlet table is built from data/inlets.json."""
     def h(text):
         return html.H6(text, className="currents-about-h")
 
@@ -351,9 +380,9 @@ def _about_body():
         ("South side of Montauk, open ocean", "Low",
          "About 30–55%. Wind and offshore currents often matter more than the tide here, "
          "so these waters are hazed on the map."),
-        ("Napeague Harbor inlet (estimate)", "Rough",
-         "Computed from the harbor's size and the inlet's shape, not measured. The timing "
-         "depends on how big the inlet is now, which storms and dredging change; until it's "
+        ("Harbor inlets (estimates)", "Rough",
+         "Computed from each harbor's size and its inlet's shape, not measured. The timing "
+         "depends on how big each inlet is now, which storms and dredging change; until it's "
          "checked on the water, allow 30–45 minutes either way on slack times."),
     ]
     return html.Div(
@@ -400,19 +429,21 @@ def _about_body():
                    className="currents-about-note"),
             h("Harbor inlets (estimates)"),
             html.P("The ocean model's mesh is too coarse to include small harbors, so the map "
-                   "can't show the strong currents in their inlets. For Napeague Harbor we "
-                   "estimate them instead. The harbor fills and drains through its one inlet "
-                   "by Lazy Point (the east inlet near Goff Point closed around 2007), and how "
-                   "hard the water runs depends on the harbor's area, the inlet's width and "
-                   "depth, and the tide outside. A narrow inlet holds the harbor's tide back, "
-                   "so slack in the inlet comes about an hour to an hour and a quarter after "
-                   "high or low water at Montauk (longer on big spring tides), and the current "
-                   "runs hardest about an hour and a half to two hours before high or low "
-                   "water. The same method puts the tide inside Lake Montauk within about 5 "
-                   "minutes of NOAA's own prediction."),
-            html.P("Speeds are averages across the inlet; the outside of the channel's bend "
-                   "runs faster. NOAA's \"Goff Point, 0.4 mile NW\" station is out in the bay "
-                   "west of Hicks Island, not in this inlet.",
+                   "can't show the currents in their inlets; the arrows at the harbor mouths "
+                   "are estimates instead. Each harbor fills and drains through its inlet, and "
+                   "how hard the water runs depends on the harbor's area, the inlet's width "
+                   "and depth, and the tide outside. A short, wide inlet lets the harbor keep "
+                   "up, so slack comes within minutes of high and low water just outside it "
+                   "(which itself runs later than Montauk the farther west you go). A long, "
+                   "narrow channel holds the harbor's tide back, so slack comes later still. "
+                   "The same method puts the tide inside Lake Montauk within about 5 minutes "
+                   "of NOAA's own prediction."),
+            _inlet_table(inlets),
+            html.P("Typical timing (Sep–Oct 2026); bigger tides run later in the narrow inlets. "
+                   "Speeds are averages across each inlet; the deepest part of the channel "
+                   "runs faster. Napeague's east inlet near Goff Point closed around 2007, and "
+                   "NOAA's \"Goff Point, 0.4 mile NW\" station is out in the bay west of Hicks "
+                   "Island, not in the harbor's inlet.",
                    className="currents-about-note"),
             h("Sources"),
             html.Ul([
@@ -477,7 +508,7 @@ def build_currents_page():
                     dbc.Modal(
                         [
                             dbc.ModalHeader(dbc.ModalTitle("About GotOne Currents")),
-                            dbc.ModalBody(_about_body()),
+                            dbc.ModalBody(_about_body(inlets)),
                             dbc.ModalFooter(dbc.Button("Got it", id="currents-about-close",
                                                        color="primary", size="sm")),
                         ],

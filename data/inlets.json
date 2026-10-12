@@ -1,7 +1,7 @@
 {
  "version": 1,
- "built_at": "2026-10-11T20:14:04Z",
- "method": "Pond-and-inlet model (Keulegan 1967; King 1974) driven by NOAA's Montauk high/low predictions: the harbor fills and drains through its inlet, the flow limited by the inlet's size and friction. Built by tools/build_inlets.py; run in the browser by assets/currents.js.",
+ "built_at": "2026-10-12T01:17:57Z",
+ "method": "Pond-and-inlet model (Keulegan 1967; King 1974; inertia as in Mehta & Ozsoy 1978) driven by NOAA's Montauk high/low predictions: the harbor fills and drains through its inlet, the flow limited by the inlet's size, friction and the water's momentum. Built by tools/build_inlets.py; run in the browser by assets/currents.js.",
  "constants": {
   "g": 9.81,
   "dt_s": 60.0,
@@ -15,40 +15,234 @@
   "slr_m": 0.123,
   "slr_note": "NOAA's predictions are referenced to the 1983-2001 epoch; Montauk's sea level has risen ~0.123 m since (3.61 mm/yr)."
  },
- "validation": {
-  "lake_montauk": {
-   "throat_m2": 378,
-   "width_m": 142,
-   "harbor_km2": 4.36,
+ "checks": {
+  "est-lakemontauk": {
    "model_lag_hw_min": 0,
-   "model_lag_lw_min": 2,
+   "model_lag_lw_min": 1,
    "noaa_lag_hw_min": 5.0,
    "noaa_lag_lw_min": -5.0,
    "model_range_ratio": 1.007,
-   "noaa_range_ratio": 1.08,
-   "model_peak_kn": [
-    1.25,
-    1.12
-   ]
+   "noaa_range_ratio": 1.08
   }
  },
  "inlets": [
+  {
+   "id": "est-lakemontauk",
+   "label": "Lake Montauk inlet",
+   "harbor_name": "Lake Montauk",
+   "name": "Lake Montauk's jettied entrance channel (Montauk Harbor)",
+   "notes": "Estimate from the harbor's size, the inlet's shape and the tide outside; not a NOAA prediction. Speeds are averages across the inlet; the deepest part of the channel runs faster.",
+   "lat": 41.07788,
+   "lon": -71.93804,
+   "flood_dir": 168,
+   "ebb_dir": 348,
+   "outside": {
+    "hw_min": 2,
+    "lw_min": 3,
+    "ratio": 0.922,
+    "source": "NOAA station 8510502's predicted high and low waters (vs Montauk 8510560)"
+   },
+   "throat": {
+    "length_m": 400.0,
+    "source": "NOAA NCEI 3 m DEM across the jetty channel; the dredged channel is deep enough for lidar to see it",
+    "area_m2": 395.5,
+    "width_m": 142.8,
+    "manning_n": 0.025,
+    "k_loss": 1.1,
+    "dem_area_m2": 395.5
+   },
+   "harbor": {
+    "levels_m": [
+     -1.2,
+     -1.15,
+     -1.1,
+     -1.05,
+     -1.0,
+     -0.95,
+     -0.9,
+     -0.85,
+     -0.8,
+     -0.75,
+     -0.7,
+     -0.65,
+     -0.6,
+     -0.55,
+     -0.5,
+     -0.45,
+     -0.4,
+     -0.35,
+     -0.3,
+     -0.25,
+     -0.2,
+     -0.15,
+     -0.1,
+     -0.05,
+     0.0,
+     0.05,
+     0.1,
+     0.15,
+     0.2,
+     0.25,
+     0.3,
+     0.35,
+     0.4,
+     0.45,
+     0.5,
+     0.55,
+     0.6,
+     0.65,
+     0.7,
+     0.75,
+     0.8
+    ],
+    "area_m2": [
+     3550700.0,
+     3582500.0,
+     3619100.0,
+     3669000.0,
+     3714200.0,
+     3763200.0,
+     3814600.0,
+     3871200.0,
+     3923100.0,
+     3994800.0,
+     4059000.0,
+     4119000.0,
+     4159400.0,
+     4192400.0,
+     4220700.0,
+     4250800.0,
+     4279500.0,
+     4303200.0,
+     4320400.0,
+     4334000.0,
+     4344700.0,
+     4354100.0,
+     4361800.0,
+     4368700.0,
+     4375700.0,
+     4382200.0,
+     4389100.0,
+     4395700.0,
+     4402900.0,
+     4410300.0,
+     4422600.0,
+     4433200.0,
+     4443900.0,
+     4457000.0,
+     4473700.0,
+     4486900.0,
+     4499900.0,
+     4499900.0,
+     4499900.0,
+     4499900.0,
+     4499900.0
+    ],
+    "source": "NOAA NCEI 1/9 arc-second topobathy DEM (CUDEM), NAVD88"
+   },
+   "confidence": "Rough",
+   "report": {
+    "slack_after_hw_min": 3,
+    "slack_after_lw_min": 5,
+    "max_flood_vs_hw_min": -164,
+    "max_ebb_vs_lw_min": -166,
+    "harbor_hw_after_montauk_min": 2,
+    "harbor_lw_after_montauk_min": 4,
+    "harbor_range_vs_bay": 1.007,
+    "peak_flood_kn": 1.2,
+    "peak_ebb_kn": 1.09
+   },
+   "selftest": {
+    "day": "2026-10-11",
+    "points": [
+     {
+      "t": 1791691200.0,
+      "kn": -0.6747,
+      "harbor_ft": 1.6127
+     },
+     {
+      "t": 1791698400.0,
+      "kn": -0.7403,
+      "harbor_ft": 0.7845
+     },
+     {
+      "t": 1791705600.0,
+      "kn": -0.0259,
+      "harbor_ft": 0.3199
+     },
+     {
+      "t": 1791712800.0,
+      "kn": 0.9638,
+      "harbor_ft": 0.8535
+     },
+     {
+      "t": 1791720000.0,
+      "kn": 1.032,
+      "harbor_ft": 2.1012
+     },
+     {
+      "t": 1791727200.0,
+      "kn": -0.1023,
+      "harbor_ft": 2.753
+     },
+     {
+      "t": 1791734400.0,
+      "kn": -0.7447,
+      "harbor_ft": 2.228
+     },
+     {
+      "t": 1791741600.0,
+      "kn": -1.0315,
+      "harbor_ft": 1.1584
+     },
+     {
+      "t": 1791748800.0,
+      "kn": -0.5408,
+      "harbor_ft": 0.2615
+     },
+     {
+      "t": 1791756000.0,
+      "kn": 0.5951,
+      "harbor_ft": 0.3477
+     },
+     {
+      "t": 1791763200.0,
+      "kn": 0.9911,
+      "harbor_ft": 1.2802
+     },
+     {
+      "t": 1791770400.0,
+      "kn": 0.1698,
+      "harbor_ft": 2.0556
+     },
+     {
+      "t": 1791777600.0,
+      "kn": -0.4824,
+      "harbor_ft": 1.7976
+     }
+    ]
+   },
+   "check": {
+    "inside": "8510448",
+    "entrance": "8510502"
+   }
+  },
   {
    "id": "est-napeague",
    "label": "Napeague Harbor inlet",
    "harbor_name": "Napeague Harbor",
    "name": "Napeague Harbor's west inlet, between Hicks Island and Lazy Point",
+   "notes": "Estimate from the harbor's size, the inlet's shape and the tide outside; not a NOAA prediction. Speeds are averages across the inlet; the deepest part of the channel runs faster. The outside (south side) of the channel's bend runs fastest. The inlet has reportedly widened since 2012, which would make slack come sooner.",
    "lat": 41.0121,
    "lon": -72.0614,
    "flood_dir": 105,
    "ebb_dir": 285,
    "outside": {
-    "hw_min": 29,
+    "hw_min": 30,
     "lw_min": 17,
-    "ratio": 1.08,
-    "source": "NOAA Montauk 8510560 high/low predictions, shifted 44% of the way toward NOAA Threemile Harbor entrance 8511171."
+    "ratio": 1.089,
+    "source": "interpolated 46% of the way from NOAA 8510560 to 8511171 by distance (timing and range of their predicted high and low waters)"
    },
-   "notes": "Estimate from the harbor's size, the inlet's 2012 dimensions and the tide outside; not a NOAA prediction. Speeds are averages across the inlet: the outside (south side) of the channel's bend runs faster. The inlet has reportedly widened since 2012, which would make slack come sooner.",
    "throat": {
     "area_m2": 160.0,
     "width_m": 55.0,
@@ -56,7 +250,7 @@
     "source": "2012 bathymetric survey for the Peconic Estuary Program (Napeague Harbor Water Circulation Enhancement): minimum cross-section 1,720 sq ft; a 2,200 ft long, 180 ft wide channel. The east inlet near Goff Point closed around 2007, so all of the harbor's water now moves through this one.",
     "manning_n": 0.025,
     "k_loss": 1.1,
-    "dem_area_m2": 21.5
+    "dem_area_m2": 28.8
    },
    "harbor": {
     "levels_m": [
@@ -149,83 +343,871 @@
    },
    "confidence": "Rough",
    "report": {
-    "slack_after_hw_min": 73,
-    "slack_after_lw_min": 66,
-    "max_flood_vs_hw_min": -89,
-    "max_ebb_vs_lw_min": -110,
-    "harbor_hw_after_montauk_min": 73,
+    "slack_after_hw_min": 74,
+    "slack_after_lw_min": 67,
+    "max_flood_vs_hw_min": -88,
+    "max_ebb_vs_lw_min": -109,
+    "harbor_hw_after_montauk_min": 74,
     "harbor_lw_after_montauk_min": 66,
-    "harbor_range_vs_bay": 0.941,
-    "peak_flood_kn": 2.38,
-    "peak_ebb_kn": 2.33
+    "harbor_range_vs_bay": 0.939,
+    "peak_flood_kn": 2.39,
+    "peak_ebb_kn": 2.35
    },
    "selftest": {
     "day": "2026-10-11",
     "points": [
      {
       "t": 1791691200.0,
-      "kn": -1.2229,
-      "harbor_ft": 1.9956
+      "kn": -1.229,
+      "harbor_ft": 2.0072
      },
      {
       "t": 1791698400.0,
-      "kn": -1.7027,
-      "harbor_ft": 1.1837
+      "kn": -1.717,
+      "harbor_ft": 1.1896
      },
      {
       "t": 1791705600.0,
-      "kn": -1.2362,
-      "harbor_ft": 0.3924
+      "kn": -1.2536,
+      "harbor_ft": 0.3902
      },
      {
       "t": 1791712800.0,
-      "kn": 1.3733,
-      "harbor_ft": 0.4289
+      "kn": 1.3758,
+      "harbor_ft": 0.4204
      },
      {
       "t": 1791720000.0,
-      "kn": 2.2652,
-      "harbor_ft": 1.4424
+      "kn": 2.2747,
+      "harbor_ft": 1.4366
      },
      {
       "t": 1791727200.0,
-      "kn": 1.7545,
-      "harbor_ft": 2.6414
+      "kn": 1.7772,
+      "harbor_ft": 2.6444
      },
      {
       "t": 1791734400.0,
-      "kn": -1.3492,
-      "harbor_ft": 2.7762
+      "kn": -1.3513,
+      "harbor_ft": 2.7942
      },
      {
       "t": 1791741600.0,
-      "kn": -2.1235,
-      "harbor_ft": 1.8366
+      "kn": -2.1402,
+      "harbor_ft": 1.8508
      },
      {
       "t": 1791748800.0,
-      "kn": -2.0191,
-      "harbor_ft": 0.7267
+      "kn": -2.0401,
+      "harbor_ft": 0.7309
      },
      {
       "t": 1791756000.0,
-      "kn": -0.1324,
-      "harbor_ft": 0.0661
+      "kn": -0.1668,
+      "harbor_ft": 0.0598
      },
      {
       "t": 1791763200.0,
-      "kn": 1.8245,
-      "harbor_ft": 0.7117
+      "kn": 1.8297,
+      "harbor_ft": 0.7028
      },
      {
       "t": 1791770400.0,
-      "kn": 1.7204,
-      "harbor_ft": 1.7521
+      "kn": 1.7368,
+      "harbor_ft": 1.7485
      },
      {
       "t": 1791777600.0,
-      "kn": -0.9039,
-      "harbor_ft": 2.1151
+      "kn": -0.8996,
+      "harbor_ft": 2.1262
+     }
+    ]
+   }
+  },
+  {
+   "id": "est-accabonac",
+   "label": "Accabonac Harbor inlet",
+   "harbor_name": "Accabonac Harbor",
+   "name": "Accabonac Harbor's inlet, between the Gerard Drive spit and Louse Point",
+   "notes": "Estimate from the harbor's size, the inlet's shape and the tide outside; not a NOAA prediction. Speeds are averages across the inlet; the deepest part of the channel runs faster.",
+   "lat": 41.02245,
+   "lon": -72.1375,
+   "flood_dir": 261,
+   "ebb_dir": 81,
+   "outside": {
+    "hw_min": 50,
+    "lw_min": 29,
+    "ratio": 1.148,
+    "source": "interpolated 77% of the way from NOAA 8510560 to 8511171 by distance (timing and range of their predicted high and low waters)"
+   },
+   "throat": {
+    "length_m": 300.0,
+    "source": "NOAA NCEI 3 m DEM across the gap (lidar, ~2014)",
+    "area_m2": 199.1,
+    "width_m": 229.6,
+    "manning_n": 0.025,
+    "k_loss": 1.1,
+    "dem_area_m2": 199.1
+   },
+   "harbor": {
+    "levels_m": [
+     -1.2,
+     -1.15,
+     -1.1,
+     -1.05,
+     -1.0,
+     -0.95,
+     -0.9,
+     -0.85,
+     -0.8,
+     -0.75,
+     -0.7,
+     -0.65,
+     -0.6,
+     -0.55,
+     -0.5,
+     -0.45,
+     -0.4,
+     -0.35,
+     -0.3,
+     -0.25,
+     -0.2,
+     -0.15,
+     -0.1,
+     -0.05,
+     0.0,
+     0.05,
+     0.1,
+     0.15,
+     0.2,
+     0.25,
+     0.3,
+     0.35,
+     0.4,
+     0.45,
+     0.5,
+     0.55,
+     0.6,
+     0.65,
+     0.7,
+     0.75,
+     0.8
+    ],
+    "area_m2": [
+     243000.0,
+     243000.0,
+     243000.0,
+     243000.0,
+     243000.0,
+     281200.0,
+     325800.0,
+     393800.0,
+     432800.0,
+     468800.0,
+     745500.0,
+     807600.0,
+     1028800.0,
+     1067200.0,
+     1123500.0,
+     1162400.0,
+     1189800.0,
+     1210500.0,
+     1229500.0,
+     1244900.0,
+     1257100.0,
+     1268500.0,
+     1279900.0,
+     1289800.0,
+     1300300.0,
+     1312100.0,
+     1327100.0,
+     1347000.0,
+     1369100.0,
+     1392900.0,
+     1416700.0,
+     1452000.0,
+     1511700.0,
+     1650600.0,
+     1874900.0,
+     2017600.0,
+     2101600.0,
+     2154600.0,
+     2202000.0,
+     2253800.0,
+     2308500.0
+    ],
+    "source": "NOAA NCEI 1/9 arc-second topobathy DEM (CUDEM), NAVD88"
+   },
+   "confidence": "Rough",
+   "report": {
+    "slack_after_hw_min": 51,
+    "slack_after_lw_min": 41,
+    "max_flood_vs_hw_min": -151,
+    "max_ebb_vs_lw_min": -105,
+    "harbor_hw_after_montauk_min": 50,
+    "harbor_lw_after_montauk_min": 40,
+    "harbor_range_vs_bay": 0.991,
+    "peak_flood_kn": 0.95,
+    "peak_ebb_kn": 0.82
+   },
+   "selftest": {
+    "day": "2026-10-11",
+    "points": [
+     {
+      "t": 1791691200.0,
+      "kn": -0.3715,
+      "harbor_ft": 1.9965
+     },
+     {
+      "t": 1791698400.0,
+      "kn": -0.6126,
+      "harbor_ft": 0.9886
+     },
+     {
+      "t": 1791705600.0,
+      "kn": -0.384,
+      "harbor_ft": 0.1949
+     },
+     {
+      "t": 1791712800.0,
+      "kn": 0.6075,
+      "harbor_ft": 0.4174
+     },
+     {
+      "t": 1791720000.0,
+      "kn": 0.7705,
+      "harbor_ft": 1.8426
+     },
+     {
+      "t": 1791727200.0,
+      "kn": 0.299,
+      "harbor_ft": 3.0288
+     },
+     {
+      "t": 1791734400.0,
+      "kn": -0.4354,
+      "harbor_ft": 2.8141
+     },
+     {
+      "t": 1791741600.0,
+      "kn": -0.7167,
+      "harbor_ft": 1.5525
+     },
+     {
+      "t": 1791748800.0,
+      "kn": -0.7035,
+      "harbor_ft": 0.3457
+     },
+     {
+      "t": 1791756000.0,
+      "kn": 0.3231,
+      "harbor_ft": -0.0427
+     },
+     {
+      "t": 1791763200.0,
+      "kn": 0.814,
+      "harbor_ft": 0.8218
+     },
+     {
+      "t": 1791770400.0,
+      "kn": 0.3414,
+      "harbor_ft": 2.0597
+     },
+     {
+      "t": 1791777600.0,
+      "kn": -0.2095,
+      "harbor_ft": 2.1405
+     }
+    ]
+   }
+  },
+  {
+   "id": "est-threemile",
+   "label": "Three Mile Harbor inlet",
+   "harbor_name": "Three Mile Harbor",
+   "name": "Three Mile Harbor's jettied entrance channel",
+   "notes": "Estimate from the harbor's size, the inlet's shape and the tide outside; not a NOAA prediction. Speeds are averages across the inlet; the deepest part of the channel runs faster.",
+   "lat": 41.03328,
+   "lon": -72.18748,
+   "flood_dir": 151,
+   "ebb_dir": 331,
+   "outside": {
+    "hw_min": 65,
+    "lw_min": 38,
+    "ratio": 1.192,
+    "source": "NOAA station 8511171's predicted high and low waters (vs Montauk 8510560)"
+   },
+   "throat": {
+    "length_m": 450.0,
+    "source": "NOAA NCEI 3 m DEM across the jetty channel (lidar, ~2014); it shows the channel deeper than the 6 ft charted dredge depth",
+    "area_m2": 163.3,
+    "width_m": 83.3,
+    "manning_n": 0.025,
+    "k_loss": 1.1,
+    "dem_area_m2": 163.3
+   },
+   "harbor": {
+    "levels_m": [
+     -1.2,
+     -1.15,
+     -1.1,
+     -1.05,
+     -1.0,
+     -0.95,
+     -0.9,
+     -0.85,
+     -0.8,
+     -0.75,
+     -0.7,
+     -0.65,
+     -0.6,
+     -0.55,
+     -0.5,
+     -0.45,
+     -0.4,
+     -0.35,
+     -0.3,
+     -0.25,
+     -0.2,
+     -0.15,
+     -0.1,
+     -0.05,
+     0.0,
+     0.05,
+     0.1,
+     0.15,
+     0.2,
+     0.25,
+     0.3,
+     0.35,
+     0.4,
+     0.45,
+     0.5,
+     0.55,
+     0.6,
+     0.65,
+     0.7,
+     0.75,
+     0.8
+    ],
+    "area_m2": [
+     2832100.0,
+     2890500.0,
+     2993100.0,
+     3136800.0,
+     3265200.0,
+     3331700.0,
+     3402100.0,
+     3462100.0,
+     3516700.0,
+     3634600.0,
+     3690000.0,
+     3745200.0,
+     3791700.0,
+     3826900.0,
+     3859700.0,
+     3990700.0,
+     4022500.0,
+     4063200.0,
+     4093000.0,
+     4116900.0,
+     4169800.0,
+     4195800.0,
+     4235000.0,
+     4274200.0,
+     4290700.0,
+     4307800.0,
+     4326500.0,
+     4343200.0,
+     4362100.0,
+     4385300.0,
+     4406500.0,
+     4431000.0,
+     4461000.0,
+     4494100.0,
+     4524500.0,
+     4559900.0,
+     4584200.0,
+     4606300.0,
+     4625100.0,
+     4643500.0,
+     4663500.0
+    ],
+    "source": "NOAA NCEI 1/9 arc-second topobathy DEM (CUDEM), NAVD88"
+   },
+   "confidence": "Rough",
+   "report": {
+    "slack_after_hw_min": 115,
+    "slack_after_lw_min": 112,
+    "max_flood_vs_hw_min": -46,
+    "max_ebb_vs_lw_min": -67,
+    "harbor_hw_after_montauk_min": 114,
+    "harbor_lw_after_montauk_min": 112,
+    "harbor_range_vs_bay": 0.869,
+    "peak_flood_kn": 2.65,
+    "peak_ebb_kn": 2.58
+   },
+   "selftest": {
+    "day": "2026-10-11",
+    "points": [
+     {
+      "t": 1791691200.0,
+      "kn": -1.0313,
+      "harbor_ft": 2.2487
+     },
+     {
+      "t": 1791698400.0,
+      "kn": -1.8816,
+      "harbor_ft": 1.511
+     },
+     {
+      "t": 1791705600.0,
+      "kn": -1.8193,
+      "harbor_ft": 0.6721
+     },
+     {
+      "t": 1791712800.0,
+      "kn": 0.8617,
+      "harbor_ft": 0.2618
+     },
+     {
+      "t": 1791720000.0,
+      "kn": 2.3267,
+      "harbor_ft": 1.0336
+     },
+     {
+      "t": 1791727200.0,
+      "kn": 2.3959,
+      "harbor_ft": 2.329
+     },
+     {
+      "t": 1791734400.0,
+      "kn": -0.7952,
+      "harbor_ft": 3.0825
+     },
+     {
+      "t": 1791741600.0,
+      "kn": -2.1419,
+      "harbor_ft": 2.2356
+     },
+     {
+      "t": 1791748800.0,
+      "kn": -2.4419,
+      "harbor_ft": 1.1469
+     },
+     {
+      "t": 1791756000.0,
+      "kn": -1.4914,
+      "harbor_ft": 0.2981
+     },
+     {
+      "t": 1791763200.0,
+      "kn": 1.647,
+      "harbor_ft": 0.42
+     },
+     {
+      "t": 1791770400.0,
+      "kn": 2.1746,
+      "harbor_ft": 1.3648
+     },
+     {
+      "t": 1791777600.0,
+      "kn": 0.6364,
+      "harbor_ft": 2.2046
+     }
+    ]
+   }
+  },
+  {
+   "id": "est-northwest",
+   "label": "Northwest Creek inlet",
+   "harbor_name": "Northwest Creek",
+   "name": "Northwest Creek's inlet from Northwest Harbor",
+   "notes": "Estimate from the harbor's size, the inlet's shape and the tide outside; not a NOAA prediction. Speeds are averages across the inlet; the deepest part of the channel runs faster.",
+   "lat": 41.01163,
+   "lon": -72.25252,
+   "flood_dir": 203,
+   "ebb_dir": 23,
+   "outside": {
+    "hw_min": 83,
+    "lw_min": 60,
+    "ratio": 1.181,
+    "source": "interpolated 61% of the way from NOAA 8511171 to 8511629 by distance (timing and range of their predicted high and low waters)"
+   },
+   "throat": {
+    "length_m": 150.0,
+    "source": "NOAA NCEI 3 m DEM for the width; depth from NOAA chart soundings (2.4 m below MLLW just inside; 6 ft dredged)",
+    "area_m2": 84.1,
+    "width_m": 56.1,
+    "manning_n": 0.025,
+    "k_loss": 1.1,
+    "dem_area_m2": 26.6
+   },
+   "harbor": {
+    "levels_m": [
+     -1.2,
+     -1.15,
+     -1.1,
+     -1.05,
+     -1.0,
+     -0.95,
+     -0.9,
+     -0.85,
+     -0.8,
+     -0.75,
+     -0.7,
+     -0.65,
+     -0.6,
+     -0.55,
+     -0.5,
+     -0.45,
+     -0.4,
+     -0.35,
+     -0.3,
+     -0.25,
+     -0.2,
+     -0.15,
+     -0.1,
+     -0.05,
+     0.0,
+     0.05,
+     0.1,
+     0.15,
+     0.2,
+     0.25,
+     0.3,
+     0.35,
+     0.4,
+     0.45,
+     0.5,
+     0.55,
+     0.6,
+     0.65,
+     0.7,
+     0.75,
+     0.8
+    ],
+    "area_m2": [
+     188900.0,
+     188900.0,
+     188900.0,
+     188900.0,
+     188900.0,
+     188900.0,
+     216100.0,
+     238400.0,
+     263100.0,
+     327500.0,
+     422200.0,
+     455400.0,
+     481100.0,
+     499900.0,
+     517000.0,
+     534800.0,
+     563800.0,
+     577500.0,
+     596400.0,
+     608000.0,
+     620400.0,
+     627200.0,
+     635000.0,
+     645300.0,
+     653000.0,
+     662600.0,
+     673100.0,
+     687900.0,
+     705300.0,
+     724900.0,
+     753500.0,
+     801400.0,
+     898600.0,
+     1036700.0,
+     1164500.0,
+     1240000.0,
+     1290600.0,
+     1334100.0,
+     1375400.0,
+     1412500.0,
+     1412500.0
+    ],
+    "source": "NOAA NCEI 1/9 arc-second topobathy DEM (CUDEM), NAVD88"
+   },
+   "confidence": "Rough",
+   "report": {
+    "slack_after_hw_min": 84,
+    "slack_after_lw_min": 61,
+    "max_flood_vs_hw_min": -108,
+    "max_ebb_vs_lw_min": -102,
+    "harbor_hw_after_montauk_min": 83,
+    "harbor_lw_after_montauk_min": 60,
+    "harbor_range_vs_bay": 1.001,
+    "peak_flood_kn": 1.04,
+    "peak_ebb_kn": 1.1
+   },
+   "selftest": {
+    "day": "2026-10-11",
+    "points": [
+     {
+      "t": 1791691200.0,
+      "kn": -0.3883,
+      "harbor_ft": 2.2159
+     },
+     {
+      "t": 1791698400.0,
+      "kn": -0.7544,
+      "harbor_ft": 1.2397
+     },
+     {
+      "t": 1791705600.0,
+      "kn": -0.4856,
+      "harbor_ft": 0.2402
+     },
+     {
+      "t": 1791712800.0,
+      "kn": 0.4991,
+      "harbor_ft": 0.2503
+     },
+     {
+      "t": 1791720000.0,
+      "kn": 0.9854,
+      "harbor_ft": 1.4727
+     },
+     {
+      "t": 1791727200.0,
+      "kn": 0.8379,
+      "harbor_ft": 2.8439
+     },
+     {
+      "t": 1791734400.0,
+      "kn": -0.4744,
+      "harbor_ft": 3.0631
+     },
+     {
+      "t": 1791741600.0,
+      "kn": -0.9423,
+      "harbor_ft": 1.943
+     },
+     {
+      "t": 1791748800.0,
+      "kn": -0.8939,
+      "harbor_ft": 0.4719
+     },
+     {
+      "t": 1791756000.0,
+      "kn": 0.1464,
+      "harbor_ft": -0.1271
+     },
+     {
+      "t": 1791763200.0,
+      "kn": 0.823,
+      "harbor_ft": 0.593
+     },
+     {
+      "t": 1791770400.0,
+      "kn": 0.6415,
+      "harbor_ft": 1.8406
+     },
+     {
+      "t": 1791777600.0,
+      "kn": -0.13,
+      "harbor_ft": 2.262
+     }
+    ]
+   }
+  },
+  {
+   "id": "est-sagcove",
+   "label": "Sag Harbor Cove channel",
+   "harbor_name": "Sag Harbor Cove",
+   "name": "The channel under the Sag Harbor\u2013North Haven bridge into Sag Harbor Cove",
+   "notes": "Estimate from the harbor's size, the inlet's shape and the tide outside; not a NOAA prediction. Speeds are averages across the inlet; the deepest part of the channel runs faster.",
+   "lat": 41.0035,
+   "lon": -72.29881,
+   "flood_dir": 216,
+   "ebb_dir": 36,
+   "outside": {
+    "hw_min": 95,
+    "lw_min": 75,
+    "ratio": 1.173,
+    "source": "NOAA station 8511629's predicted high and low waters (vs Montauk 8510560)"
+   },
+   "throat": {
+    "length_m": 200.0,
+    "source": "NOAA NCEI 3 m DEM for the width; depth from NOAA chart soundings by the bridge (1.8\u20132.7 m below MLLW)",
+    "area_m2": 206.2,
+    "width_m": 114.5,
+    "manning_n": 0.025,
+    "k_loss": 1.1,
+    "dem_area_m2": 106.0
+   },
+   "harbor": {
+    "levels_m": [
+     -1.2,
+     -1.15,
+     -1.1,
+     -1.05,
+     -1.0,
+     -0.95,
+     -0.9,
+     -0.85,
+     -0.8,
+     -0.75,
+     -0.7,
+     -0.65,
+     -0.6,
+     -0.55,
+     -0.5,
+     -0.45,
+     -0.4,
+     -0.35,
+     -0.3,
+     -0.25,
+     -0.2,
+     -0.15,
+     -0.1,
+     -0.05,
+     0.0,
+     0.05,
+     0.1,
+     0.15,
+     0.2,
+     0.25,
+     0.3,
+     0.35,
+     0.4,
+     0.45,
+     0.5,
+     0.55,
+     0.6,
+     0.65,
+     0.7,
+     0.75,
+     0.8
+    ],
+    "area_m2": [
+     1079800.0,
+     1142800.0,
+     1228400.0,
+     1274600.0,
+     1313000.0,
+     1349100.0,
+     1390600.0,
+     1453500.0,
+     1497700.0,
+     1628400.0,
+     1678300.0,
+     1702900.0,
+     1724300.0,
+     1742700.0,
+     1759500.0,
+     1777400.0,
+     1791600.0,
+     1813000.0,
+     1824700.0,
+     1834700.0,
+     1843900.0,
+     1852800.0,
+     1860300.0,
+     1868300.0,
+     1877400.0,
+     1883800.0,
+     1889800.0,
+     1897700.0,
+     1904100.0,
+     1910600.0,
+     1921100.0,
+     1930100.0,
+     1939900.0,
+     1953200.0,
+     1968100.0,
+     1979700.0,
+     1988800.0,
+     1997800.0,
+     2007400.0,
+     2018100.0,
+     2028200.0
+    ],
+    "source": "NOAA NCEI 1/9 arc-second topobathy DEM (CUDEM), NAVD88"
+   },
+   "confidence": "Rough",
+   "report": {
+    "slack_after_hw_min": 96,
+    "slack_after_lw_min": 76,
+    "max_flood_vs_hw_min": -94,
+    "max_ebb_vs_lw_min": -77,
+    "harbor_hw_after_montauk_min": 95,
+    "harbor_lw_after_montauk_min": 76,
+    "harbor_range_vs_bay": 1.001,
+    "peak_flood_kn": 1.21,
+    "peak_ebb_kn": 1.19
+   },
+   "selftest": {
+    "day": "2026-10-11",
+    "points": [
+     {
+      "t": 1791691200.0,
+      "kn": -0.3286,
+      "harbor_ft": 2.2692
+     },
+     {
+      "t": 1791698400.0,
+      "kn": -0.8294,
+      "harbor_ft": 1.3852
+     },
+     {
+      "t": 1791705600.0,
+      "kn": -0.681,
+      "harbor_ft": 0.3468
+     },
+     {
+      "t": 1791712800.0,
+      "kn": 0.4382,
+      "harbor_ft": 0.177
+     },
+     {
+      "t": 1791720000.0,
+      "kn": 1.1409,
+      "harbor_ft": 1.2575
+     },
+     {
+      "t": 1791727200.0,
+      "kn": 0.7035,
+      "harbor_ft": 2.7506
+     },
+     {
+      "t": 1791734400.0,
+      "kn": -0.2491,
+      "harbor_ft": 3.0928
+     },
+     {
+      "t": 1791741600.0,
+      "kn": -0.9376,
+      "harbor_ft": 2.1091
+     },
+     {
+      "t": 1791748800.0,
+      "kn": -1.0882,
+      "harbor_ft": 0.6596
+     },
+     {
+      "t": 1791756000.0,
+      "kn": -0.0106,
+      "harbor_ft": -0.14
+     },
+     {
+      "t": 1791763200.0,
+      "kn": 0.9018,
+      "harbor_ft": 0.4419
+     },
+     {
+      "t": 1791770400.0,
+      "kn": 0.8248,
+      "harbor_ft": 1.7022
+     },
+     {
+      "t": 1791777600.0,
+      "kn": -0.0857,
+      "harbor_ft": 2.2727
      }
     ]
    }

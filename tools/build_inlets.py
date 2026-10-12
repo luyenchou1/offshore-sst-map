@@ -16,14 +16,19 @@ against friction.
 Momentum matters: the water keeps running after the levels even out, which
 puts slack at Napeague (670 m channel) ~13 min later than friction alone.
 
-Inputs per harbor:
+Harbors: Lake Montauk, Napeague, Accabonac, Three Mile Harbor, Northwest
+Creek, Sag Harbor Cove (INLETS below). Inputs per harbor:
   * harbor water area at each level: NOAA NCEI 1/9" (~3 m) topobathy DEM,
     flood-filled from a point inside the harbor with the inlet cut off;
-  * inlet cross-section, width and channel length: a survey where one exists
-    (lidar misses the channel in fast, turbid inlets: at Napeague the DEM gave
-    21 m2 where the 2012 survey measured 160 m2);
-  * the bay tide outside: NOAA's Montauk (8510560) high/lows with time
-    offsets and a range ratio toward the nearest subordinate station.
+  * inlet cross-section, width and channel length: a survey where one exists,
+    else the DEM across the inlet, floored by NOAA chart depths where lidar
+    misses the channel (at Napeague the DEM gave 21 m2 where the 2012 survey
+    measured 160 m2; at Northwest Creek and Sag Harbor Cove the charts show
+    channels 1-2 m deeper than the DEM);
+  * the bay tide outside: NOAA's Montauk (8510560) high/lows with the time
+    offsets and range ratio of the nearest NOAA station (Threemile Harbor
+    entrance, Montauk Harbor entrance, Sag Harbor), interpolated by distance
+    between two stations where none is at the inlet.
 
 The page runs the same model in the browser (assets/currents.js) from the
 Montauk high/lows it already has, so every view works with no extra data or
@@ -71,18 +76,31 @@ MANNING_N = 0.025                         # sandy inlet channel
 K_LOSS = 1.1                              # entrance (~0.1) + exit (~1.0) losses
 LEVELS = [round(-1.2 + 0.05 * i, 2) for i in range(41)]     # NAVD88 m
 
+NOTE = ("Estimate from the harbor's size, the inlet's shape and the tide outside; not a NOAA "
+        "prediction. Speeds are averages across the inlet; the deepest part of the channel "
+        "runs faster.")
+
+# Per harbor: the DEM tile, a point inside the harbor ("seed"), a line across
+# the inlet's narrowest point from land to land ("cut"), the inlet geometry
+# and the bay tide outside. Throat geometry comes from a survey ("area_m2" /
+# "width_m"), or from the DEM along the cut ("dem": True), floored by charted
+# depths where lidar misses the channel ("min_depth_m": mean depth below MSL).
+# The bay tide outside is a NOAA station's predicted high/lows ("station"), or
+# Montauk's shifted part of the way toward one, by straight-line distance
+# ("between": (station A, station B)). Flood / ebb directions default to
+# square across the cut, flood toward the seed; the marker sits at the cut's
+# deepest point.
 INLETS = [
     {
         "id": "est-napeague",
         "label": "Napeague Harbor inlet",
         "harbor_name": "Napeague Harbor",
         "name": "Napeague Harbor's west inlet, between Hicks Island and Lazy Point",
-        "show": True,
         "lat": 41.0121, "lon": -72.0614,          # the throat
-        "flood_dir": 105, "ebb_dir": 285,         # direction of travel through it
-        "dem_bbox": (-72.100, 40.990, -72.020, 41.045),       # W, S, E, N
-        "seed": (41.0100, -72.0500),              # inside the harbor
-        "cut": ((41.01421, -72.06162), (41.01063, -72.06091)),  # land to land across it
+        "flood_dir": 105, "ebb_dir": 285,         # the channel bends: set by hand
+        "dem": "est-napeague", "dem_bbox": (-72.100, 40.990, -72.020, 41.045),  # W, S, E, N
+        "seed": (41.0100, -72.0500),
+        "cut": ((41.01421, -72.06162), (41.01063, -72.06091)),
         "throat": {
             "area_m2": 160.0, "width_m": 55.0, "length_m": 670.0,
             "source": ("2012 bathymetric survey for the Peconic Estuary Program (Napeague "
@@ -91,34 +109,93 @@ INLETS = [
                        "Point closed around 2007, so all of the harbor's water now moves "
                        "through this one."),
         },
-        # Napeague Bay lies 44% of the way (along the shore) from Fort Pond Bay
-        # to NOAA's Threemile Harbor entrance station (8511171: high water +65 min,
-        # low water +39 min, range x1.18 vs Montauk). NECOFS agrees: its M2 tide
-        # off the inlet runs ~+20 min, scaled by how it does at Threemile.
-        "outside": {"hw_min": 29, "lw_min": 17, "ratio": 1.08,
-                    "source": ("NOAA Montauk 8510560 high/low predictions, shifted 44% of "
-                               "the way toward NOAA Threemile Harbor entrance 8511171.")},
-        "notes": ("Estimate from the harbor's size, the inlet's 2012 dimensions and the tide "
-                  "outside; not a NOAA prediction. Speeds are averages across the inlet: the "
-                  "outside (south side) of the channel's bend runs faster. The inlet has "
-                  "reportedly widened since 2012, which would make slack come sooner."),
+        "outside": {"between": ("8510560", "8511171")},
+        "notes": NOTE + (" The outside (south side) of the channel's bend runs fastest. The "
+                         "inlet has reportedly widened since 2012, which would make slack "
+                         "come sooner."),
         # NOAA's ACT2471 "Goff Point, 0.4 mile NW of" is out in the bay at the
         # head of the deep channel west of Hicks Island, not in this inlet.
     },
+    {
+        "id": "est-accabonac",
+        "label": "Accabonac Harbor inlet",
+        "harbor_name": "Accabonac Harbor",
+        "name": "Accabonac Harbor's inlet, between the Gerard Drive spit and Louse Point",
+        "dem": "accabonac", "dem_bbox": (-72.160, 41.010, -72.115, 41.065),
+        "seed": (41.0320, -72.1400),
+        "cut": ((41.02418, -72.13785), (41.02208, -72.13742)),
+        "throat": {"dem": True, "length_m": 300.0,
+                   "source": "NOAA NCEI 3 m DEM across the gap (lidar, ~2014)"},
+        "outside": {"between": ("8510560", "8511171")},
+        "notes": NOTE,
+    },
+    {
+        "id": "est-threemile",
+        "label": "Three Mile Harbor inlet",
+        "harbor_name": "Three Mile Harbor",
+        "name": "Three Mile Harbor's jettied entrance channel",
+        "dem": "threemile", "dem_bbox": (-72.215, 40.995, -72.165, 41.045),
+        "seed": (41.0150, -72.1950),
+        "cut": ((41.0331, -72.18792), (41.03514, -72.18304)),
+        # The narrow jetty reach is ~450 m; past it the channel runs on as a
+        # lane through the harbor's shallow north end, not a constriction.
+        "throat": {"dem": True, "length_m": 450.0,
+                   "source": ("NOAA NCEI 3 m DEM across the jetty channel (lidar, ~2014); "
+                              "it shows the channel deeper than the 6 ft charted dredge depth")},
+        "outside": {"station": "8511171"},
+        "notes": NOTE,
+    },
+    {
+        "id": "est-lakemontauk",
+        "label": "Lake Montauk inlet",
+        "harbor_name": "Lake Montauk",
+        "name": "Lake Montauk's jettied entrance channel (Montauk Harbor)",
+        "dem": "lake-montauk", "dem_bbox": (-71.960, 41.035, -71.905, 41.085),
+        "seed": (41.0600, -71.9250),
+        "cut": ((41.07779, -71.93863), (41.07835, -71.93498)),
+        "throat": {"dem": True, "length_m": 400.0,
+                   "source": ("NOAA NCEI 3 m DEM across the jetty channel; the dredged "
+                              "channel is deep enough for lidar to see it")},
+        "outside": {"station": "8510502"},
+        # NOAA predicts the tide both inside (8510448) and at the entrance:
+        # the one place to check the method's harbor lag.
+        "check": {"inside": "8510448", "entrance": "8510502"},
+        "notes": NOTE,
+    },
+    {
+        "id": "est-northwest",
+        "label": "Northwest Creek inlet",
+        "harbor_name": "Northwest Creek",
+        "name": "Northwest Creek's inlet from Northwest Harbor",
+        "dem": "northwest", "dem_bbox": (-72.275, 40.990, -72.215, 41.040),
+        "seed": (41.0050, -72.2520),
+        "cut": ((41.01177, -72.25298), (41.01144, -72.25193)),
+        "throat": {"dem": True, "length_m": 150.0, "min_depth_m": 1.5,
+                   "source": ("NOAA NCEI 3 m DEM for the width; depth from NOAA chart "
+                              "soundings (2.4 m below MLLW just inside; 6 ft dredged)")},
+        "outside": {"between": ("8511171", "8511629")},
+        "notes": NOTE,
+    },
+    {
+        "id": "est-sagcove",
+        "label": "Sag Harbor Cove channel",
+        "harbor_name": "Sag Harbor Cove",
+        "name": "The channel under the Sag Harbor–North Haven bridge into Sag Harbor Cove",
+        "dem": "sagcove", "dem_bbox": (-72.345, 40.978, -72.285, 41.018),
+        "seed": (41.0040, -72.3080),
+        "cut": ((41.0045, -72.30066), (41.00302, -72.29792)),
+        "throat": {"dem": True, "length_m": 200.0, "min_depth_m": 1.8,
+                   "source": ("NOAA NCEI 3 m DEM for the width; depth from NOAA chart "
+                              "soundings by the bridge (1.8–2.7 m below MLLW)")},
+        "outside": {"station": "8511629"},
+        "notes": NOTE,
+    },
 ]
-
-# Checks the method where NOAA predicts the tide both inside and outside:
-# Lake Montauk's jettied channel (geometry straight from the DEM; the
-# dredged channel is deep and wide enough for lidar to see).
-VALIDATION = {
-    "id": "lake-montauk", "label": "Lake Montauk",
-    "dem_bbox": (-71.960, 41.035, -71.905, 41.085),
-    "seed": (41.0600, -71.9250),
-    "cut": ((41.07779, -71.93863), (41.07835, -71.93498)),
-    "throat_from_dem": True, "length_m": 400.0,
-    "outside_station": "8510502",    # Montauk Harbor entrance (subordinate)
-    "inside_station": "8510448",     # Lake Montauk (harmonic)
-}
+# NOAA tide stations used for the bay tide outside the inlets.
+STATIONS = {"8510560": (41.0483, -71.9594),   # Montauk, Fort Pond Bay (reference)
+            "8511171": (41.0350, -72.1900),   # Threemile Harbor entrance (subordinate)
+            "8510502": (41.0750, -71.9367),   # Montauk Harbor entrance (subordinate)
+            "8511629": (41.0033, -72.2967)}   # Sag Harbor (harmonic)
 
 
 def log(msg):
@@ -266,7 +343,8 @@ def harbor_area(g, seed, cut):
 
 
 def dem_section(g, cut, eta):
-    """Cross-section (m2) and wet width (m) along the cut line at level eta."""
+    """Cross-section (m2), wet width (m), deepest point (lat, lon) and its
+    depth (m) along the cut line at level eta."""
     from scipy.ndimage import map_coordinates
     p, q = ij(g, *cut[0]), ij(g, *cut[1])
     dist = math.hypot((q[0] - p[0]) * g["my"], (q[1] - p[1]) * g["mx"])
@@ -274,7 +352,63 @@ def dem_section(g, cut, eta):
     zz = map_coordinates(g["z"], [np.linspace(p[0], q[0], m), np.linspace(p[1], q[1], m)], order=1)
     d = np.clip(eta - zz, 0, None)
     dx = dist / (m - 1)
-    return float(np.trapezoid(d, dx=dx)), float((d > 0).sum() * dx)
+    k = int(np.argmax(d))
+    f = k / (m - 1)
+    deep = (cut[0][0] + (cut[1][0] - cut[0][0]) * f, cut[0][1] + (cut[1][1] - cut[0][1]) * f)
+    return float(np.trapezoid(d, dx=dx)), float((d > 0).sum() * dx), deep, float(d[k])
+
+
+def km(a, b):
+    """Straight-line distance (km) between (lat, lon) points."""
+    return math.hypot((a[0] - b[0]) * 111.0, (a[1] - b[1]) * 111.0 * math.cos(math.radians(a[0])))
+
+
+def bearing(a, b):
+    """Initial compass bearing (deg) from a to b, flat-earth (short distances)."""
+    return math.degrees(math.atan2((b[1] - a[1]) * math.cos(math.radians(a[0])), b[0] - a[0])) % 360
+
+
+def flow_dirs(cut, seed):
+    """Flood / ebb directions square across the cut, flood toward the harbor."""
+    mid = ((cut[0][0] + cut[1][0]) / 2, (cut[0][1] + cut[1][1]) / 2)
+    along, inward = bearing(*cut), bearing(mid, seed)
+    cands = [(along + 90) % 360, (along + 270) % 360]
+    flood = min(cands, key=lambda c: abs((c - inward + 180) % 360 - 180))
+    return round(flood), round((flood + 180) % 360)
+
+
+def station_offsets(code, ref, begin, end):
+    """A NOAA station's high/lows vs Montauk's: median lag of high and of low
+    water (min) and the ratio of mean ranges."""
+    if code == TIDE_STATION:
+        return {"hw_min": 0.0, "lw_min": 0.0, "ratio": 1.0}
+    ev = hilo(code, begin, end)
+
+    def lags(kind):
+        r = [t for t, _, ty in ref if ty == kind]
+        xs = [nearest(t, r, 3 * 3600) for t, _, ty in ev if ty == kind]
+        return float(np.median([x for x in xs if x is not None])) / 60
+
+    def mrange(e):
+        return float(np.mean([abs(e[i + 1][1] - e[i][1]) for i in range(len(e) - 1)]))
+
+    return {"hw_min": lags("H"), "lw_min": lags("L"), "ratio": mrange(ev) / mrange(ref)}
+
+
+def outside_tide(spec, at, offs):
+    """The bay tide outside an inlet as offsets from Montauk's high/lows."""
+    o = spec["outside"]
+    if "station" in o:
+        s = offs[o["station"]]
+        src = f"NOAA station {o['station']}'s predicted high and low waters (vs Montauk 8510560)"
+    else:
+        a, b = o["between"]
+        f = km(STATIONS[a], at) / (km(STATIONS[a], at) + km(at, STATIONS[b]))
+        s = {k: (1 - f) * offs[a][k] + f * offs[b][k] for k in ("hw_min", "lw_min", "ratio")}
+        src = (f"interpolated {f:.0%} of the way from NOAA {a} to {b} by distance "
+               f"(timing and range of their predicted high and low waters)")
+    return {"hw_min": round(s["hw_min"]), "lw_min": round(s["lw_min"]),
+            "ratio": round(s["ratio"], 3), "source": src}
 
 
 # ----------------------------------------------------------------- model --
@@ -407,43 +541,28 @@ def summarize(inlet, datum, events, t0, t1):
     }
 
 
-def lake_montauk_check(datum, begin, end):
-    """Model Lake Montauk's tide behind its inlet; compare with NOAA's own
-    inside (8510448) vs entrance (8510502) predictions."""
-    v = VALIDATION
-    g = dem(v["id"], v["dem_bbox"])
-    area = harbor_area(g, v["seed"], v["cut"])
-    msl = datum["msl_navd88_m"]
-    A0, Wd = dem_section(g, v["cut"], msl)
-    mont, ent, ins = hilo(TIDE_STATION, begin, end), hilo(v["outside_station"], begin, end), \
-        hilo(v["inside_station"], begin, end)
+def inside_check(inlet, report, begin, end):
+    """Where NOAA predicts the tide inside the harbor and at its entrance
+    (Lake Montauk), compare the model's harbor lag and range with NOAA's."""
+    c = inlet["check"]
+    ent, ins = hilo(c["entrance"], begin, end), hilo(c["inside"], begin, end)
 
     def lags(ev, ref, kind):
         r = [t for t, _, ty in ref if ty == kind]
-        return [nearest(t, r, 3 * 3600) for t, _, ty in ev if ty == kind]
+        xs = [nearest(t, r, 3 * 3600) for t, _, ty in ev if ty == kind]
+        return float(np.median([x for x in xs if x is not None])) / 60
 
     def mrange(ev):
         return float(np.mean([abs(ev[i + 1][1] - ev[i][1]) for i in range(len(ev) - 1)]))
 
-    eH = [x for x in lags(ent, mont, "H") if x is not None]
-    eL = [x for x in lags(ent, mont, "L") if x is not None]
-    out = {"hw_min": round(float(np.median(eH)) / 60), "lw_min": round(float(np.median(eL)) / 60),
-           "ratio": round(mrange(ent) / mrange(mont), 3)}
-    inlet = {"throat": {"area_m2": A0, "width_m": Wd, "length_m": v["length_m"],
-                        "manning_n": MANNING_N, "k_loss": K_LOSS},
-             "harbor": {"levels_m": LEVELS, "area_m2": area}, "outside": out}
-    t0, t1 = mont[2][0] + SPINUP, mont[-3][0]
-    s = summarize(inlet, datum, mont, t0, t1)
-    noaa_h = float(np.median([x for x in lags(ins, ent, "H") if x is not None])) / 60
-    noaa_l = float(np.median([x for x in lags(ins, ent, "L") if x is not None])) / 60
+    out = inlet["outside"]
     return {
-        "throat_m2": round(A0), "width_m": round(Wd), "harbor_km2": round(area[LEVELS.index(-0.1)] / 1e6, 2),
-        "model_lag_hw_min": s["harbor_hw_after_montauk_min"] - out["hw_min"],
-        "model_lag_lw_min": s["harbor_lw_after_montauk_min"] - out["lw_min"],
-        "noaa_lag_hw_min": round(noaa_h, 1), "noaa_lag_lw_min": round(noaa_l, 1),
-        "model_range_ratio": s["harbor_range_vs_bay"],
+        "model_lag_hw_min": report["harbor_hw_after_montauk_min"] - out["hw_min"],
+        "model_lag_lw_min": report["harbor_lw_after_montauk_min"] - out["lw_min"],
+        "noaa_lag_hw_min": round(lags(ins, ent, "H"), 1),
+        "noaa_lag_lw_min": round(lags(ins, ent, "L"), 1),
+        "model_range_ratio": report["harbor_range_vs_bay"],
         "noaa_range_ratio": round(mrange(ins) / mrange(ent), 2),
-        "model_peak_kn": [s["peak_flood_kn"], s["peak_ebb_kn"]],
     }
 
 
@@ -479,48 +598,69 @@ def main():
         f"sea level +{datum['slr_m']} m since the epoch")
     mont = hilo(TIDE_STATION, a.report_from, a.report_to)
     bundled = atlas_hilo()
-    out = []
+    # Each outside station's timing vs Montauk over a whole year (one call each).
+    year = a.report_from[:4]
+    ref = hilo(TIDE_STATION, f"{year}0101", f"{year}1231")
+    offs = {s: station_offsets(s, ref, f"{year}0101", f"{year}1231") for s in STATIONS}
+    for s, o in offs.items():
+        log(f"  NOAA {s}: high water {o['hw_min']:+.0f} min, low water {o['lw_min']:+.0f} min, "
+            f"range x{o['ratio']:.2f} vs Montauk")
+    msl_now = datum["msl_navd88_m"] + datum["slr_m"]
+    out, checks = [], {}
     for spec in INLETS:
         log(f"\n{spec['label']}")
-        g = dem(spec["id"], spec["dem_bbox"])
+        g = dem(spec["dem"], spec["dem_bbox"])
         area = harbor_area(g, spec["seed"], spec["cut"])
         k = LEVELS.index(-0.1)
-        dem_a, dem_w = dem_section(g, spec["cut"], datum["msl_navd88_m"])
-        log(f"  harbor {area[k] / 1e6:.2f} km2 at MSL ({min(a_ for a_ in area if a_) / 1e6:.2f}"
-            f"-{area[-1] / 1e6:.2f} over {LEVELS[0]}..{LEVELS[-1]} m NAVD88)")
-        log(f"  inlet: {spec['throat']['area_m2']:.0f} m2, {spec['throat']['width_m']:.0f} m wide "
-            f"(survey); the DEM shows {dem_a:.0f} m2, {dem_w:.0f} m wide")
-        inlet = {k2: spec[k2] for k2 in ("id", "label", "harbor_name", "name", "lat", "lon",
-                                          "flood_dir", "ebb_dir", "outside", "notes")}
-        inlet["throat"] = {**spec["throat"], "manning_n": MANNING_N, "k_loss": K_LOSS,
-                           "dem_area_m2": round(dem_a, 1)}
-        inlet["harbor"] = {"levels_m": LEVELS, "area_m2": area,
-                           "source": "NOAA NCEI 1/9 arc-second topobathy DEM (CUDEM), NAVD88"}
-        inlet["confidence"] = "Rough"
+        dem_a, dem_w, deep, dmax = dem_section(g, spec["cut"], msl_now)
+        th = dict(spec["throat"])
+        if th.pop("dem", False):
+            th["area_m2"], th["width_m"] = round(dem_a, 1), round(dem_w, 1)
+            floor = th.pop("min_depth_m", None)
+            if floor and th["area_m2"] < dem_w * floor:
+                th["area_m2"] = round(dem_w * floor, 1)      # charted depths beat lidar
+        th.update(manning_n=MANNING_N, k_loss=K_LOSS, dem_area_m2=round(dem_a, 1))
+        lat, lon = spec.get("lat", round(deep[0], 5)), spec.get("lon", round(deep[1], 5))
+        flood, ebb = flow_dirs(spec["cut"], spec["seed"])
+        inlet = {k2: spec[k2] for k2 in ("id", "label", "harbor_name", "name", "notes")}
+        inlet.update(lat=lat, lon=lon, flood_dir=spec.get("flood_dir", flood),
+                     ebb_dir=spec.get("ebb_dir", ebb),
+                     outside=outside_tide(spec, (lat, lon), offs), throat=th,
+                     harbor={"levels_m": LEVELS, "area_m2": area,
+                             "source": "NOAA NCEI 1/9 arc-second topobathy DEM (CUDEM), NAVD88"},
+                     confidence="Rough")
+        log(f"  harbor {area[k] / 1e6:.2f} km2 at MSL ({area[0] / 1e6:.2f}-{area[-1] / 1e6:.2f} "
+            f"over {LEVELS[0]}..{LEVELS[-1]} m NAVD88)")
+        log(f"  inlet {th['area_m2']:.0f} m2, {th['width_m']:.0f} m wide, {th['length_m']:.0f} m "
+            f"long (the DEM shows {dem_a:.0f} m2, {dem_w:.0f} m wide, {dmax:.1f} m deep); "
+            f"flood {inlet['flood_dir']}° / ebb {inlet['ebb_dir']}°")
+        log(f"  bay outside: high water {inlet['outside']['hw_min']:+d} min, low water "
+            f"{inlet['outside']['lw_min']:+d} min, range x{inlet['outside']['ratio']} vs Montauk")
         t0, t1 = mont[2][0] + SPINUP, mont[-3][0]
         inlet["report"] = summarize(inlet, datum, mont, t0, t1)
         log("  " + json.dumps(inlet["report"]))
         inlet["selftest"] = selftest(inlet, datum, bundled, a.selftest_day)
-        if spec.get("show", True):
-            out.append(inlet)
-
-    log("\nLake Montauk check (model vs NOAA inside/entrance predictions):")
-    lm = lake_montauk_check(datum, a.report_from, a.report_to)
-    log("  " + json.dumps(lm))
-    if abs(lm["model_lag_hw_min"] - lm["noaa_lag_hw_min"]) > 20 or \
-            abs(lm["model_lag_lw_min"] - lm["noaa_lag_lw_min"]) > 20:
-        log("  WARNING: the method's harbor lag disagrees with NOAA by > 20 min at Lake Montauk")
+        if spec.get("check"):
+            inlet["check"] = spec["check"]
+            c = checks[spec["id"]] = inside_check(inlet, inlet["report"], a.report_from, a.report_to)
+            log(f"  check vs NOAA inside/entrance: {json.dumps(c)}")
+            if abs(c["model_lag_hw_min"] - c["noaa_lag_hw_min"]) > 20 or \
+                    abs(c["model_lag_lw_min"] - c["noaa_lag_lw_min"]) > 20:
+                log("  WARNING: the harbor lag disagrees with NOAA by > 20 min")
+        out.append(inlet)
+    out.sort(key=lambda c: -c["lon"])                   # east to west (the Spot list)
 
     doc = {
         "version": 1,
         "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "method": ("Pond-and-inlet model (Keulegan 1967; King 1974) driven by NOAA's Montauk "
-                   "high/low predictions: the harbor fills and drains through its inlet, the "
-                   "flow limited by the inlet's size and friction. Built by "
-                   "tools/build_inlets.py; run in the browser by assets/currents.js."),
+        "method": ("Pond-and-inlet model (Keulegan 1967; King 1974; inertia as in Mehta & "
+                   "Ozsoy 1978) driven by NOAA's Montauk high/low predictions: the harbor "
+                   "fills and drains through its inlet, the flow limited by the inlet's size, "
+                   "friction and the water's momentum. Built by tools/build_inlets.py; run in "
+                   "the browser by assets/currents.js."),
         "constants": {"g": G, "dt_s": DT, "spinup_s": SPINUP},
         "datum": datum,
-        "validation": {"lake_montauk": lm},
+        "checks": checks,
         "inlets": out,
     }
     if a.check:

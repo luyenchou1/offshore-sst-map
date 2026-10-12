@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-10-11 — Currents: five more harbor inlets
+
+### Added
+- **Estimated inlet currents for Lake Montauk, Accabonac Harbor, Three Mile Harbor, Northwest Creek and Sag Harbor Cove** (bridge channel), alongside Napeague: arrows at each harbor mouth, "(estimate)" spots in the Spot list (east to west), and a table in "How it works" with each harbor's typical slack and peak timing vs Montauk.
+- `tools/build_inlets.py` handles several harbors: harbor areas from NOAA's 3 m elevation model; inlet geometry from a survey (Napeague), or the elevation model across the inlet floored by NOAA chart depths where lidar missed the channel (Northwest Creek, Sag Harbor Cove); the bay tide outside from NOAA's own stations (Threemile Harbor entrance, Montauk Harbor entrance, Sag Harbor), computed from a year of their predictions, or interpolated between two by distance.
+
+### Findings (typical, Sep–Oct 2026)
+- Short, wide inlets keep up with the tide outside: Lake Montauk, Accabonac, Northwest Creek and Sag Harbor Cove go slack within minutes of high and low water just outside them. That local tide itself runs later westward — about +50 min at Accabonac, +80 at Northwest Creek and +95 at Sag Harbor vs Montauk — so slack at Sag Harbor Cove's bridge comes about 1½ h after Montauk high water.
+- Long, narrow channels hold the harbor back: Napeague (slack ~1h15 after Montauk high water) and especially Three Mile Harbor, whose 4.2 km² harbor drains through a ~450 m jetty channel (slack ~1h55 after Montauk high water, ~50–75 min after the tide at its entrance, peaks ~2.6 kn). Three Mile's timing is the most sensitive to the channel's real size (≈1h10–2h20 across plausible dimensions).
+- Lake Montauk still matches NOAA's inside-vs-entrance timing within ±5 min.
+
 ## 2026-10-11 — Currents: Napeague Harbor inlet (estimate, prototype)
 
 ### Added
