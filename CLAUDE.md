@@ -1,13 +1,14 @@
 # GotOne Offshore SST Analyzer — Project Context
 
 ## What This Is
-Dash 4.0 web app ("GotOne Offshore SST Analyzer") branded for [gotoneapp.com](https://www.gotoneapp.com). Shows daily sea-surface temperatures for the Cape May, NJ to Portland, ME offshore corridor. Users pick any 7-day date window (back to June 2002) and animate through the week's SST evolution to spot fishing-relevant trends (warm eddies, cold upwelling, thermoclines).
+**GotOne Labs** (labs.gotoneapp.com): free, experimental tools for saltwater anglers from [gotoneapp.com](https://www.gotoneapp.com), one Dash 4.0 app. The home page has a tile per tool; the tools are the **Offshore SST** map (`/sst`) and **Currents** (`/currents`). The SST map shows daily sea-surface temperatures for the Cape May, NJ to Portland, ME offshore corridor. Users pick any 7-day date window (back to June 2002) and animate through the week's SST evolution to spot fishing-relevant trends (warm eddies, cold upwelling, thermoclines).
 
 ## Tech Stack
 - **Current version**: v1.0 (displayed in sidebar UI; next release: v1.01)
 - **Dash 4.0** + **dash-leaflet** + **dash-bootstrap-components** (Flatly theme + GotOne CSS overrides)
 - **Basemap**: Esri World Light Gray Canvas — keyless raster tiles, `{z}/{y}/{x}` scheme. Replaced CARTO Positron (`basemaps.cartocdn.com/light_all`), which began requiring an API key and served "API KEY REQUIRED" watermarks. Defined in `layout/mapview.py` (SST map) and `layout/catchview.py` (catch map). `/currents` uses the dark counterpart (`World_Dark_Gray_Base` + `World_Dark_Gray_Reference` labels), also keyless.
-- **Pages** (one Dash app; hand-written router `route_page` in `app.py`): `/` SST map · `/currents` tidal currents — Today / Tide cycle / Example weeks, plus estimated currents in six harbor inlets (public, linked from the SST header) · `/catches` catch map (gated by `CATCHES_ACCESS_KEY`, no public link)
+- **Pages** (one Dash app; hand-written router `route_page` in `app.py`): `/` GotOne Labs home (tiles; `layout/labsview.py`) · `/sst` SST map · `/currents` tidal currents — Today / Tide cycle / Example weeks, plus estimated currents in six harbor inlets · `/catches` catch map (gated by `CATCHES_ACCESS_KEY`, no public link). Both tools link back with "← GotOne Labs". **On the old host `sst.gotoneapp.com`, `/` is still the SST map** (the Squarespace embed points there) and the Labs home is `/labs`; set `LABS_HOST` to redirect it (see Custom Domain).
+- **Visits**: an anonymous counter for Labs / SST / Currents (`data/labstats.py`, `assets/labs.js`); private stats at `/labs/stats?key=$LABS_STATS_KEY`.
 - **NOAA CoastWatch ERDDAP** — MUR GHRSST (1km, preferred) with OISST (25km) fallback
 - Data available from 2002-06-01 to ~2 days ago (MUR has ~2-day latency)
 - Python 3.12, venv at `.venv/`
@@ -206,6 +207,11 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 | `layout/currentsview.py` | /currents layout: view switch, date / strength / week panels, controls, dark map, chart, "How it works" modal (accuracy text) |
 | `assets/currents.js` | /currents engine: view timelines, atlas math (mirrors build_tide_atlas.py), harbor-inlet model (mirrors build_inlets.py), particles, haze, stations, chart, cursor, badge, live NOAA fetch |
 | `assets/currents.css` | /currents styles + the shared header nav link |
+| `layout/labsview.py` | GotOne Labs home: hero + one tile per tool (`TOOLS`) + about/footer |
+| `assets/labs.css` | Labs home styles (gotoneapp.com look: Helvetica Neue, navy #091d50, yellow #ffe000), scoped to `.labs-page` |
+| `assets/labs.js` | Page titles + the anonymous page-view beacon (`/api/hit`) |
+| `assets/labs/` | Tile previews + share card (`tools/build_labs_previews.py`, from the tools' own data) and the white horizontal wordmark (from GotOne/Graphics) |
+| `data/labstats.py` | Visit counter: SQLite on the persistent disk, daily-salted visitor hash, referrer hosts |
 | `requirements-tools.txt` | Build-only deps (`netCDF4`, Pillow for DEM TIFFs, etc.) — never installed on Render |
 | `.github/workflows/` | `seed-sst-cache.yml` (daily SST seed), `build-currents.yml` (currents), `keepalive.yml` (heartbeat), `sync-catches.yml` (catch sync — not wired up yet) |
 
@@ -227,7 +233,7 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 15. **clientside: drawer toggle** — Opens/closes mobile sidebar drawer + backdrop (toggles `drawer-open` class)
 16. **clientside: POI collapse toggle** — Expands/collapses POI checklist, flips chevron (▾/▴)
 17. **poi_select_all** — Server callback for Select all / Deselect all links in POI checklist
-18. **route_page** — Router: `/catches` (gated), `/currents`, else the SST page.
+18. **route_page** — Router: `/catches` (gated), `/currents`, `/sst`, `/labs`; `/` and unknown paths = Labs home (on the old `sst.` host: the SST map). A clientside callback on the same `url.pathname` calls `GotOneLabs.page()` (assets/labs.js): tab title + anonymous count (output `page-sink`). `update_title=None`, so Dash doesn't flash "Updating..." over those titles.
 19. **Currents (clientside only)** — week / depth / rate / station / options / strength / date forward to `window.Currents.*` (each writes `''` to a `currents-sink-*` div; initial calls hand the engine its defaults; setters only record state and one coalesced apply() loads data once the map exists); the view switch (`currents-mode`) also returns the three panels' `style`; "Now" calls `goNow()` and returns today (ET) to the date picker; the `currents-inlets` store (data/inlets.json) goes to `setInlets()`; "How it works" opens the modal (auto-opens once per browser via a localStorage flag); play/pause toggles and returns the button label; step ±1 h; lesson text comes from the `currents-weeks` store. All per-frame work is in `assets/currents.js`, which pushes back into Dash only via `dash_clientside.set_props` (station click → dropdown, auto-play → button label).
 
 ## Critical Lessons Learned
@@ -294,6 +300,12 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 - **Leaflet 1.9 tiles use `mix-blend-mode: plus-lighter`** (its fix for seams in opaque basemaps). On a semi-transparent overlay tile layer (the Esri place-name pane) it brightens every tile edge into faint lines across the map — on iPad and in Chromium, even at whole zoom levels. Give overlay tile layers `mix-blend-mode: normal`. Don't "fix" seams by overlapping tiles 1 px: with plus-lighter the overlap itself draws bright lines.
 - **Plotly overlaying axes can tick in sync with the main axis** (non-round values like 5.25 / 1.81 kn on a tall chart): set `tickmode: "auto"` on `yaxis2`.
 - **Keep the JS atlas math in lockstep with `tools/build_tide_atlas.py`** (phase, range interpolation + clamp, tent weights, bin centres). The builder writes a `selftest` block; `await window.Currents._selftest()` in the browser console should report `maxErr` ≈ 0 (store full-precision centres/clamp and NOAA's 3-decimal heights, or it drifts by ~0.002 m/s).
+
+### GotOne Labs home page
+- **`gotone.css` locks `html, body` (`overflow: hidden; height: 100%`)** so the map pages never scroll. The Labs home lifts it only while it's showing: `html:has(.labs-page), body:has(.labs-page) { height: auto; overflow: auto }` (`:has` stops matching after an in-app navigation to a tool).
+- **Dash 4's `html.Img` has no `loading` prop** (TypeError → the router callback 500s and the page renders empty). Same family as `dbc.Spinner`'s `spinner_class_name`: check the component's allowed args.
+- **Bootstrap turns on smooth scrolling**, so in browser tests `window.scrollTo()` then `scrollY` reads the old value (and the hidden preview pane pauses the animation). Set `document.documentElement.style.scrollBehavior = "auto"` first.
+- **The counter only reports from the live hosts** (`*.gotoneapp.com`, `*.onrender.com`); set `window.GotOneLabsCountHere = true` in the console to test locally. Stats read the same SQLite file (`$SST_CACHE_DIR/stats/labs.sqlite`); `LABS_STATS_KEY` unset = open locally, 404 on Render.
 
 ### Dash 4.0 Gotchas
 - **Never use clientside callbacks that manipulate DOM for elements also controlled by server callbacks.** Dash's virtual DOM reconciliation won't see the DOM change, so server callback updates get silently skipped, leaving the UI stuck. We burned multiple iterations on this with the Fetch button getting permanently disabled.
@@ -386,9 +398,11 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 - **Health check failures**: Caused by ERDDAP stalls blocking the single worker. The pre-cache 120s timeout and GFW tile `updateWhenZooming=False` mitigate this. If the worker restarts, persistent disk preserves cache files.
 
 ### Custom Domain & Squarespace Integration
-- **Custom domain**: `sst.gotoneapp.com` — CNAME in Squarespace DNS pointing to `offshore-sst-map.onrender.com`. Added as custom domain in Render dashboard; SSL auto-provisioned by Render.
-- **Squarespace embed**: iframe on `gotoneapp.com/offshore-sst` page. Uses Squarespace Embed Block with `<iframe src="https://sst.gotoneapp.com">`.
-- **iframe headers**: `@server.after_request` hook sets `Content-Security-Policy: frame-ancestors` to allow embedding from `gotoneapp.com`, `sst.gotoneapp.com`, and the Render domain. Also removes `X-Frame-Options` if set by middleware.
+- **Home: `labs.gotoneapp.com`** — CNAME `labs` in Squarespace DNS → `offshore-sst-map.onrender.com`, added as a custom domain in Render (SSL automatic). Tools are paths on it (`/sst`, `/currents`), not subdomains: one address to share, one DNS record and certificate, one counter, and the tools share browser storage.
+- **Old address: `sst.gotoneapp.com`** (same CNAME target) keeps working. Until `LABS_HOST=labs.gotoneapp.com` is set in Render, its `/` serves the SST map (and `/labs` the home). With `LABS_HOST` set, `redirect_old_host()` 301s page loads to the same path on labs (`/` → `/sst`); `/api/*`, `/_dash*` and `/assets/*` are never redirected (the GitHub workflows still upload to `sst.`, and a redirected POST would turn into a GET).
+- **Squarespace embed**: iframe on `gotoneapp.com/offshore-sst` page. Uses Squarespace Embed Block with `<iframe src="https://sst.gotoneapp.com">` (point it at `https://labs.gotoneapp.com/sst` once labs is live).
+- **iframe headers**: `@server.after_request` hook sets `Content-Security-Policy: frame-ancestors` to allow embedding from `gotoneapp.com`, `labs.` and `sst.gotoneapp.com`, and the Render domain. Also removes `X-Frame-Options` if set by middleware.
+- **Link previews**: `meta_tags` in `app.py` carry Open Graph / Twitter tags with `https://labs.gotoneapp.com/assets/labs/og.jpg` (the same card for every page).
 - **To update the embed URL**: change `src` in the Squarespace Embed Block. To change allowed embedding origins, update `set_iframe_headers()` in `app.py`.
 
 ### ERDDAP Behavior
@@ -528,4 +542,6 @@ gh workflow run build-currents.yml -f source=atlas -f publish=true    # rebuild 
 | `CATCH_DATA_DIR` | Yes (Render) | Directory holding the catch CSVs (`/var/data/cache` on Render). Default: the repo's `data/`. |
 | `CATCHES_ACCESS_KEY` | Yes (Render) | Access key for `/catches` (`?key=…`). Unset on Render → page closed. |
 | `CATCHES_UPLOAD_TOKEN` | No | Secret for `POST /api/catches/upload` (catch sync — not automated yet; CSVs are uploaded by hand). |
+| `LABS_HOST` | No | `labs.gotoneapp.com` → page loads on `sst.gotoneapp.com` redirect there (set only once that domain works). Unset → the old host serves the SST map at `/`. |
+| `LABS_STATS_KEY` | Yes (Render) | Key for the private visit stats (`/labs/stats?key=…`, `/api/labs/stats?key=…`). Unset on Render → 404. |
 | `PORT` | Render only | Set automatically by Render for gunicorn binding. |

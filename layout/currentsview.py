@@ -85,7 +85,7 @@ def _segmented(id_, options, value):
     )
 
 
-def build_currents_sidebar(manifest, today, inlets=None):
+def build_currents_sidebar(manifest, today, inlets=None, labs_href="/"):
     weeks = manifest.get("weeks", [])
     stations = manifest.get("stations", [])
     atlas = manifest.get("atlas")
@@ -259,7 +259,7 @@ def build_currents_sidebar(manifest, today, inlets=None):
                         [
                             html.Button("How it works", id="currents-about-open-2",
                                         className="currents-link-btn"),
-                            dcc.Link("← SST Map", href="/", style={
+                            dcc.Link("← GotOne Labs", href=labs_href, style={
                                 "fontSize": "0.7rem", "color": "#0183fe"}),
                         ],
                         className="d-flex justify-content-between align-items-center",
@@ -474,7 +474,7 @@ def _about_body(inlets=None):
     )
 
 
-def build_currents_page():
+def build_currents_page(labs_href="/"):
     manifest = currents_data.read_manifest() or {"weeks": [], "stations": []}
     inlets = currents_data.read_inlets()
     lessons = [{"id": w["id"], "subtitle": w.get("subtitle", ""), "lesson": w.get("lesson", "")}
@@ -499,8 +499,8 @@ def build_currents_page():
                         [
                             html.Button("How it works", id="currents-about-open",
                                         className="header-nav-link currents-about-link"),
-                            dcc.Link("← SST Map", href="/",
-                                     className="header-nav-link currents-sst-link"),
+                            dcc.Link("← GotOne Labs", href=labs_href,
+                                     className="header-nav-link currents-labs-link"),
                         ],
                         className="currents-header-links",
                     ),
@@ -509,7 +509,7 @@ def build_currents_page():
             ),
             dbc.Container(
                 [
-                    dbc.Row([build_currents_sidebar(manifest, today, inlets),
+                    dbc.Row([build_currents_sidebar(manifest, today, inlets, labs_href),
                              build_currents_map()]),
                     html.Div(id="sidebar-backdrop", className="sidebar-backdrop"),
                     dcc.Store(id="currents-weeks", data=lessons),

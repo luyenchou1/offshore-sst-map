@@ -18,7 +18,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 
 import requests as http_requests
-from flask import Response, request, send_from_directory
+from flask import Response, abort, jsonify, redirect, request, send_from_directory
 
 import dash
 import dash_bootstrap_components as dbc
@@ -33,11 +33,13 @@ from data.catches import (
     load_catches,
 )
 from data import currents as currents_data
+from data import labstats
 from data.convert import upsample_visual
 from data.erddap import get_sst_multiday
 from data.geo import mask_aoi_rasterized, mask_land_rasterized, orient_to_leaflet
 from layout.catchview import build_catch_page
 from layout.currentsview import build_currents_page
+from layout.labsview import build_labs_page
 from layout.mapview import build_map
 from layout.sidebar import build_sidebar
 from map.colorscale import build_legend_component, compute_color_bounds
@@ -54,29 +56,177 @@ logger = logging.getLogger(__name__)
 with open("config.json") as f:
     CFG = json.load(f)
 
+LABS_DESCRIPTION = ("Free tools for saltwater anglers from GotOne: offshore sea-surface "
+                    "temperature, and when the current really turns around Montauk, The Race "
+                    "and Plum Gut.")
+
 app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.FLATLY],
-    title="GotOne Offshore SST Analyzer",
-    suppress_callback_exceptions=True,  # multi-page: callbacks span / and /catches
+    title="GotOne Labs",
+    update_title=None,   # assets/labs.js sets each page's title; don't flash "Updating..."
+    suppress_callback_exceptions=True,  # multi-page: callbacks span all pages
     meta_tags=[
         {"name": "viewport", "content": "width=device-width, initial-scale=1, viewport-fit=cover"},
+        # Link previews (Facebook groups, texts, forums) for every page.
+        {"name": "description", "content": LABS_DESCRIPTION},
+        {"property": "og:title", "content": "GotOne Labs · Free tools for saltwater anglers"},
+        {"property": "og:description", "content": LABS_DESCRIPTION},
+        {"property": "og:image", "content": "https://labs.gotoneapp.com/assets/labs/og.jpg"},
+        {"property": "og:url", "content": "https://labs.gotoneapp.com/"},
+        {"property": "og:type", "content": "website"},
+        {"name": "twitter:card", "content": "summary_large_image"},
     ],
 )
 server = app.server  # for gunicorn
 
 
+# ---- Hosts: labs.gotoneapp.com is home; sst.gotoneapp.com is the old address ----
+# On the old host "/" still opens the SST map (the Squarespace embed points there).
+# Set LABS_HOST=labs.gotoneapp.com in Render once that domain works: page loads
+# on the old host then redirect there ("/" -> "/sst"). APIs are never redirected
+# (the GitHub workflows upload to the old host; a redirected POST becomes a GET).
+LEGACY_HOSTS = ("sst.gotoneapp.com",)
+LABS_HOST = os.environ.get("LABS_HOST", "").strip().lower()
+
+
+def _request_host():
+    try:
+        return request.host.split(":")[0].lower()
+    except RuntimeError:                # outside a request
+        return ""
+
+
+def labs_href():
+    """Link to the Labs home: "/" (on the old host "/" is the SST map)."""
+    return "/labs" if _request_host() in LEGACY_HOSTS else "/"
+
+
+@server.before_request
+def redirect_old_host():
+    if not LABS_HOST or request.method != "GET" or _request_host() not in LEGACY_HOSTS:
+        return None
+    path = request.path
+    if path.startswith(("/api/", "/_dash", "/assets/", "/_favicon", "/_reload")):
+        return None
+    qs = request.query_string.decode()
+    return redirect(f"https://{LABS_HOST}{'/sst' if path in ('', '/') else path}"
+                    + (f"?{qs}" if qs else ""), code=301)
+
+
 # ---- Allow iframe embedding from GotOne website ----
 @server.after_request
 def set_iframe_headers(response):
-    # Allow embedding on gotoneapp.com (Squarespace) and the Render domain
+    # Allow embedding on gotoneapp.com (Squarespace) and the app's own hosts
     response.headers["Content-Security-Policy"] = (
         "frame-ancestors 'self' https://www.gotoneapp.com https://gotoneapp.com "
-        "https://sst.gotoneapp.com https://offshore-sst-map.onrender.com"
+        "https://labs.gotoneapp.com https://sst.gotoneapp.com "
+        "https://offshore-sst-map.onrender.com"
     )
     # Remove X-Frame-Options if set by any middleware (CSP takes precedence)
     response.headers.pop("X-Frame-Options", None)
     return response
+
+
+# ---- Anonymous page counter (data/labstats.py; posted by assets/labs.js) ----
+_OUR_ORIGIN = __import__("re").compile(
+    r"^https?://(([a-z0-9-]+\.)*gotoneapp\.com|[a-z0-9-]+\.onrender\.com|localhost|127\.0\.0\.1)(:\d+)?$")
+
+
+@server.route("/api/hit", methods=["POST"])
+def labs_hit():
+    """One page view: {"p": "labs"|"sst"|"currents", "r": referrer host}. Always 204."""
+    origin = request.headers.get("Origin", "")
+    if origin and not _OUR_ORIGIN.match(origin):
+        return "", 204
+    try:
+        j = json.loads(request.get_data(as_text=True)[:500] or "{}")
+    except ValueError:
+        return "", 204
+    if isinstance(j, dict):
+        ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0]
+        dnt = request.headers.get("DNT") == "1" or request.headers.get("Sec-GPC") == "1"
+        try:
+            labstats.record(str(j.get("p", ""))[:20], str(j.get("r", ""))[:120], ip.strip(),
+                            request.headers.get("User-Agent", ""), dnt=dnt)
+        except Exception:                       # never fail a page over counting
+            logger.warning("labs hit not recorded", exc_info=True)
+    return "", 204
+
+
+# Private stats: /labs/stats?key=... (LABS_STATS_KEY). Unset -> open locally,
+# closed on Render (like /catches).
+LABS_STATS_KEY = os.environ.get("LABS_STATS_KEY", "").strip() or None
+
+
+def _stats_allowed():
+    if not LABS_STATS_KEY:
+        return not os.environ.get("RENDER")
+    import hmac
+    return hmac.compare_digest(request.args.get("key", ""), LABS_STATS_KEY)
+
+
+def _stats_days():
+    try:
+        return max(1, min(365, int(request.args.get("days", 30))))
+    except ValueError:
+        return 30
+
+
+@server.route("/api/labs/stats")
+def labs_stats_json():
+    if not _stats_allowed():
+        abort(404)
+    return jsonify(labstats.summary(_stats_days()))
+
+
+@server.route("/labs/stats")
+def labs_stats_page():
+    if not _stats_allowed():
+        abort(404)
+    from html import escape
+    days = _stats_days()
+    s = labstats.summary(days)
+    names = {"labs": "Labs home", "sst": "Offshore SST", "currents": "Currents"}
+    key = escape(request.args.get("key", ""))
+
+    def cells(row):
+        return "".join(f"<td>{row[p]['views']}</td><td class=v>{row[p]['visitors']}</td>"
+                       for p in labstats.PAGES)
+
+    head = "".join(f"<th colspan=2>{names[p]}</th>" for p in labstats.PAGES)
+    sub = "<th>views</th><th>visitors</th>" * len(labstats.PAGES)
+    period = {p: {"views": sum(d[p]["views"] for d in s["daily"]),
+                  "visitors": sum(d[p]["visitors"] for d in s["daily"])} for p in labstats.PAGES}
+    rows = "".join(f"<tr><td>{d['day']}</td>{cells(d)}</tr>" for d in s["daily"])
+    totals = "".join(f"<td colspan=2>{s['totals'].get(p, {}).get('views', 0)}</td>"
+                     for p in labstats.PAGES)
+    refs = "".join(f"<tr><td>{escape(r['host'])}</td><td>{names.get(r['page'], r['page'])}</td>"
+                   f"<td>{r['views']}</td></tr>" for r in s["referrers"]) or \
+        "<tr><td colspan=3>None yet</td></tr>"
+    links = " · ".join(f"<a href='?key={key}&days={n}'>{n} days</a>" for n in (7, 30, 90, 365))
+    html_out = f"""<!doctype html><html><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><meta name=robots content=noindex>
+<title>GotOne Labs · visits</title><style>
+body{{font:15px/1.45 "Helvetica Neue",Helvetica,Arial,sans-serif;margin:0;background:#f3f5fa;color:#0f1d3d}}
+.w{{max-width:900px;margin:0 auto;padding:20px 16px 48px}} h1{{color:#091d50;margin:0 0 4px}}
+h2{{font-size:1.05rem;margin:28px 0 8px;color:#091d50}} .m{{color:#44506a;font-size:.9rem}}
+table{{border-collapse:collapse;width:100%;background:#fff;border-radius:10px;overflow:hidden}}
+th,td{{padding:7px 10px;border-bottom:1px solid #e5e9f2;text-align:right;white-space:nowrap}}
+th:first-child,td:first-child{{text-align:left}} th{{background:#091d50;color:#fff;font-weight:600}}
+.v{{color:#44506a}} tfoot td{{font-weight:700}} .s{{overflow-x:auto}}</style></head><body><div class=w>
+<h1>GotOne Labs · visits</h1>
+<p class=m>Last {days} days (Eastern time) · {links}<br>Visitors are unique per day: someone who comes
+back on three days counts three times. No cookies; nothing about a visitor is stored.</p>
+<h2>Last {days} days</h2><div class=s><table><tr><th></th>{head}</tr><tr><th></th>{sub}</tr>
+<tr><td>Total</td>{cells(period)}</tr></table></div>
+<h2>All time (views, since {s['first_day'] or '-'})</h2><div class=s><table><tr><th></th>{head}</tr>
+<tr><td>Views</td>{totals}</tr></table></div>
+<h2>Where visits came from (first page of each visit)</h2><div class=s><table>
+<tr><th>Site</th><th>Page</th><th>Views</th></tr>{refs}</table></div>
+<h2>By day</h2><div class=s><table><tr><th>Day</th>{head}</tr><tr><th></th>{sub}</tr>{rows}
+</table></div></div></body></html>"""
+    return Response(html_out, mimetype="text/html", headers={"Cache-Control": "no-store"})
 
 
 # ---- Global Fishing Watch tile proxy ----
@@ -918,7 +1068,7 @@ def build_sst_page():
                 ),
                 # No public link to the catch map — it's reachable only by
                 # navigating to /catches directly, then entering the access key.
-                dcc.Link("Currents →", href="/currents", className="header-nav-link"),
+                dcc.Link("← GotOne Labs", href=labs_href(), className="header-nav-link"),
             ],
             className="gotone-header",
         ),
@@ -978,7 +1128,7 @@ def _catch_restricted_page(attempted=False):
                             html.P("Restricted access", className="subtitle"),
                         ]
                     ),
-                    dcc.Link("← SST Map", href="/", style={
+                    dcc.Link("← GotOne Labs", href=labs_href(), style={
                         "marginLeft": "auto", "alignSelf": "center",
                         "color": "#0183fe", "fontSize": "0.85rem", "paddingLeft": "1rem"}),
                 ],
@@ -1023,6 +1173,7 @@ def serve_layout():
         [
             dcc.Location(id="url", refresh=False),
             html.Div(id="page-content"),
+            html.Div(id="page-sink", style={"display": "none"}),
         ]
     )
 
@@ -1036,14 +1187,33 @@ app.layout = serve_layout
     State("url", "search"),
 )
 def route_page(pathname, search):
-    """Render /catches (gated), /currents, and the SST map everywhere else."""
-    if pathname and pathname.rstrip("/").endswith("/catches"):
+    """/ = the GotOne Labs home, /sst, /currents, /catches (gated). On the old
+    sst.gotoneapp.com host "/" (and anything unknown) is still the SST map."""
+    path = (pathname or "/").rstrip("/") or "/"
+    if path.endswith("/catches"):
         if not _catch_authorized(search):
             return _catch_restricted_page(attempted=bool(search and "key=" in search))
         return build_catch_page()
-    if (pathname or "").rstrip("/") == "/currents":
-        return build_currents_page()
+    if path == "/currents":
+        return build_currents_page(labs_href=labs_href())
+    if path == "/sst":
+        return build_sst_page()
+    if path == "/labs" or _request_host() not in LEGACY_HOSTS:
+        return build_labs_page()
     return build_sst_page()
+
+
+# Tab title + anonymous page count for every page view (assets/labs.js).
+app.clientside_callback(
+    """
+    function(path) {
+        if (window.GotOneLabs) { window.GotOneLabs.page(path); }
+        return "";
+    }
+    """,
+    Output("page-sink", "children"),
+    Input("url", "pathname"),
+)
 
 
 # Restricted page: submit the access key -> reload /catches?key=... so the gate

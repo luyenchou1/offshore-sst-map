@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+"""Preview images for the GotOne Labs landing page -> assets/labs/.
+
+Drawn from the apps' own data so the tiles show what each tool looks like:
+
+  sst.jpg       a week's last day of MUR SST from the local disk cache, in the
+                SST map's own colours (map/overlay.array_to_rgba), Long Island
+                to the canyons, land from Natural Earth (data/geo.py)
+  currents.jpg  the tide-stage atlas at average strength, mid-flood: streamlines
+                coloured by speed with the Currents page's colour ramp
+  og.jpg        1200 x 630 social-share card (link previews in Facebook groups,
+                texts, forums) built from the two and gotone-wordmark.png (the
+                brand's horizontal white logotype, trimmed from GotOne/Graphics)
+
+No map tiles are baked in (Esri's terms want attribution on every use), only
+our own data. Rerun after a redesign or to refresh the SST week:
+
+  .venv/bin/python tools/build_labs_previews.py [--sst cache/sst/<date>_adaptive.json.gz]
+"""
+
+import argparse
+import base64
+import glob
+import gzip
+import io
+import json
+import math
+import os
+import sys
+
+import numpy as np
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO)
+OUT = os.path.join(REPO, "assets", "labs")
+NAVY = "#091d50"          # gotoneapp.com
+NAVY_DARK = "#0a1628"     # the apps' header / sidebar
+YELLOW = "#ffe000"
+W, H = 1280, 720          # 16:9 tiles
+
+
+def _npy(s):
+    return np.load(io.BytesIO(base64.b64decode(s)), allow_pickle=False)
+
+
+def sst_preview(path):
+    """Last day of a cached SST week, cropped Long Island -> the canyons."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from data.geo import load_land_gdf
+    from map.overlay import array_to_rgba
+
+    d = json.load(gzip.open(path))
+    a = d["raw_days"][-1]["arrF"]                  # v2 cache: base64 .npy; v1: nested list
+    sst = _npy(a) if isinstance(a, str) else np.array(a, float)
+    lats = _npy(d["lats"]) if isinstance(d["lats"], str) else np.array(d["lats"], float)
+    lons = _npy(d["lons"]) if isinstance(d["lons"], str) else np.array(d["lons"], float)
+    if lats[0] < lats[-1]:                      # north-up rows for imshow
+        lats, sst = lats[::-1], sst[::-1]
+    rgba = array_to_rgba(sst, d["vmin"], d["vmax"])
+    ext = [lons.min(), lons.max(), lats.min(), lats.max()]
+
+    lat0, lat1 = 39.55, 41.5                    # Long Island + the shelf-edge canyons
+    lon_span = (lat1 - lat0) * (W / H) / math.cos(math.radians((lat0 + lat1) / 2))
+    lon1 = -69.75
+    lon0 = lon1 - lon_span
+    fig = plt.figure(figsize=(W / 100, H / 100), dpi=100)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_facecolor("#c9d3df")                 # no data (outside the map's corridor)
+    ax.imshow(rgba, extent=ext, origin="upper", interpolation="bilinear", zorder=1)
+    land = load_land_gdf()
+    land.plot(ax=ax, color="#e7e9ec", edgecolor="#9aa5b4", linewidth=0.6, zorder=2)
+    ax.set_xlim(lon0, lon1)
+    ax.set_ylim(lat0, lat1)
+    ax.set_aspect(1 / math.cos(math.radians((lat0 + lat1) / 2)))
+    ax.axis("off")
+    os.makedirs(OUT, exist_ok=True)
+    fig.savefig(os.path.join(OUT, "sst.jpg"), dpi=100, pil_kwargs={"quality": 82, "optimize": True})
+    plt.close(fig)
+    return d["dates"][-1]
+
+
+def currents_preview():
+    """Average-strength atlas at the phase bin of strongest flow at The Race."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+    from data.currents import unpack_frames
+
+    cdir = os.path.join(REPO, "cache", "currents")
+    with open(os.path.join(cdir, "manifest.json")) as f:
+        man = json.load(f)
+    raw = open(os.path.join(cdir, man["atlas"]["files"]["surface"]), "rb").read()
+    if raw[:2] == b"\x1f\x8b":
+        raw = gzip.decompress(raw)
+    h, mask, U, V = unpack_frames(raw)            # int8 (nf, ny, nx), row 0 = north
+    nb = h["nframes"] // 3                         # 3 range bases x phase bins
+    lon0, lat0, lon1, lat1 = h["bbox"]
+    ny, nx = mask.shape
+    # The Race (41.235 N, 72.06 W): the average-range bin where it runs hardest.
+    i = int(round((-72.06 - lon0) / (lon1 - lon0) * (nx - 1)))
+    j = int(round((lat1 - 41.235) / (lat1 - lat0) * (ny - 1)))
+    spd = [math.hypot(U[nb + b, j, i], V[nb + b, j, i]) for b in range(nb)]
+    k = nb + int(np.argmax(spd))
+    u, v = U[k].astype(float) * h["scale"], V[k].astype(float) * h["scale"]
+    water = mask.astype(bool)
+    u = np.where(water, u, np.nan)[::-1]          # south-up rows for streamplot
+    v = np.where(water, v, np.nan)[::-1]
+    s = np.hypot(u, v)
+    x = np.linspace(lon0, lon1, nx)
+    y = np.linspace(lat0, lat1, ny)
+    ramp = LinearSegmentedColormap.from_list("cur", [
+        "#28509699", "#2d69af", "#3287c3", "#3ca5cd", "#55c3c8", "#82d7af",
+        "#c3e47d", "#f5d45c", "#faaf46", "#fff0cd"])
+
+    from data.geo import load_land_gdf
+
+    fig = plt.figure(figsize=(W / 100, H / 100), dpi=100)
+    ax = fig.add_axes([0, 0, 1, 1])
+    fig.patch.set_facecolor(NAVY_DARK)
+    ax.set_facecolor(NAVY_DARK)
+    ax.streamplot(x, y, u, v, color=s, cmap=ramp, norm=matplotlib.colors.Normalize(0, 1.6),
+                  density=3.2, linewidth=0.6 + 1.6 * np.clip(s / 1.6, 0, 1), arrowsize=0.6,
+                  zorder=2)
+    # The model's land (fills small islands Natural Earth omits, e.g. Plum and
+    # Great Gull), then smooth coastlines over its 400 m stair-steps.
+    ax.imshow(np.where(water[::-1], np.nan, 1.0), extent=[lon0, lon1, lat0, lat1], origin="lower",
+              cmap=LinearSegmentedColormap.from_list("l", ["#24314a", "#24314a"]),
+              interpolation="nearest", zorder=1)
+    load_land_gdf().plot(ax=ax, color="#24314a", edgecolor="#3b4a66", linewidth=0.7, zorder=3)
+    for name, lon, lat in (("The Race", -72.06, 41.205), ("Plum Gut", -72.215, 41.152),
+                           ("Montauk", -71.93, 41.03), ("Block Island", -71.58, 41.17),
+                           ("Gardiners Bay", -72.16, 41.075)):
+        ax.text(lon, lat, name, color="#e2e8f0", fontsize=15, fontweight="bold", ha="center",
+                va="center", zorder=4, alpha=0.9)
+    cy = (lat0 + lat1) / 2
+    lon_span = (lat1 - lat0) * (W / H) / math.cos(math.radians(cy))
+    cx = (lon0 + lon1) / 2
+    ax.set_xlim(cx - lon_span / 2, cx + lon_span / 2)
+    ax.set_ylim(lat0, lat1)
+    ax.set_aspect(1 / math.cos(math.radians(cy)))
+    ax.axis("off")
+    fig.savefig(os.path.join(OUT, "currents.jpg"), dpi=100, facecolor=NAVY_DARK,
+                pil_kwargs={"quality": 82, "optimize": True})
+    plt.close(fig)
+
+
+def og_card():
+    """1200 x 630 link-preview card: title band over the two previews."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    card = Image.new("RGB", (1200, 630), NAVY)
+    for k, name in enumerate(("sst.jpg", "currents.jpg")):
+        im = Image.open(os.path.join(OUT, name)).convert("RGB").resize((560, 315))
+        card.paste(im, (27 + k * 586, 270))
+    d = ImageDraw.Draw(card)
+
+    def font(size, bold=True):
+        for path, idx in (("/System/Library/Fonts/HelveticaNeue.ttc", 1 if bold else 0),
+                          ("/System/Library/Fonts/Helvetica.ttc", 1 if bold else 0)):
+            try:
+                return ImageFont.truetype(path, size, index=idx)
+            except OSError:
+                continue
+        return ImageFont.load_default()
+
+    logo = Image.open(os.path.join(OUT, "gotone-wordmark.png")).convert("RGBA")
+    logo = logo.resize((int(logo.width * 64 / logo.height), 64), Image.LANCZOS)
+    card.paste(logo, (40, 40), logo)
+    x = 40 + logo.width + 22
+    d.line([(x, 46), (x, 98)], fill=(255, 255, 255), width=2)
+    d.text((x + 20, 50), "Labs", fill=YELLOW, font=font(44))
+    d.text((40, 140), "Free tools for saltwater anglers", fill="#ffffff", font=font(46))
+    d.text((40, 205), "Offshore sea-surface temperature  ·  Tides vs. currents, eastern Long Island",
+           fill="#c7d2fe", font=font(24, bold=False))
+    card.save(os.path.join(OUT, "og.jpg"), quality=85, optimize=True)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--sst", help="SST cache file (default: the newest Jun-Oct week cached)")
+    a = ap.parse_args()
+    path = a.sst
+    if not path:
+        cands = [p for p in sorted(glob.glob(os.path.join(REPO, "cache", "sst", "*_adaptive.json.gz")))
+                 if os.path.basename(p)[5:7] in ("06", "07", "08", "09", "10")]
+        if not cands:
+            sys.exit("no cached summer/fall SST week in cache/sst; pass --sst")
+        path = cands[-1]
+    day = sst_preview(path)
+    currents_preview()
+    og_card()
+    for n in ("sst.jpg", "currents.jpg", "og.jpg"):
+        print(f"assets/labs/{n}: {os.path.getsize(os.path.join(OUT, n)) / 1024:.0f} KB")
+    print(f"SST day: {day} ({os.path.basename(path)})")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,10 +1,12 @@
-# GotOne Offshore SST Analyzer
+# GotOne Labs
 
-Daily sea-surface temperature (SST) visualization for the NJ-to-MA offshore fishing corridor. Pick any 7-day window (back to June 2002) and animate through daily SST maps to spot warm eddies, temperature breaks, and thermoclines.
+Free, experimental tools for saltwater anglers from [GotOne](https://www.gotoneapp.com): a home page with one tile per tool, the **Offshore SST** map (`/sst`) and **Currents** (`/currents`). One Dash app; visits are counted anonymously (no cookies) with private stats at `/labs/stats`.
+
+**Offshore SST**: daily sea-surface temperature (SST) visualization for the NJ-to-MA offshore fishing corridor. Pick any 7-day window (back to June 2002) and animate through daily SST maps to spot warm eddies, temperature breaks, and thermoclines.
 
 Data: **NOAA CoastWatch ERDDAP** — MUR GHRSST 1km (preferred), OISST 25km (fallback). Temperatures in **°F**.
 
-**Live**: https://sst.gotoneapp.com (also at https://offshore-sst-map.onrender.com)
+**Live**: https://labs.gotoneapp.com (home), `/sst`, `/currents`. The old address https://sst.gotoneapp.com still opens the SST map and forwards to labs once `LABS_HOST` is set (also at https://offshore-sst-map.onrender.com).
 **Embedded**: https://www.gotoneapp.com/offshore-sst
 
 ## Features

@@ -418,7 +418,7 @@ html.currents-fs .currents-page > .gotone-header { padding: 0.3rem 0.75rem; gap:
 html.currents-fs .currents-page > .gotone-header img { height: 34px; }
 html.currents-fs .currents-page > .gotone-header h1 { font-size: 1rem; }
 html.currents-fs .currents-page > .gotone-header .subtitle,
-html.currents-fs .currents-page .currents-sst-link { display: none; }
+html.currents-fs .currents-page .currents-labs-link { display: none; }
 /* iPadOS full screen keeps its status bar (time, battery) drawn over the top
    of the page and adds its own exit "X" (~56 pt square, ~20 pt in, ~32 pt
    down) that a page can't hide. On touch screens the bar spans both: a strip

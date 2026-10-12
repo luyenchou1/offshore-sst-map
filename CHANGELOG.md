@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-11 — GotOne Labs home page and visit counter
+
+### Added
+- **GotOne Labs home** (`/` on labs.gotoneapp.com): the marketing site's look (Helvetica Neue, navy, yellow buttons) with one tile per tool — Offshore SST and Currents — each with a real preview drawn from the tool's own data (`tools/build_labs_previews.py`), the area it covers, one line on what it's for, and a big button. Plain wording for anglers, phone-first, scrolls like a normal page.
+- Tools moved to `/sst` and `/currents`; both link back with "← GotOne Labs" (replacing "Currents →" and "← SST Map"). Each page sets its own tab title, and every page carries link-preview tags with a share card (`assets/labs/og.jpg`).
+- **Anonymous visit counter** for Labs, SST and Currents, modelled on Plotline's: no cookies, Do Not Track / Global Privacy Control respected, daily unique visitors from a salted hash that's never stored raw, referrer hosts (embedded visits marked), bots and other sites ignored, capped per visitor. SQLite on the persistent disk (`data/labstats.py`); private stats page at `/labs/stats?key=…` (`LABS_STATS_KEY`).
+
+### Domains
+- `sst.gotoneapp.com` keeps working: its `/` still opens the SST map (the Squarespace embed), and its Labs link goes to `/labs`. Setting `LABS_HOST=labs.gotoneapp.com` in Render (once that domain is live) redirects its page loads to labs (`/` → `/sst`); APIs are never redirected, so the data workflows keep uploading.
+
 ## 2026-10-11 — Currents: five more harbor inlets
 
 ### Added

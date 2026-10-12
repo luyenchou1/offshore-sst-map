@@ -249,7 +249,7 @@ def build_catch_sidebar():
                         "fontSize": "0.72rem", "color": "#94a3b8", "marginTop": "0.6rem"}),
 
                     html.Div(
-                        dcc.Link("← SST Map", href="/", style={
+                        dcc.Link("← SST Map", href="/sst", style={
                             "fontSize": "0.7rem", "color": "#0183fe"}),
                         style={"marginTop": "auto", "paddingTop": "0.75rem"},
                     ),
