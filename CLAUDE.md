@@ -17,7 +17,7 @@ Dash 4.0 web app ("GotOne Offshore SST Analyzer") branded for [gotoneapp.com](ht
   - Start command: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --threads 16 --timeout 180`
   - Must be 1 worker (raw data cache is in-memory per process)
   - 16 threads allows concurrent I/O (GFW tile proxy, click callbacks) without separate processes
-  - Auto-deploy is OFF — use Manual Deploy in Render dashboard
+  - Auto-deploy is ON — every push to `main` goes live in ~2–3 min (observed Oct 2026). Put `[skip render]` in a commit message to skip that deploy
 - **Squarespace embed**: iframe on `gotoneapp.com/offshore-sst` loads the app inline
   - `Content-Security-Policy: frame-ancestors` header allows embedding from gotoneapp.com
   - Embed Block with `<iframe src="https://sst.gotoneapp.com" ...>`
@@ -235,7 +235,7 @@ Napeague result: slack ≈ 1h10 after Montauk HW / 1h05 after LW (≈1h30 on sup
 
 ### GitHub Actions Schedules Die After 60 Idle Days
 - In a public repo, scheduled workflows are **silently disabled** after 60 days without repository activity. That stopped "Seed SST cache" on 2026-08-30 (last commit was July 1) and nothing alerted — the SST map only kept working because NOAA had lifted its block. Check with `gh workflow list --all` (state `disabled_inactivity`); re-enable with `gh workflow enable "<name>"`.
-- **`.github/workflows/keepalive.yml`** runs weekly and pushes a heartbeat commit (`.github/keepalive.txt`) only when `main` has been idle 45+ days. A real commit is the documented activity signal; whether an API re-enable resets the timer is undocumented, so we don't rely on it. Auto-deploy is off, so heartbeat commits never deploy.
+- **`.github/workflows/keepalive.yml`** runs weekly and pushes a heartbeat commit (`.github/keepalive.txt`) only when `main` has been idle 45+ days. A real commit is the documented activity signal; whether an API re-enable resets the timer is undocumented, so we don't rely on it. Render auto-deploys `main`, so a heartbeat commit also redeploys the app (a harmless restart: the disk cache survives).
 
 ### NECOFS / FVCOM Gotchas (currents pipeline)
 - **The live GOM3 forecast is listed but missing**: THREDDS `forecasts.xml` advertises `FVCOM/NECOFS/Forecasts/NECOFS_GOM3_FORECAST.nc`, but the file 404s (Oct 2026). The `NECOFS_FVCOM_OCEAN_GLOBAL_FORECAST.nc` that *is* live is **daily-mean** — tides average out, useless for currents. The hourly 30-year hindcast (`fvcom/hindcasts/30yr_gom3`, 1978-01-01 → 2017-01-01) works.
@@ -368,7 +368,7 @@ Napeague result: slack ≈ 1h10 after Montauk HW / 1h05 after LW (≈1h30 on sup
 - **Must use 1 gunicorn worker.** The `_raw_data_cache` is per-process. With multiple workers, a click request may be served by a worker that doesn't have the data. The disk cache fallback mitigates this, but 1 worker is the intended config.
 - **16 threads per worker** (`--threads 16`): GFW tile proxy and click callbacks are I/O-bound. With threads, `requests.get()` releases the GIL during network I/O, so tile fetches and click lookups run concurrently. After zoom, ~48 GFW tile requests flood the proxy — with 16 threads, most run concurrently (3 rounds vs 12 with 4 threads), leaving threads free for click callbacks. Python's GIL keeps dict operations on shared state (`_raw_data_cache`, `_gfw_style_cache`, `_gfw_tile_cache`) atomic. Memory overhead is minimal (~50-100KB RSS per thread for I/O-bound work).
 - **Start command must be set in Render Settings** (not blank — Render requires a value). Use: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --threads 16 --timeout 180`
-- **Auto-deploy is currently OFF.** Use Manual Deploy after pushing to `main`.
+- **Auto-deploy is ON**: pushes to `main` went live within ~2.5 min in Oct 2026 with no Manual Deploy (it used to be off). Treat every push to `main` as a production deploy — test locally first — and check the live asset afterwards (e.g. grep the served `/assets/currents.js`). `[skip render]` or `[render skip]` in a commit message skips that commit's deploy (docs-only changes); Manual Deploy in the dashboard still works.
 - **Pre-warm thread** runs 15s after startup. Only loads from disk cache (no ERDDAP, uses `raw_only=True` to skip PNG rendering). Heavy ERDDAP fetches during startup starve the gunicorn worker and cause Render's health check to fail, hanging the deploy indefinitely.
 - **Persistent Disk**: 1 GB disk mounted at `/var/data/cache`. Set `SST_CACHE_DIR=/var/data/cache` in Render Environment. Cache survives worker restarts and deploys. Without this, Render's ephemeral filesystem wipes cache on every container restart — the pre-cache system is useless without persistent storage.
 - **`GFW_API_TOKEN` env var** must be set in Render Environment for fishing activity layer. Without it, the layer degrades gracefully (transparent tiles).

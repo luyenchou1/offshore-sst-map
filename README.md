@@ -54,7 +54,7 @@ Open http://localhost:8050
 4. Set env vars `SST_CACHE_DIR=/var/data/cache` and `CACHE_UPLOAD_TOKEN` (shared with the GitHub repo secret of the same name, used by the seed/currents workflows)
 5. Start command: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --threads 16 --timeout 180`
 
-**Important**: Must use 1 worker — the in-memory raw data cache is per-process. Auto-deploy is off; deploy manually from the Render dashboard after pushing to `main`.
+**Important**: Must use 1 worker — the in-memory raw data cache is per-process. Auto-deploy is on: every push to `main` goes live in a few minutes (add `[skip render]` to a commit message to skip one).
 
 ## Custom Domain & Squarespace Embed
 

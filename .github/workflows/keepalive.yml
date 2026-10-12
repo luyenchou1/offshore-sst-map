@@ -4,7 +4,8 @@ name: Keepalive
 # repository activity — that silently stopped "Seed SST cache" on 2026-08-30.
 # If main has had no commit for 45+ days, push a tiny heartbeat commit so the
 # schedules (SST seed, currents build, this job) keep running. Does nothing while
-# the repo is active. Auto-deploy on Render is off, so this never deploys.
+# the repo is active. Render auto-deploys main, so a heartbeat also redeploys the
+# app (a harmless restart).
 on:
   schedule:
     - cron: '0 9 * * 1'   # Mondays 09:00 UTC
