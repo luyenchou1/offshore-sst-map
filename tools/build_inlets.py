@@ -125,7 +125,9 @@ INLETS = [
         "seed": (41.0320, -72.1400),
         "cut": ((41.02418, -72.13785), (41.02208, -72.13742)),
         "throat": {"dem": True, "length_m": 300.0,
-                   "source": "NOAA NCEI 3 m DEM across the gap (lidar, ~2014)"},
+                   "source": ("NOAA NCEI 3 m DEM across the gap between the spit and Louse Point "
+                              "(lidar, ~2014). The county-maintained channel (8 ft MLW, about "
+                              "110 ft wide; dredged 2013, 2020, 2023) shoals quickly.")},
         "outside": {"between": ("8510560", "8511171")},
         "notes": NOTE,
     },
@@ -140,8 +142,10 @@ INLETS = [
         # The narrow jetty reach is ~450 m; past it the channel runs on as a
         # lane through the harbor's shallow north end, not a constriction.
         "throat": {"dem": True, "length_m": 450.0,
-                   "source": ("NOAA NCEI 3 m DEM across the jetty channel (lidar, ~2014); "
-                              "it shows the channel deeper than the 6 ft charted dredge depth")},
+                   "source": ("NOAA NCEI 3 m DEM across the jetty channel (lidar, ~2014); it "
+                              "shows the channel deeper than the 6 ft charted dredge depth. "
+                              "Coast Pilot 2: 8 ft favoring the east side; the tidal current "
+                              "runs about 3 knots through the entrance.")},
         "outside": {"station": "8511171"},
         "notes": NOTE,
     },
@@ -154,8 +158,9 @@ INLETS = [
         "seed": (41.0600, -71.9250),
         "cut": ((41.07779, -71.93863), (41.07835, -71.93498)),
         "throat": {"dem": True, "length_m": 400.0,
-                   "source": ("NOAA NCEI 3 m DEM across the jetty channel; the dredged "
-                              "channel is deep enough for lidar to see it")},
+                   "source": ("NOAA NCEI 3 m DEM across the jetties (500 ft apart); USACE "
+                              "federal channel 150 ft wide, deepened to 17 ft MLLW in 2025-26. "
+                              "Coast Pilot 2: 1.2 knots on the flood, about 0.5 on the ebb.")},
         "outside": {"station": "8510502"},
         # NOAA predicts the tide both inside (8510448) and at the entrance:
         # the one place to check the method's harbor lag.
@@ -171,8 +176,9 @@ INLETS = [
         "seed": (41.0050, -72.2520),
         "cut": ((41.01177, -72.25298), (41.01144, -72.25193)),
         "throat": {"dem": True, "length_m": 150.0, "min_depth_m": 1.5,
-                   "source": ("NOAA NCEI 3 m DEM for the width; depth from NOAA chart "
-                              "soundings (2.4 m below MLLW just inside; 6 ft dredged)")},
+                   "source": ("NOAA NCEI 3 m DEM for the width; depth from the charted dredged "
+                              "channel (6 ft, ~135 ft wide; county-dredged again Nov 2023) and "
+                              "soundings of 2.4 m below MLLW just inside")},
         "outside": {"between": ("8511171", "8511629")},
         "notes": NOTE,
     },
@@ -184,9 +190,10 @@ INLETS = [
         "dem": "sagcove", "dem_bbox": (-72.345, 40.978, -72.285, 41.018),
         "seed": (41.0040, -72.3080),
         "cut": ((41.0045, -72.30066), (41.00302, -72.29792)),
-        "throat": {"dem": True, "length_m": 200.0, "min_depth_m": 1.8,
-                   "source": ("NOAA NCEI 3 m DEM for the width; depth from NOAA chart "
-                              "soundings by the bridge (1.8–2.7 m below MLLW)")},
+        "throat": {"dem": True, "length_m": 200.0, "min_depth_m": 1.4,
+                   "source": ("NOAA NCEI 3 m DEM for the width; Coast Pilot 2: the channel is "
+                              "about 8 ft deep through the bridge's 80 ft opening, shallower to "
+                              "either side (chart soundings 1.8-2.7 m below MLLW)")},
         "outside": {"station": "8511629"},
         "notes": NOTE,
     },
@@ -523,6 +530,14 @@ def summarize(inlet, datum, events, t0, t1):
     hL = [ts[i] for i in range(1, len(hb) - 1) if hb[i] <= hb[i - 1] and hb[i] < hb[i + 1]]
     T, V = shifted(events, inlet["outside"], datum["mean_ft"])
     bay = np.array([cos_tide(T, V, t) for t in ts])
+    # Typical (median) strongest flood / ebb of each tide: what the Coast Pilot
+    # means by "the current has a velocity of about X knots".
+    fl, eb = [], []
+    cuts = [int((t - ts[0]) // DT) for t, _ in zc]
+    for i0, i1 in zip(cuts[:-1], cuts[1:]):
+        seg = v[i0 + 1:i1 + 1]
+        if seg.size:
+            (fl if seg.mean() > 0 else eb).append(float(np.abs(seg).max()))
 
     def med(xs):
         xs = [x for x in xs if x is not None]
@@ -538,6 +553,8 @@ def summarize(inlet, datum, events, t0, t1):
                                            / (np.percentile(bay, 99) - np.percentile(bay, 1))), 3),
         "peak_flood_kn": round(float(np.percentile(v, 99.5)) * KNOTS, 2),
         "peak_ebb_kn": round(float(-np.percentile(v, 0.5)) * KNOTS, 2),
+        "typical_flood_kn": round(float(np.median(fl)) * KNOTS, 2) if fl else None,
+        "typical_ebb_kn": round(float(np.median(eb)) * KNOTS, 2) if eb else None,
     }
 
 

@@ -347,16 +347,19 @@ def _inlet_table(inlets):
             continue
         mf = r.get("max_flood_vs_hw_min")
         flood = "" if mf is None else f"{_dur(mf)} {'before' if mf < 0 else 'after'} high"
+        tf, te = r.get("typical_flood_kn"), r.get("typical_ebb_kn")
+        speed = (f"{tf:.1f} / {te:.1f} kn" if tf is not None and te is not None
+                 else f"{max(r['peak_flood_kn'], r['peak_ebb_kn']):.1f} kn")
         rows.append(html.Tr([
             html.Td(c["harbor_name"]),
             html.Td(f"{_dur(r['slack_after_hw_min'])} / {_dur(r['slack_after_lw_min'])} after"),
             html.Td(flood),
-            html.Td(f"{max(r['peak_flood_kn'], r['peak_ebb_kn']):.1f} kn"),
+            html.Td(speed),
         ]))
     if not rows:
         return None
     head = html.Tr([html.Th("Harbor"), html.Th("Slack after Montauk high / low"),
-                    html.Th("Strongest flood"), html.Th("Peak")])
+                    html.Th("Strongest flood"), html.Th("Typical peak flood / ebb")])
     return html.Table([head] + rows, className="currents-about-table")
 
 
@@ -439,9 +442,13 @@ def _about_body(inlets=None):
                    "The same method puts the tide inside Lake Montauk within about 5 minutes "
                    "of NOAA's own prediction."),
             _inlet_table(inlets),
-            html.P("Typical timing (Sep–Oct 2026); bigger tides run later in the narrow inlets. "
-                   "Speeds are averages across each inlet; the deepest part of the channel "
-                   "runs faster. Napeague's east inlet near Goff Point closed around 2007, and "
+            html.P("Typical timing (Sep–Oct 2026); bigger tides run later in the narrow inlets "
+                   "and faster everywhere. Speeds are averages across each inlet; mid-channel "
+                   "runs faster. Where NOAA's Coast Pilot gives a speed, it is 30–40% above "
+                   "these averages, as expected mid-channel: about 1.2 knots on the flood at "
+                   "Lake Montauk's entrance and about 3 knots at Three Mile Harbor's. Lake "
+                   "Montauk's ebb is weaker in reality (about 0.5 knot) than this simple model "
+                   "gives. Napeague's east inlet near Goff Point closed around 2007, and "
                    "NOAA's \"Goff Point, 0.4 mile NW\" station is out in the bay west of Hicks "
                    "Island, not in the harbor's inlet.",
                    className="currents-about-note"),
@@ -453,10 +460,12 @@ def _about_body(inlets=None):
                          "at about 1 km resolution here."]),
                 html.Li(["Tides and tidal-current predictions: NOAA CO-OPS, Montauk station "
                          "8510560 and 86 current-prediction stations."]),
-                html.Li(["Harbor inlets: harbor area from NOAA NCEI's 3 m coastal elevation "
-                         "model; Napeague's inlet dimensions from a 2012 survey for the Suffolk "
-                         "County Peconic Estuary Program (Napeague Harbor Water Circulation "
-                         "Enhancement)."]),
+                html.Li(["Harbor inlets: harbor areas from NOAA NCEI's 3 m coastal elevation "
+                         "model (they agree with the towns' published areas within a few "
+                         "percent); inlet sizes from that model, NOAA nautical charts and the "
+                         "U.S. Coast Pilot, USACE surveys of Lake Montauk's channel, and for "
+                         "Napeague a 2012 survey for the Suffolk County Peconic Estuary Program "
+                         "(Napeague Harbor Water Circulation Enhancement)."]),
             ]),
             html.P("For fishing planning and learning, not for navigation.",
                    className="currents-about-note"),

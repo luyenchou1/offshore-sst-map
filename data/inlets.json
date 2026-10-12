@@ -1,6 +1,6 @@
 {
  "version": 1,
- "built_at": "2026-10-12T01:17:57Z",
+ "built_at": "2026-10-12T01:33:56Z",
  "method": "Pond-and-inlet model (Keulegan 1967; King 1974; inertia as in Mehta & Ozsoy 1978) driven by NOAA's Montauk high/low predictions: the harbor fills and drains through its inlet, the flow limited by the inlet's size, friction and the water's momentum. Built by tools/build_inlets.py; run in the browser by assets/currents.js.",
  "constants": {
   "g": 9.81,
@@ -44,7 +44,7 @@
    },
    "throat": {
     "length_m": 400.0,
-    "source": "NOAA NCEI 3 m DEM across the jetty channel; the dredged channel is deep enough for lidar to see it",
+    "source": "NOAA NCEI 3 m DEM across the jetties (500 ft apart); USACE federal channel 150 ft wide, deepened to 17 ft MLLW in 2025-26. Coast Pilot 2: 1.2 knots on the flood, about 0.5 on the ebb.",
     "area_m2": 395.5,
     "width_m": 142.8,
     "manning_n": 0.025,
@@ -150,7 +150,9 @@
     "harbor_lw_after_montauk_min": 4,
     "harbor_range_vs_bay": 1.007,
     "peak_flood_kn": 1.2,
-    "peak_ebb_kn": 1.09
+    "peak_ebb_kn": 1.09,
+    "typical_flood_kn": 0.91,
+    "typical_ebb_kn": 0.79
    },
    "selftest": {
     "day": "2026-10-11",
@@ -351,7 +353,9 @@
     "harbor_lw_after_montauk_min": 66,
     "harbor_range_vs_bay": 0.939,
     "peak_flood_kn": 2.39,
-    "peak_ebb_kn": 2.35
+    "peak_ebb_kn": 2.35,
+    "typical_flood_kn": 1.89,
+    "typical_ebb_kn": 1.76
    },
    "selftest": {
     "day": "2026-10-11",
@@ -442,7 +446,7 @@
    },
    "throat": {
     "length_m": 300.0,
-    "source": "NOAA NCEI 3 m DEM across the gap (lidar, ~2014)",
+    "source": "NOAA NCEI 3 m DEM across the gap between the spit and Louse Point (lidar, ~2014). The county-maintained channel (8 ft MLW, about 110 ft wide; dredged 2013, 2020, 2023) shoals quickly.",
     "area_m2": 199.1,
     "width_m": 229.6,
     "manning_n": 0.025,
@@ -548,7 +552,9 @@
     "harbor_lw_after_montauk_min": 40,
     "harbor_range_vs_bay": 0.991,
     "peak_flood_kn": 0.95,
-    "peak_ebb_kn": 0.82
+    "peak_ebb_kn": 0.82,
+    "typical_flood_kn": 0.67,
+    "typical_ebb_kn": 0.62
    },
    "selftest": {
     "day": "2026-10-11",
@@ -639,7 +645,7 @@
    },
    "throat": {
     "length_m": 450.0,
-    "source": "NOAA NCEI 3 m DEM across the jetty channel (lidar, ~2014); it shows the channel deeper than the 6 ft charted dredge depth",
+    "source": "NOAA NCEI 3 m DEM across the jetty channel (lidar, ~2014); it shows the channel deeper than the 6 ft charted dredge depth. Coast Pilot 2: 8 ft favoring the east side; the tidal current runs about 3 knots through the entrance.",
     "area_m2": 163.3,
     "width_m": 83.3,
     "manning_n": 0.025,
@@ -745,7 +751,9 @@
     "harbor_lw_after_montauk_min": 112,
     "harbor_range_vs_bay": 0.869,
     "peak_flood_kn": 2.65,
-    "peak_ebb_kn": 2.58
+    "peak_ebb_kn": 2.58,
+    "typical_flood_kn": 2.12,
+    "typical_ebb_kn": 2.02
    },
    "selftest": {
     "day": "2026-10-11",
@@ -836,7 +844,7 @@
    },
    "throat": {
     "length_m": 150.0,
-    "source": "NOAA NCEI 3 m DEM for the width; depth from NOAA chart soundings (2.4 m below MLLW just inside; 6 ft dredged)",
+    "source": "NOAA NCEI 3 m DEM for the width; depth from the charted dredged channel (6 ft, ~135 ft wide; county-dredged again Nov 2023) and soundings of 2.4 m below MLLW just inside",
     "area_m2": 84.1,
     "width_m": 56.1,
     "manning_n": 0.025,
@@ -942,7 +950,9 @@
     "harbor_lw_after_montauk_min": 60,
     "harbor_range_vs_bay": 1.001,
     "peak_flood_kn": 1.04,
-    "peak_ebb_kn": 1.1
+    "peak_ebb_kn": 1.1,
+    "typical_flood_kn": 0.77,
+    "typical_ebb_kn": 0.77
    },
    "selftest": {
     "day": "2026-10-11",
@@ -1033,8 +1043,8 @@
    },
    "throat": {
     "length_m": 200.0,
-    "source": "NOAA NCEI 3 m DEM for the width; depth from NOAA chart soundings by the bridge (1.8\u20132.7 m below MLLW)",
-    "area_m2": 206.2,
+    "source": "NOAA NCEI 3 m DEM for the width; Coast Pilot 2: the channel is about 8 ft deep through the bridge's 80 ft opening, shallower to either side (chart soundings 1.8-2.7 m below MLLW)",
+    "area_m2": 160.4,
     "width_m": 114.5,
     "manning_n": 0.025,
     "k_loss": 1.1,
@@ -1132,82 +1142,84 @@
    "confidence": "Rough",
    "report": {
     "slack_after_hw_min": 96,
-    "slack_after_lw_min": 76,
-    "max_flood_vs_hw_min": -94,
-    "max_ebb_vs_lw_min": -77,
+    "slack_after_lw_min": 85,
+    "max_flood_vs_hw_min": -85,
+    "max_ebb_vs_lw_min": -64,
     "harbor_hw_after_montauk_min": 95,
-    "harbor_lw_after_montauk_min": 76,
-    "harbor_range_vs_bay": 1.001,
-    "peak_flood_kn": 1.21,
-    "peak_ebb_kn": 1.19
+    "harbor_lw_after_montauk_min": 85,
+    "harbor_range_vs_bay": 0.995,
+    "peak_flood_kn": 1.56,
+    "peak_ebb_kn": 1.46,
+    "typical_flood_kn": 1.15,
+    "typical_ebb_kn": 1.1
    },
    "selftest": {
     "day": "2026-10-11",
     "points": [
      {
       "t": 1791691200.0,
-      "kn": -0.3286,
-      "harbor_ft": 2.2692
+      "kn": -0.3861,
+      "harbor_ft": 2.2756
      },
      {
       "t": 1791698400.0,
-      "kn": -0.8294,
-      "harbor_ft": 1.3852
+      "kn": -1.0031,
+      "harbor_ft": 1.4349
      },
      {
       "t": 1791705600.0,
-      "kn": -0.681,
-      "harbor_ft": 0.3468
+      "kn": -0.9579,
+      "harbor_ft": 0.4247
      },
      {
       "t": 1791712800.0,
-      "kn": 0.4382,
-      "harbor_ft": 0.177
+      "kn": 0.5252,
+      "harbor_ft": 0.1584
      },
      {
       "t": 1791720000.0,
-      "kn": 1.1409,
-      "harbor_ft": 1.2575
+      "kn": 1.4346,
+      "harbor_ft": 1.1412
      },
      {
       "t": 1791727200.0,
-      "kn": 0.7035,
-      "harbor_ft": 2.7506
+      "kn": 0.9469,
+      "harbor_ft": 2.708
      },
      {
       "t": 1791734400.0,
-      "kn": -0.2491,
-      "harbor_ft": 3.0928
+      "kn": -0.2837,
+      "harbor_ft": 3.0958
      },
      {
       "t": 1791741600.0,
-      "kn": -0.9376,
-      "harbor_ft": 2.1091
+      "kn": -1.1028,
+      "harbor_ft": 2.1565
      },
      {
       "t": 1791748800.0,
-      "kn": -1.0882,
-      "harbor_ft": 0.6596
+      "kn": -1.3731,
+      "harbor_ft": 0.782
      },
      {
       "t": 1791756000.0,
-      "kn": -0.0106,
-      "harbor_ft": -0.14
+      "kn": -0.4558,
+      "harbor_ft": -0.1066
      },
      {
       "t": 1791763200.0,
-      "kn": 0.9018,
-      "harbor_ft": 0.4419
+      "kn": 1.1032,
+      "harbor_ft": 0.3607
      },
      {
       "t": 1791770400.0,
-      "kn": 0.8248,
-      "harbor_ft": 1.7022
+      "kn": 1.1479,
+      "harbor_ft": 1.6214
      },
      {
       "t": 1791777600.0,
-      "kn": -0.0857,
-      "harbor_ft": 2.2727
+      "kn": -0.1161,
+      "harbor_ft": 2.2739
      }
     ]
    }
