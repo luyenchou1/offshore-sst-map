@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-14 — Currents: the map's time box moves under the map
+
+### Changed
+- The time / tide / current box no longer floats over the map's top-left corner, where it hid the water on phones (beta feedback from iPhone). It's now a slim strip between the map and the chart: time and tide stage, then the selected spot's current and Montauk's tide. One line on wide screens, two on phones, with a fixed height so the map never jumps; a long spot name trims the tide text, not the current.
+
 ## 2026-10-11 — GotOne Labs home page and visit counter
 
 ### Added

@@ -309,6 +309,9 @@ def build_currents_map():
                     ],
                     className="currents-map-box",
                 ),
+                # The map's time / tide / current (filled by currents.js): a
+                # strip under the map, not an overlay hiding the water.
+                html.Div(id="currents-status-line", className="currents-status-line"),
                 html.Div(
                     [
                         html.Div(id="currents-badge", className="currents-badge"),

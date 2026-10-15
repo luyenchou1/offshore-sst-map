@@ -131,23 +131,45 @@
 /* Plotly's drag layer sets a pointing-hand cursor; signal "slide along". */
 #currents-chart .nsewdrag { cursor: ew-resize !important; }
 
-/* Overlays created by currents.js inside the Leaflet container */
-.currents-clock {
-    background: rgba(10, 22, 40, 0.82);
-    border: 1px solid #1e293b;
-    border-radius: 8px;
-    padding: 0.45rem 0.65rem;
-    color: #e2e8f0;
+/* The map's moment (time, tide stage, spot current, tide), between the map and
+   the chart (filled by currents.js updateClock). Fixed height so the map never
+   resizes as the text changes (a resize reseeds the particles). Two lines on
+   narrow screens, one on wide ones. */
+.currents-status-line {
+    flex: 0 0 auto;
+    height: 2.75rem;
+    padding: 0.3rem 0.75rem;
+    background: #0d1d38;
+    border-top: 1px solid #1e293b;
+    color: #cbd5e1;
     font-size: 0.78rem;
-    line-height: 1.4;
-    min-width: 13rem;
-    pointer-events: none;
+    line-height: 1.1rem;
+    overflow: hidden;
 }
-.currents-clock .time { font-size: 0.92rem; font-weight: 600; color: #ffffff; }
-.currents-clock .cur-row { color: #cbd5e1; }   /* not .row: Bootstrap owns that */
-.currents-clock .flood { color: #2dd4bf; }
-.currents-clock .ebb { color: #fb923c; }
-.currents-clock .slack { color: #e2e8f0; }
+.currents-status-line .cst-l1,
+.currents-status-line .cst-l2 {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.currents-status-line .cst-time { color: #ffffff; font-weight: 600; }
+.currents-status-line .cst-sub,
+.currents-status-line .cst-dot { color: #94a3b8; }
+.currents-status-line .cst-cur { color: #e2e8f0; }
+.currents-status-line .flood { color: #2dd4bf; font-weight: 600; }
+.currents-status-line .ebb { color: #fb923c; font-weight: 600; }
+.currents-status-line .slack { color: #ffffff; font-weight: 600; }
+@media (min-width: 992px) and (min-height: 501px) {
+    .currents-status-line {
+        height: 1.9rem;
+        display: flex;
+        align-items: center;
+        gap: 0;
+    }
+    .currents-status-line .cst-l1 { flex: 0 0 auto; }
+    .currents-status-line .cst-l2 { flex: 1 1 auto; min-width: 0; }
+    .currents-status-line .cst-l2::before { content: " · "; color: #94a3b8; white-space: pre; }
+}
 .currents-legend {
     background: rgba(10, 22, 40, 0.82);
     border: 1px solid #1e293b;
@@ -300,8 +322,6 @@
 .currents-about-link { background: none; border: none; cursor: pointer; color: #cbd5e1; }
 .currents-about-link:hover { color: #ffffff; }
 
-/* Map overlays added by currents.js */
-.currents-clock .sub { color: #94a3b8; font-size: 0.72rem; }
 .currents-legend .haze-note {
     display: none;
     margin-top: 0.35rem;
@@ -364,8 +384,7 @@
     .currents-about-table td:first-child { width: auto; }
     .currents-chart-box { height: 36%; min-height: 160px; }
     .currents-badge { font-size: 0.7rem; padding: 0.25rem 0.6rem 0; }
-    .currents-clock { min-width: 0; font-size: 0.7rem; padding: 0.35rem 0.5rem; }
-    .currents-clock .time { font-size: 0.8rem; }
+    .currents-status-line { font-size: 0.72rem; height: 2.55rem; padding: 0.25rem 0.6rem; line-height: 1.02rem; }
     .currents-legend { display: none; }
 }
 

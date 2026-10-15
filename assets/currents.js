@@ -60,7 +60,7 @@
     // -------------------------------------------------------------- state --
     var S = {
         map: null, particles: null, stationLayer: null, inletLayer: null, markers: {}, haze: null,
-        clock: null, legend: null, playbar: null, fsBtn: null,
+        clockEl: null, clockHtml: "", legend: null, playbar: null, fsBtn: null,
         statusEl: null, cursorEl: null, readoutEl: null, readout: null, readoutTimer: 0,
         readoutKey: "", legendRoom: false,
         resizeObs: null, manifestP: null, manifest: null, inflight: {},
@@ -1047,11 +1047,6 @@
     });
 
     // ------------------------------------------------------------ controls --
-    var Clock = L.Control.extend({
-        options: { position: "topleft" },
-        onAdd: function () { return L.DomUtil.create("div", "currents-clock"); }
-    });
-
     var Legend = L.Control.extend({
         options: { position: "bottomright" },
         onAdd: function () {
@@ -1171,24 +1166,38 @@
         if (S.statusEl) { S.statusEl.style.display = "none"; }
     }
 
+    // The moment on the map, in a strip between the map and the chart (it used
+    // to float over the map's top-left corner, hiding the water on phones).
+    // Line 1: time + tide stage. Line 2: the spot's current first, then the
+    // tide, so a long spot name trims the tide, not the current. Wide screens
+    // run both lines together (assets/currents.css).
     function updateClock() {
-        if (!S.clock || !S.tl) { return; }
-        var t = viewT(), tl = S.tl;
-        var html = '<div class="time">' + esc(tl.clockTitle(t)) + "</div>";
-        var sub = tl.clockSub ? tl.clockSub(t) : "";
-        if (sub) { html += '<div class="cur-row sub">' + esc(sub) + "</div>"; }
-        var td = tl.tide(t);
-        if (td) {
-            html += '<div class="cur-row">Montauk tide ' + td.v.toFixed(1) + " ft, " +
-                    (td.rising ? "rising" : "falling") + "</div>";
+        if (!S.tl) { return; }
+        if (!S.clockEl || !document.body.contains(S.clockEl)) {
+            S.clockEl = $("currents-status-line");
+            S.clockHtml = "";
+            if (!S.clockEl) { return; }
         }
-        var st = S.stationsById[S.station];
+        var t = viewT(), tl = S.tl;
+        var sub = tl.clockSub ? tl.clockSub(t) : "";
+        var l1 = '<b class="cst-time">' + esc(tl.clockTitle(t)) + "</b>" +
+                 (sub ? '<span class="cst-sub"> · ' + esc(sub) + "</span>" : "");
+        var l2 = [], st = S.stationsById[S.station], td = tl.tide(t);
         if (st) {
             var d = describe(tl.stationKn(st, t));
-            html += '<div class="cur-row">' + esc(st.label) + (st.estimate ? " (est.)" : "") +
-                    ': <span class="' + d.cls + '">' + d.text + "</span></div>";
+            l2.push('<span class="cst-cur">' + esc(st.label) + (st.estimate ? " (est.)" : "") +
+                    ': <span class="' + d.cls + '">' + d.text + "</span></span>");
         }
-        S.clock.getContainer().innerHTML = html;
+        if (td) {
+            l2.push('<span class="cst-tide">Montauk tide ' + td.v.toFixed(1) + " ft, " +
+                    (td.rising ? "rising" : "falling") + "</span>");
+        }
+        var html = '<div class="cst-l1">' + l1 + '</div><div class="cst-l2">' +
+                   l2.join('<span class="cst-dot"> · </span>') + "</div>";
+        if (html !== S.clockHtml) {                    // ~5 updates a second: skip no-ops
+            S.clockHtml = html;
+            S.clockEl.innerHTML = html;
+        }
     }
 
     // ------------------------------------------------------------ stations --
@@ -2051,7 +2060,6 @@
         S.particles = new ParticleLayer().addTo(map);
         S.stationLayer = L.layerGroup();
         S.inletLayer = L.layerGroup().addTo(map);
-        S.clock = new Clock().addTo(map);
         S.legend = new Legend().addTo(map);
         S.playbar = new PlayBar().addTo(map);
         updatePlayBar();
@@ -2093,7 +2101,8 @@
         S.inletLayer = null;
         S.markers = {};
         S.haze = null;
-        S.clock = null;
+        S.clockEl = null;
+        S.clockHtml = "";
         S.legend = null;
         S.playbar = null;
         S.fsBtn = null;
