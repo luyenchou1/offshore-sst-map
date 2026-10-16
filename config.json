@@ -13,20 +13,19 @@
     [-74.1322623, 40.6427692]
   ],
   "default_palette": "tuna",
-  "servers": [
-    "https://coastwatch.pfeg.noaa.gov/erddap",
-    "https://upwell.pfeg.noaa.gov/erddap",
-    "https://coastwatch.noaa.gov/erddap"
-  ],
-  "primary_search_terms": [
-    "MUR",
-    "GHRSST",
-    "analysed_sst"
-  ],
-  "fallback_search_terms": [
-    "OISST",
-    "ncdcOisst2Agg",
-    "sst"
-  ],
+  "erddap": {
+    "budget_s": 22,
+    "concurrency": 3,
+    "mur": [
+      {"server": "https://coastwatch.pfeg.noaa.gov/erddap", "dataset_id": "jplMURSST41", "var": "analysed_sst",
+       "hour": 9}
+    ],
+    "oisst": [
+      {"server": "https://coastwatch.pfeg.noaa.gov/erddap", "dataset_id": "ncdcOisst21Agg_LonPM180",
+       "var": "sst", "zlev": 0.0, "hour": 12, "first": "1981-09-01"},
+      {"server": "https://coastwatch.pfeg.noaa.gov/erddap", "dataset_id": "ncdcOisst21NrtAgg_LonPM180",
+       "var": "sst", "zlev": 0.0, "hour": 12, "first": "2020-05-04"}
+    ]
+  },
   "cache_days": 7
 }
