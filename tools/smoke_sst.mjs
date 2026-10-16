@@ -97,7 +97,7 @@ async function run(size) {
     check(size, 'How it works opens on a first visit', modal);
     if (modal) {
         const txt = await page.innerText('.modal.show .modal-body');
-        check(size, 'How it works has no em dashes', !/—/.test(txt));
+        check(size, 'How it works has no em dashes', !/\u2014/.test(txt));
         await page.click('#sst-about-close');
         await sleep(600);
     }
