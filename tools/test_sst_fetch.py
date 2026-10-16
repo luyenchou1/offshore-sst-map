@@ -488,6 +488,46 @@ def test_app_due_refresh_failure_serves_saved_copy():
     assert not any(".nc?" in u for u in fake.calls)
 
 
+def test_app_two_visitors_one_fetch():
+    appmod = _app()
+    fresh()
+    slow = lambda u, n, t: (time.sleep(0.3), None)[1]  # every request a little slow
+    fake = install(FakeErddap(behave={"jplMURSST41": slow}))
+    erddap.latest_mur_date(CFG)
+    out = []
+    ts = [threading.Thread(target=lambda: out.append(appmod._load_week(date(2013, 8, 1), False, LATEST)))
+          for _ in range(2)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert len(out) == 2 and all(w["meta_out"]["days"][-1] == "2013-08-01" for w in out)
+    assert sum(1 for u in fake.calls if "jplMURSST41.nc" in u) == 7, len(fake.calls)
+    assert sorted(w["meta_out"]["from_cache"] for w in out) == [False, True]
+
+
+def test_app_failure_not_reasked_within_a_minute():
+    appmod = _app()
+    fresh()
+    appmod._failed_recently.clear()
+    fake = install(FakeErddap(behave={"jplMURSST41": busy, "ncdcOisst21Agg_LonPM180": busy,
+                                      "ncdcOisst21NrtAgg_LonPM180": busy}))
+    appmod.CFG["erddap"]["budget_s"] = 6
+    try:
+        for i in range(2):
+            t0 = time.monotonic()
+            try:
+                appmod._load_week(date(2016, 9, 1), False, LATEST)
+                raise AssertionError("expected SSTUnavailable")
+            except erddap.SSTUnavailable as e:
+                assert e.reason == "busy"
+            if i == 0:
+                n = len(fake.calls)
+            else:
+                assert len(fake.calls) == n and time.monotonic() - t0 < 0.5
+    finally:
+        appmod.CFG["erddap"]["budget_s"] = 22
+        appmod._failed_recently.clear()
+
+
 # ---------------- app: routes and layers ----------------
 
 def test_gfw_proxy_reads_range_per_request():

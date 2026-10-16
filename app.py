@@ -1469,6 +1469,8 @@ _RECENT_DAYS = 10           # weeks this close to the newest day are fetched, ne
 _REFRESH_BUDGET_S = 10      # a saved copy exists: spend less time trying to refresh it
 _REFRESH_COOLDOWN_S = 1800  # and don't retry the same week more often than this
 _refresh_tried = {}         # end ISO -> monotonic time of the last refresh attempt
+_FAIL_REUSE_S = 60          # a week NOAA just failed to send isn't asked for again for a minute
+_failed_recently = {}       # end ISO -> (monotonic time, SSTUnavailable)
 _week_locks = {}            # end ISO -> Lock, so two visitors on one uncached week fetch it once
 _week_locks_guard = threading.Lock()
 
@@ -1581,41 +1583,62 @@ def _load_week(requested_end, locked, latest):
     end = min(requested_end, latest) if latest else requested_end
     match = "newest" if end != requested_end else "exact"
     recent = ((latest or date.today()) - end).days <= _RECENT_DAYS
-    with _week_lock(end):
-        saved = _saved_week(end, locked)
-        if saved and not sstmeta.refresh_due(saved["meta"]):
+    lock = _week_lock(end)
+    # Another visitor may be fetching this week: wait for it (then it's in memory), not past
+    # one budget; if that wait runs out, go ahead without the lock.
+    got_lock = lock.acquire(timeout=float(CFG.get("erddap", {}).get("budget_s", 22)) + 3)
+    try:
+        return _load_week_locked(requested_end, end, match, recent, locked, latest)
+    finally:
+        if got_lock:
+            lock.release()
+
+
+def _load_week_locked(requested_end, end, match, recent, locked, latest):
+    """_load_week with the week's lock held (or its wait timed out)."""
+    saved = _saved_week(end, locked)
+    if saved and not sstmeta.refresh_due(saved["meta"]):
+        return _serve(saved, locked, requested_end, latest, match)
+    if saved is None and not recent:
+        near = _saved_nearby(end, locked)
+        if near:
+            return _serve(near, locked, requested_end, latest, "closest_saved")
+    if saved is not None:
+        if time.monotonic() - _refresh_tried.get(str(end), -1e9) < _REFRESH_COOLDOWN_S:
             return _serve(saved, locked, requested_end, latest, match)
-        if saved is None and not recent:
-            near = _saved_nearby(end, locked)
-            if near:
-                return _serve(near, locked, requested_end, latest, "closest_saved")
-        if saved is not None:
-            if time.monotonic() - _refresh_tried.get(str(end), -1e9) < _REFRESH_COOLDOWN_S:
-                return _serve(saved, locked, requested_end, latest, match)
-            _refresh_tried[str(end)] = time.monotonic()
-            logger.info("Saved week %s is due a refresh (%s, built %s)", end,
-                        saved["meta"].get("source"), saved["meta"].get("built_at"))
-        try:
-            sst = get_sst_multiday(end, CFG, budget_s=_REFRESH_BUDGET_S if saved else None)
-        except SSTUnavailable as e:
-            if saved:
-                return _serve(saved, locked, requested_end, latest, "older_copy")
-            queued = _queue_for_seeder(end, e.reason)
-            near = _saved_nearby(end, locked, allow_due=True)
-            if near:
-                return _serve(near, locked, requested_end, latest, "closest_saved", queued=queued)
-            e.queued = queued
-            raise
-        store, raw = _build_payload(sst, locked)
-        fresh = {"store": store, "raw": raw, "meta": raw["meta"], "end": end, "write": "fresh"}
-        if saved and _week_score(fresh["meta"]) < _week_score(saved["meta"]):
+        _refresh_tried[str(end)] = time.monotonic()
+        logger.info("Saved week %s is due a refresh (%s, built %s)", end,
+                    saved["meta"].get("source"), saved["meta"].get("built_at"))
+    try:
+        last_fail = _failed_recently.get(str(end))
+        if not saved and last_fail and time.monotonic() - last_fail[0] < _FAIL_REUSE_S:
+            logger.info("Week %s failed %.0fs ago; not asking NOAA again yet", end,
+                        time.monotonic() - last_fail[0])
+            raise last_fail[1]
+        sst = get_sst_multiday(end, CFG, budget_s=_REFRESH_BUDGET_S if saved else None)
+    except SSTUnavailable as e:
+        _failed_recently[str(end)] = (time.monotonic(), e)
+        if len(_failed_recently) > 256:
+            _failed_recently.clear()
+        if saved:
             return _serve(saved, locked, requested_end, latest, "older_copy")
-        queued = False
-        if not fresh["meta"]["complete"] or fresh["meta"]["source"] != "MUR":
-            queued = _queue_for_seeder(end, "busy")
-        logger.info("Fetched %s %s: %d days in %.1fs", fresh["meta"]["source"], end,
-                    len(fresh["meta"]["days"]), sst.get("fetch_seconds", 0))
-        return _serve(fresh, locked, requested_end, latest, match, queued=queued)
+        queued = _queue_for_seeder(end, e.reason)
+        near = _saved_nearby(end, locked, allow_due=True)
+        if near:
+            return _serve(near, locked, requested_end, latest, "closest_saved", queued=queued)
+        e.queued = queued
+        raise
+    _failed_recently.pop(str(end), None)
+    store, raw = _build_payload(sst, locked)
+    fresh = {"store": store, "raw": raw, "meta": raw["meta"], "end": end, "write": "fresh"}
+    if saved and _week_score(fresh["meta"]) < _week_score(saved["meta"]):
+        return _serve(saved, locked, requested_end, latest, "older_copy")
+    queued = False
+    if not fresh["meta"]["complete"] or fresh["meta"]["source"] != "MUR":
+        queued = _queue_for_seeder(end, "busy")
+    logger.info("Fetched %s %s: %d days in %.1fs", fresh["meta"]["source"], end,
+                len(fresh["meta"]["days"]), sst.get("fetch_seconds", 0))
+    return _serve(fresh, locked, requested_end, latest, match, queued=queued)
 
 
 def _write_week(w, locked):

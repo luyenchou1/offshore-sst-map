@@ -9,8 +9,8 @@
 - **Basemap**: Esri World Light Gray Canvas — keyless raster tiles, `{z}/{y}/{x}` scheme. Replaced CARTO Positron (`basemaps.cartocdn.com/light_all`), which began requiring an API key and served "API KEY REQUIRED" watermarks. Defined in `layout/mapview.py` (SST map) and `layout/catchview.py` (catch map). `/currents` uses the dark counterpart (`World_Dark_Gray_Base` + `World_Dark_Gray_Reference` labels), also keyless.
 - **Pages** (one Dash app; hand-written router `route_page` in `app.py`): `/` GotOne Labs home (tiles; `layout/labsview.py`) · `/sst` SST map · `/currents` tidal currents — Today / Tide cycle / Example weeks, plus estimated currents in six harbor inlets · `/catches` catch map (gated by `CATCHES_ACCESS_KEY`, no public link). Both tools link back with "← GotOne Labs". **On the old host `sst.gotoneapp.com`, `/` is still the SST map** (the Squarespace embed points there) and the Labs home is `/labs`; set `LABS_HOST` to redirect it (see Custom Domain).
 - **Visits, feature use and "Helpful?" feedback** (Oct 2026): one anonymous counting service for every Labs tool, this app's SST and Currents and The Striper Recount (striperrecount.gotoneapp.com posts here cross-origin). Shared spec: `docs/labs-analytics-contract.md` (page ids, event whitelist, body shapes; keep it in sync with the Recount site). `POST /api/hit` (page views), `POST /api/event` (feature use, whitelist `labstats.EVENTS[tool]`), `POST /api/feedback` (vote + optional private note; needs our Origin): text/plain JSON from `navigator.sendBeacon`, always 204. No cookies; daily-salted visitor hash only for daily uniques and rate limits, deleted after 90 days (daily unique counts kept in `uniques`); DNT/GPC and bots never counted (feedback is kept with DNT: the reader chose to send it). Client: `assets/labs.js` (`GotOneLabs.page/event`, the Helpful control). Private dashboard `/labs/stats?key=$LABS_STATS_KEY` (JSON `/api/labs/stats`), rendered by `layout/statsview.py`. Tests: `tools/test_labstats.py`.
-- **NOAA CoastWatch ERDDAP** — MUR GHRSST (1km, preferred) with OISST (25km) fallback
-- Data available from 2002-06-01 to ~2 days ago (MUR has ~2-day latency)
+- **NOAA CoastWatch ERDDAP**: MUR (`jplMURSST41`, 1 km), with OISST v2.1 (25 km) only when MUR sends nothing in time. Known dataset ids in `config.json`, no search (see Architecture → SST fetch)
+- Data from 2002-06-01 to yesterday: MUR's first version of a day is on ERDDAP about a day later (Oct 16, 2026: Oct 15). The app reads ERDDAP's `time[last]`, hourly
 - Python 3.12, venv at `.venv/`
 - Dev server: `python app.py` (port 8050)
 - Production: **Render Starter** ($7/month) at https://offshore-sst-map.onrender.com
@@ -40,12 +40,26 @@
 **History:** from June 2026 NOAA CoastWatch ERDDAP blocked Render's datacenter IP at the network layer (`Network is unreachable`, `Connection reset by peer`, connect timeouts; `coastwatch.noaa.gov` additionally tarpits with `ReadTimeout` from every IP), so cache misses on Render hung the full 90s and showed the red "SST fetch timed out after 90s" error. **As of 2026-10-10 the block is lifted** — Render fetched an uncached Oct 8 window live in ~10 s. The off-Render seeding stays as insurance in case it returns.
 
 - **Render (production)** serves from its disk cache first; on a miss it fetches ERDDAP itself via `get_sst_multiday()` (works again).
-- **Off-Render seeder**: a daily GitHub Action (`.github/workflows/seed-sst-cache.yml`) runs `tools/sync_cache.py`, which fetches recent 7-day windows from ERDDAP and POSTs raw-only cache files to `POST /api/cache/upload` (auth: `CACHE_UPLOAD_TOKEN` env var + GitHub repo secret). Seeds end-dates today-2..today-11; the ±3-day fuzzy lookup covers the rest. Uploads retry on transient Render 502s. **GitHub silently disabled this job for inactivity on 2026-08-30**; `.github/workflows/keepalive.yml` now prevents that (see Lessons).
+- **Off-Render seeder**: a daily GitHub Action (`.github/workflows/seed-sst-cache.yml`) runs `tools/sync_cache.py`, which fetches recent 7-day windows from ERDDAP and POSTs raw-only cache files to `POST /api/cache/upload` (auth: `CACHE_UPLOAD_TOKEN` env var + GitHub repo secret). Seeds the 10 end dates ending on MUR's newest day, twice daily, plus weeks readers asked for that NOAA couldn't send (see SST fetch below). Uploads retry on transient Render 502s. **GitHub silently disabled this job for inactivity on 2026-08-30**; `.github/workflows/keepalive.yml` now prevents that (see Lessons).
 - **localhost (dev)** fetches ERDDAP live, exactly as the Data Flow below describes.
+
+### SST fetch: known datasets, one time budget, OISST fallback, payload meta (Oct 2026)
+- **Sources** (`config.json` "erddap"; defaults in `data/erddap.DEFAULT_SOURCES`): MUR `jplMURSST41` (`analysed_sst`, stamped 09:00Z) on coastwatch.pfeg. OISST v2.1 `ncdcOisst21Agg_LonPM180` (final, 1981-09-01 to about two weeks ago), then `ncdcOisst21NrtAgg_LonPM180` (near-real-time, 2020-05-04 to yesterday): `sst` with a `[(0.0)]` zlev, stamped 12:00Z, 0.25 degree. No dataset search at request time (the search pages 403/404 from cloud IPs). Dropped: upwell.pfeg (it 302s to coastwatch.pfeg, same backend) and coastwatch.noaa.gov (no MUR; 404, tarpits). None of polarwatch, cwcgom, apdrc, pacioos, ioos, ncei or marine.ie serves `jplMURSST41` (checked Oct 2026).
+- **Budget**: `get_sst_multiday()` runs every request against one `Deadline` (`budget_s`, 22 s). Connect 4 s / read 8 s timeouts are capped by the time left, bodies are read in chunks with a deadline check, 429/5xx/network errors are retried after about 1 s and 2.5 s only while time allows, and days go 3 at a time, newest first (`concurrency`). It returns at the deadline even if requests are still running (they end on their own). The callback adds under a second (land mask cached per grid, PNGs), so a miss answers in about 25 s at worst.
+- **Newest day**: `latest_mur_date()` reads ERDDAP `time[last]` (a tiny csv), cached for an hour; a failed lookup keeps the last good answer and isn't retried for 5 minutes. The date picker's default and max use it without waiting (`block=False` refreshes in the background; the lookup starts at import), the automatic first load always uses it, and a request past it is clamped (`week_match: "newest"`).
+- **Exact time stamps**: a day is requested at its stamp (`[(2026-10-15T09:00:00Z)]`), a range stamp to stamp, and the date that comes back is checked (ERDDAP snaps a single value to the nearest day, so a gap day comes back as its neighbour). ERDDAP rejects a stop past the axis maximum, so the old `T00:00:00Z` to `T23:59:59Z` day range 404'd on the newest day every time: that is why the page could never show it.
+- **Fallback**: OISST only when MUR sent no day before the last 5 s of the budget (kept for OISST); one request per OISST dataset for the whole week (~20 KB). A partial MUR week (some days still 503 at the deadline) is served and says which days are missing. The orient/mask/convert pipeline takes both grids: masks and overlay bounds use cell edges (`geo.grid_edges`, half a cell beyond the first and last centres: 500 m for MUR, 14 km for OISST).
+- **Failure**: `SSTUnavailable(reason)`, reason busy, blocked, network, no_data or dead. The sidebar says why in plain words, offers the 3 nearest saved weeks as buttons (`{"type": "saved-week", "index": ISO}`, from `cache.nearest_saved()`, the file index), and opens the drawer on phones so it's seen.
+- **Saved weeks** (`_load_week` in app.py, with a per-week lock so two visitors on one uncached week fetch it once; the second waits at most one budget, and a week NOAA failed to send isn't asked for again for a minute): an exact copy that is final is served; weeks ending within 10 days of the newest day are always fetched; older weeks take the closest saved week within 3 days first (`"closest_saved"`). A copy due a refresh (`sstmeta.refresh_due`: fetched while days were preliminary, after 12 h; inside MUR's 7-day revision window, 24 h; OISST or incomplete, 6 h) is refetched with a 10 s budget, at most every 30 minutes, and served as is if that fails (`"older_copy"`). A fetch never replaces a better copy (MUR beats OISST, then more days).
+- **Seeder queue**: a week NOAA couldn't send (failed, partial or OISST) goes on `<cache>/sst/wanted.json` (at most 30). `GET /api/cache/wanted` (X-Upload-Token, like the upload) lists it, `tools/sync_cache.py` fetches up to `--max-wanted` each run, and uploading a complete MUR week takes it off. The page then says "We'll have this week ready within a day".
+- **Seeder**: the 10 end dates ending on the newest MUR day (today - 1 if the lookup fails), twice daily (11:00 and 21:00 UTC), MUR only, whole weeks only, 150 s per week, 2 days at a time. `/api/precache` (token-locked) uses the same MUR-only rules with a 100 s budget.
+- **Payload meta** (`data/sstmeta.py`; in the `sst-store` data and every cache entry): `source` "MUR" or "OISST", `source_label`, `resolution_km` 1 or 25, `dataset_id`, `server`, `days` (ISO dates served), `requested_end`, `served_end`, `latest_available`, `built_at` (UTC, when fetched from NOAA), `from_cache`; extras `missing_days`, `complete`, `preliminary_days` (under 4 days old when fetched), `week_match` ("exact", "newest", "closest_saved", "older_copy"), `queued`. Old entries without meta load with it filled in (source from dataset_id, days from dates, built_at from the file time). The date box is set to the week served.
+- **Tests**: `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES .venv/bin/python tools/test_sst_fetch.py` (fake ERDDAP: 503 then success, 403, dead dataset, timeouts, gap days, the newest day, OISST final/NRT split, partial weeks, honest failure, refresh rules, GFW per-request range, layers, the wanted queue).
 
 ### Data Flow
 ```
-User picks date → Fetch button → get_sst_multiday() → 7 parallel ERDDAP requests
+User picks date → Fetch button → _load_week(): a saved copy, or get_sst_multiday()
+  (22 s budget, 3 days at a time newest first, OISST only if MUR sends nothing)
   → orient_to_leaflet() → mask_aoi → mask_land (per day, 2D only)
   → compute unified vmin/vmax across all 7 days
   → pre-render 7 base64 PNGs
@@ -61,9 +75,10 @@ render_static_layers sets initial overlay + POIs + legend
   → clientside callback swaps PNG by frame index (instant)
 
 GFW Fishing Activity (separate data path):
-  fetch_sst_data sets _gfw_date_range → updates gfw-layer URL with ?dr= param
+  fetch_sst_data writes the served dates to the gfw-range store
+  → toggle_layers builds the GFW layer (only while ticked) with ?dr=START,END
   → Leaflet requests /api/gfw/{z}/{x}/{y}.png?dr=START,END
-  → Flask proxy calls GFW generate-png (once per date range, cached)
+  → Flask proxy reads dr from the request, calls GFW generate-png (once per range, cached)
   → Fetches styled tile with Bearer auth → returns PNG to browser
   → Tiles cached 24hr (Cache-Control: public, max-age=86400)
   → updateWhenZooming=False prevents proxy flood during zoom
@@ -185,10 +200,11 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 | File | Purpose |
 |------|---------|
 | `app.py` | Main app, all callbacks, layout, server-side raw data cache |
-| `data/erddap.py` | ERDDAP search, fetch, multi-day parallel download |
+| `data/erddap.py` | ERDDAP fetch from known datasets: one time budget per week, retries, newest-day lookup (`time[last]`), OISST fallback |
+| `data/sstmeta.py` | The payload `meta` dict (what was served, from where, how fresh) and the refresh rules |
 | `data/geo.py` | Orient arrays, AOI mask, land mask (all 2D only) |
 | `data/convert.py` | Kelvin→Fahrenheit, 2x visual upsample |
-| `data/cache.py` | Disk-based gzip JSON cache with staleness checks and fuzzy lookup |
+| `data/cache.py` | Disk-based gzip JSON cache, refresh checks from meta, saved-week index, the seeder's wanted list |
 | `layout/sidebar.py` | Date picker, animation controls, collapsible POI checklist, fetch button, version indicator |
 | `layout/mapview.py` | dl.Map with custom panes, loading overlay, hamburger button |
 | `map/overlay.py` | Array → RGBA → base64 PNG |
@@ -214,13 +230,14 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 | `assets/labs/` | Tile previews + share card (`tools/build_labs_previews.py`, from the tools' own data) and the white horizontal wordmark (from GotOne/Graphics) |
 | `data/labstats.py` | Labs analytics store: page ids + tools (`PAGES`, `TOOLS`), the event whitelist (`EVENTS`), `record()` / `record_event()` / `record_feedback()` with every acceptance rule, `summary()` for the dashboard. SQLite on the persistent disk, daily-salted visitor hash, 90-day pruning with daily uniques kept |
 | `layout/statsview.py` | The private `/labs/stats` page: per tool views / visitors (Recount by page), referrers, feature use, Helpful votes; latest notes (escaped); by-day table |
+| `tools/test_sst_fetch.py` | SST data-path tests against a fake ERDDAP (no network): `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES .venv/bin/python tools/test_sst_fetch.py` |
 | `tools/test_labstats.py` | Analytics tests (Flask test client, temp `LABS_STATS_DIR`; no pytest): `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES .venv/bin/python tools/test_labstats.py` |
 | `requirements-tools.txt` | Build-only deps (`netCDF4`, Pillow for DEM TIFFs, etc.) — never installed on Render |
 | `.github/workflows/` | `seed-sst-cache.yml` (daily SST seed), `build-currents.yml` (currents), `keepalive.yml` (heartbeat), `sync-catches.yml` (catch sync — not wired up yet) |
 
 ### Callback Structure
 1. **show_loading_on_fetch** — **Clientside** callback on button click / auto-fetch, shows loading overlay immediately (must be clientside — with 1 gunicorn worker, a server-side version gets blocked behind the slow fetch callback)
-2. **fetch_sst_data** — Synchronous: fetches 7 days (or reads disk cache), processes, pre-renders PNGs, stores raw data server-side (memory-first, then background disk write). `lock-scale` is an **Input** (not State) so toggling triggers re-fetch. Also auto-closes mobile drawer.
+2. **fetch_sst_data**: synchronous. `_load_week()` (saved copy or NOAA within the budget, see SST fetch), pre-renders PNGs, stores raw data server-side (memory-first, then background disk write). `lock-scale` is an **Input** (not State) so toggling triggers re-fetch; the `saved-week` buttons of a failed load are Inputs too (n_clicks 0 when they appear is ignored, here and in the clientside overlay callback). Sets the date box to the week served and the `gfw-range` store. Auto-closes the mobile drawer on success, opens it on failure. The button label it restores is `FETCH_LABEL`.
 3. **render_static_layers** — Sets initial overlay PNG + bounds, POIs, legend, hides loading overlay. Fires on POI picker changes.
 4. **clientside: swap overlay** — Swaps overlay PNG by frame index (sst-store as State, not Input)
 5. **clientside: play/pause** — Toggles dcc.Interval
@@ -231,7 +248,7 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 10. **render_click_marker** — Shows temp reading at clicked position (reads server-side cache)
 11. **toggle_measure** — Activates/deactivates measure mode
 12. **update_poi_count** — Shows "All" or "n/total" count next to "Spots" label
-13. **toggle_layers** — Shows/hides NOAA ENC, GEBCO, and GFW fishing activity layers based on sidebar checklist
+13. **toggle_layers**: adds/removes the NOAA ENC, GEBCO and GFW layers (`layout/mapview.chart_layer()` etc.) in their pane holders (`contours-holder`, `gebco-holder`, `gfw-holder`) from the sidebar checklist, so a hidden layer downloads nothing; a new week (`gfw-range`) re-renders only the GFW layer with its dates
 14. **update_sst_opacity** — Adjusts SST overlay opacity from sidebar slider
 15. **clientside: drawer toggle** — Opens/closes mobile sidebar drawer + backdrop (toggles `drawer-open` class)
 16. **clientside: POI collapse toggle** — Expands/collapses POI checklist, flips chevron (▾/▴)
@@ -245,7 +262,7 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 ### NOAA Blocks Render's Datacenter IP — Data Must Be Fetched Off-Render
 *(Lifted as of 2026-10-10 — see Architecture → SST Data Sourcing. Kept for the diagnosis technique and in case it returns.)*
 - **The symptom**: recent dates on the live site show a red "SST fetch timed out after 90s" (or "No compatible SST dataset found") box, while localhost works perfectly. **The cause is not in the code** — NOAA's firewall blocks Render's datacenter IP at the network layer. Confirmed in the live Render logs: `ConnectionError: Network is unreachable` (coastwatch.pfeg), `ConnectTimeout` / `Connection reset by peer` (upwell), `ReadTimeout` (coastwatch.noaa.gov tarpit). It worked from Render months ago; NOAA tightened anti-cloud filtering since.
-- **`erddap_search` swallowed exceptions silently**, so the failures looked like a generic 90s timeout with zero log breadcrumbs. It now logs the exception type per server — that's how the block was confirmed (`ConnectTimeout`=firewall drop, `ReadTimeout`=tarpit, `403`=WAF/User-Agent).
+- **`erddap_search` swallowed exceptions silently**, so the failures looked like a generic 90s timeout with zero log breadcrumbs. It now logs the exception type per server — that's how the block was confirmed (`ConnectTimeout`=firewall drop, `ReadTimeout`=tarpit, `403`=WAF/User-Agent). (Since Oct 2026 there is no search step; every failed request is logged with its kind: busy, timeout, network, blocked, dead, missing.)
 - **A User-Agent header is necessary but not sufficient**: NOAA's WAF 403s the default `python-requests` UA, so `data/erddap._HEADERS` sends a real one. But that only addresses the 403 variant — the network-level IP block is the real problem, and **no fetch-code change can fix it**.
 - **The fix is architectural**: fetch where ERDDAP is reachable (localhost / GitHub runners — both verified not blocked) and push cache files to Render via `POST /api/cache/upload`. See *Architecture → SST Data Sourcing*. The public AWS MUR Zarr mirror (`s3://mur-sst`) was evaluated and rejected — its time axis is frozen at ~Jan 2020.
 - **If the live map breaks for recent dates**: check the seed workflow first (`gh run list --workflow=seed-sst-cache.yml`), not Render's ERDDAP path. Re-seed manually by running `tools/sync_cache.py` from a non-blocked IP with `CACHE_UPLOAD_TOKEN` set.
@@ -365,20 +382,21 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 - **Always populate `_raw_data_cache` before disk write.** If the disk write OOMs or crashes the worker, the memory cache is already set and clicks work. The callback response is also faster since the disk write happens asynchronously.
 - **Disk write in background thread** — `threading.Thread(target=_write_disk_cache, daemon=True)`. Non-blocking, so the fetch callback returns immediately to the browser.
 - **Pre-cache uses raw-only mode** (`_precache_single_date`): Processes one day at a time, serializes immediately, frees the numpy array before moving to the next. Running percentiles instead of `np.concatenate` avoids the 16 MB temporary allocation. Skips PNG rendering entirely. Peak memory ~30-35 MB per iteration vs 65-70 MB with `_build_payload`.
-- **Per-date timeout**: 120s hard limit via `ThreadPoolExecutor` prevents ERDDAP hangs from blocking the worker. Timed-out dates are skipped and logged as errors.
+- **Per-date timeout**: 120s hard limit via `ThreadPoolExecutor` prevents ERDDAP hangs from blocking the worker. Timed-out dates are skipped and logged as errors. The fetch inside it is MUR only and whole weeks only (`require_full`), with a 100 s budget, 2 days at a time.
 
 ### Global Fishing Watch Integration
 - **GFW 4Wings API**: Two-step process — POST to `generate-png` to get a styled tile URL template with color ramp, then GET individual tiles at `{z}/{x}/{y}` using that template.
 - **Server-side tile proxy** (`/api/gfw/<z>/<x>/<y>.png`): Flask route proxies GFW tile requests with Bearer auth so the `GFW_API_TOKEN` stays server-side (Leaflet can't add custom auth headers to tile requests).
 - **SSL domain fix**: GFW's `generate-png` returns URLs pointing to `gateway.api.prod.globalfishingwatch.org` which causes `SSLEOFError` in Python. Must replace with `gateway.api.globalfishingwatch.org`.
-- **Date range sync**: GFW tiles use the same 7-day window as SST data. `fetch_sst_data` callback updates `_gfw_date_range` and sets a `?dr=` cache-busting query param on the tile URL so Leaflet re-fetches tiles when dates change.
-- **Style cache**: `_gfw_style_cache` stores the URL template per date range. Only calls `generate-png` once per date range; subsequent tile fetches reuse the cached template.
-- **Graceful degradation**: If `GFW_API_TOKEN` env var is not set, proxy returns 204 (no content) and tiles are transparent. The checkbox still appears but does nothing.
+- **Date range per request** (Oct 2026): GFW tiles use the days on the map. `fetch_sst_data` writes them to the `gfw-range` store, `toggle_layers` puts them in the tile URL (`?dr=START,END`), and the proxy reads and validates that `dr` (start <= end, at most 31 days, 2012 to today; bad = 400, missing = the newest week). There is no process-wide range any more: it used to be a module global set by whoever fetched last, so a second visitor on another week changed your tiles and the browser cached the wrong ones for 24 h.
+- **Style cache**: `_gfw_style_cache` maps each date range to its URL template (32 ranges, oldest dropped). `generate-png` is called once per range, under a lock so a screenful of tiles doesn't call it 12 times.
+- **Loaded only when on**: the layer exists only while "Fishing activity" is ticked (same for the chart and bathymetry), so nothing is requested otherwise. `layout/mapview.GFW_NOTE` is a one-line explanation for the legend / How it works (AIS-based apparent fishing effort, mostly larger commercial boats; GFW's lag for the newest days is unchecked).
+- **Graceful degradation**: If `GFW_API_TOKEN` env var is not set, proxy returns 204 (no content) and tiles are transparent. The checkbox still appears but does nothing. Empty tiles (GFW 404/204) come back as a 1x1 transparent PNG with 200, so browsers log no errors.
 - **Layer z-index**: 420 (above SST at 410, below POI markers at 450) so fishing dots render on top of temperature colors.
 - **Token**: JWT with 10-year expiry. Set as `GFW_API_TOKEN` env var on Render and locally.
 - **AOI bounds clipping**: `bounds=[[38.80, -74.96], [43.80, -68.80]]` on the TileLayer prevents tiles from loading outside the SST coverage area. Reduces proxy requests and eliminates visual clutter.
 - **Zoom-aware tile loading**: `updateWhenZooming=False` + `updateWhenIdle=True` prevents GFW tile requests from flooding the single worker during zoom animations. `keepBuffer=4` retains more off-screen tiles to reduce re-fetches on pan-back.
-- **Server-side tile cache** (`_gfw_tile_cache`): In-memory dict caches both 200 and 404 responses keyed by `(z, x, y, date_range)`. ~Half of tile requests return 404 from GFW (empty ocean areas), each saving a ~1s round-trip. Cache cleared on date range change. Max 200 entries with simple eviction. Memory: ~5-10 KB per tile × 200 = ~2-4 MB max.
+- **Server-side tile cache** (`_gfw_tile_cache`): In-memory dict caches both 200 and empty responses keyed by `(z, x, y, date_range)`. ~Half of tile requests are empty ocean, each saving a ~1s round-trip. Max 300 entries, oldest dropped first. Memory: ~5-10 KB per tile × 300 = ~3-6 MB max.
 - **Browser cache**: `Cache-Control: max-age=86400` (24 hours). Historical GFW data is static, so aggressive caching is safe. Tiles for different date ranges use different proxy URLs (via `?dr=` param).
 
 ### Pre-Cache System
@@ -414,19 +432,22 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 - **To update the embed URL**: change `src` in the Squarespace Embed Block. To change allowed embedding origins, update `set_iframe_headers()` in `app.py`.
 
 ### ERDDAP Behavior
-- **MUR data latency**: ~2 days behind. Always try `end_date - 0`, then `-1`, then `-2`.
-- **Rate limiting (429)**: ERDDAP servers return 429 if hit with too many concurrent requests. Max 2 parallel workers with exponential backoff (2s, 4s, 6s retry).
-- **All 3 configured servers redirect to the same backend** (coastwatch.pfeg.noaa.gov). Trying different "servers" doesn't help for rate limits.
-- **Single multi-day NetCDF requests time out** for 7+ days of MUR data. Parallel individual-day fetches (2 at a time) are more reliable.
-- **Time budget**: 25s for single-day, 90s for multi-day. Must finish before browser-side callback timeout.
+- **MUR data latency**: about 1 day (on Oct 16, 2026 `time[last]` was 2026-10-15T09:00Z). Don't guess it: read `time[last]` (`latest_mur_date()`). The days under ~4 days old are preliminary and revised daily for 7 days.
+- **A stop time past the axis maximum is an error** (404 "Stop is greater than the axis maximum"), even inside the last day. Request the dataset's stamp (MUR 09:00Z, OISST 12:00Z), never `T23:59:59Z`.
+- **Overload**: coastwatch.pfeg answers 503 "Service Unavailable: There was a (temporary?) problem. Wait a minute, then try again" in bursts, from GitHub and from a residential IP alike (Oct 16, 2026: 6 of 10 seeded days from GitHub; three in a row here, then fine). A retry a second or two later usually works; 429 means slow down. Keep 2 to 3 requests in flight.
+- **One server**: upwell.pfeg 302s to coastwatch.pfeg; coastwatch.noaa.gov has no MUR. More "servers" don't help.
+- **404 bodies tell dead from missing**: "Currently unknown datasetID=..." means the dataset is gone; "greater than the axis maximum" / "less than the axis minimum" / "no matching results" means the date isn't in it (`FetchError` kinds dead / missing; missing days of an old week are real gaps and make no retry).
+- **Sizes**: one MUR day for the AOI is 4.96 MB as .nc but 0.84 MB gzip-encoded (requests asks for gzip by default), 1 to 2 s from a residential IP. A whole OISST week is ~20 KB. ERDDAP .nc is NetCDF-3, read from memory (`engine="scipy"`); no temp files are left behind any more.
+- **Single multi-day NetCDF requests time out** for 7+ days of MUR data. One request per day, a few at a time, is more reliable.
+- **Time budgets**: 22 s per week for a reader (about 25 s with processing), 150 s per week for the seeder, 100 s for `/api/precache`.
 
 ### Leaflet Z-Index
 Map layer panes and their z-index values matter enormously:
 - **tilePane**: 200 (Esri Light Gray basemap)
-- **gebco-pane**: 390 (custom — GEBCO bathymetry WMS)
-- **contours-pane**: 400 (custom — NOAA ENC nautical chart WMS)
+- **gebco-pane**: 390 (custom: GEBCO bathymetry WMS; the layer is mounted only while ticked)
+- **contours-pane**: 400 (custom: NOAA ENC nautical chart WMS; mounted only while ticked)
 - **sst-pane**: 410 (custom — SST ImageOverlay, opacity controlled by sidebar slider)
-- **gfw-pane**: 420 (custom — GFW fishing activity tiles, above SST for visibility)
+- **gfw-pane**: 420 (custom: GFW fishing activity tiles, above SST for visibility; mounted only while ticked)
 - **poi-pane**: 450 (custom — above SST, below tooltips)
 - **click-pane**: 500 (custom — above POIs, below tooltips)
 - **tooltipPane**: 650 (Leaflet default — tooltips render here)
@@ -465,9 +486,8 @@ All clicks route through a single `handle_map_click` callback. Only one tooltip 
 - **1x native upsample**: Dropped from 2x to 1x when AOI expanded — reduces payload by ~62% with no visible quality difference at typical zoom levels. The `upsample_visual()` call with factor 1 returns the array unchanged.
 - **AOI coverage**: Cape May, NJ (38.80°N) to Portland, ME (43.80°N), ~501×617 grid at MUR 1km. Bounding box: 5.00° lat × 6.16° lon.
 - **Cache hit path**: disk read + decompress + parse → ~2-5s on Render. No ERDDAP call needed.
-- **Fuzzy cache lookup**: `find_nearest_cached()` in `data/cache.py` checks ±3 days around the requested end date. With pre-cached entries every 7 days, most tuna-season dates hit a nearby cache within 3 days — avoiding ERDDAP entirely. Status shows "(nearest cache: +1d)" when offset. The `data_key` in `sst-store` reflects the actual cached date so click-to-read-temp works correctly.
-- **Cache miss path**: 7 parallel ERDDAP fetches, ~60-120s on localhost (residential internet). **On Render this path is dead** — NOAA blocks the IP, so a cache miss returns the red "timed out after 90s" error. Recent dates must be pre-seeded into the cache by the off-Render GitHub Action (see *Architecture → SST Data Sourcing*).
-- **Localhost timeout issue**: Expanded AOI ERDDAP fetches can exceed Dash's browser callback timeout, causing "server did not respond" and a stuck loading overlay. Data may still finish fetching server-side. (No longer applies on Render — it never fetches ERDDAP; it only serves cache.)
+- **Closest saved week**: for weeks ending more than 10 days before the newest day, `_saved_nearby()` in app.py takes a saved week within ±3 days of the requested end date before asking NOAA. With pre-cached entries every 7 days, most tuna-season dates hit one, avoiding ERDDAP entirely. The meta says so (`week_match: "closest_saved"`, `requested_end`) and the date box shows the week served. Recent weeks are always fetched exactly (the nearby one is only the fallback). The `data_key` in `sst-store` is the served week's so click-to-read-temp works.
+- **Cache miss path** (Oct 16, 2026, this Mac): uncached weeks from 2005, 2009, 2011, 2012, 2014 and 2018 took 4.8 to 6.8 s server-side (fetch 3 to 6 s, processing under 1 s), the newest week 5.6 s; the first fetch after a restart pays ~3 s for the land mask unless the pre-warm loaded it. At worst ~25 s, then the honest failure. Render can fetch ERDDAP again since 2026-10-10 but gets the same 503 bursts; the seeder keeps recent weeks in the cache either way.
 - **AOI change invalidates cache**: Disk-cached data has bounding box baked in. After AOI polygon changes, old caches will have wrong bounds — first fetch after change will be a cache miss.
 - **Pre-cache strategy**: `/api/precache` endpoint populates disk cache for tuna season dates. Once cached, 2020–2025 Jun–Nov dates load in 2-5s instead of 30-50s. Raw-only cache entries add ~2-3s for on-the-fly PNG rendering on first user load; background thread upgrades to full cache (with PNGs) for instant subsequent loads.
 - **GFW tile proxy blocking**: On zoom, Leaflet requests ~48 GFW tiles through the server-side proxy, each taking ~1s (GFW API latency). Fix: `--threads 16` allows concurrent I/O (tile fetches release the GIL), and server-side tile cache (`_gfw_tile_cache`) makes repeat requests instant. `updateWhenZooming=False` + `updateWhenIdle=True` + `keepBuffer=4` further reduce tile requests. First zoom to a new area still has ~3s of proxy latency (48 tiles / 16 threads); subsequent zooms to the same area are instant from cache.
