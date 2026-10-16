@@ -1,22 +1,5 @@
 # Changelog
 
-## 2026-10-16 - Offshore SST: explained, dated, and readable on phones and tablets
-
-### Added
-- **How it works** (header link and a sidebar link; opens once on a first visit, like Currents): what breaks, warm eddies, the shelf edge and cold water near the beach look like, how to use each control, how the adaptive colors work, where the data comes from (MUR's satellites, clouds, how fresh it is, the OISST backup), a "How reliable is it?" table and the sources. Facts checked against MUR's ERDDAP metadata, Chin et al. (2017), Global Fishing Watch and WMM-2025. Opening it counts as `how_it_works` (not the automatic first-visit opening).
-- **A status strip under the map**: the day on the map with "day 7 of 7", the source actually served ("MUR 1 km (NASA JPL, via NOAA CoastWatch)" or "OISST 25 km, broad pattern only"), "updated 3 hours ago", "newest available Oct 15", missing days, "preliminary" on the newest days, and which week this is when a nearby saved week or an older copy was served. On a phone the date is always on screen (strip and play bar), so a screenshot carries its date. A failed load shows there too.
-- **Floating day controls** on phones and tablets (back, Play, forward and the date), as on Currents.
-- **Magnetic course** in the measure tool: "187° true, 201° magnetic", from a WMM-2025 grid over the area (about 12° W off Cape May to 15° W in the Gulf of Maine), plus the temperature at each end.
-- `tools/smoke_sst.mjs` (the page at laptop, phone and iPad sizes: errors, layout, How it works, the strip with a fake meta, readings across days, spots, The Dump, measure, analytics events) and `tools/test_sst_ui.py`.
-
-### Changed
-- **Readings, spot cards and measurements stay when the day changes** and show that day's temperature; a card also lists the week's seven values at that point. A second tap on a card closes it.
-- **Taps go where you tap**: a spot opens only from its circle (about 16 px for a finger, 9 for a mouse, the same at every zoom), so the water right next to a spot or anywhere inside The Dump can be read. Taps are sorted in the browser, and the readout no longer uploads the week's images with every tap: about 0.05 s locally instead of two server round trips.
-- **The legend** says "this week's range" (or "fixed scale"), with round ticks and what the end colors mean; it moves to the top on phones. The fishing-activity layer gets a one-line note.
-- **iPad and touch screens** get the slide-in drawer instead of a 141 px sidebar; **the page fits the screen** (no 8 px overhang, no scroll when the map is clicked, nothing hanging off the right edge); 44 px tap targets; brand-blue day slider with weekday marks.
-- **First view** on the fishing grounds where the whole area doesn't fit (phones), then the reader's last view.
-- **Plain copy**: "Offshore SST", "Load week", "Same colors every week", "Color strength", "Show all / Hide all"; the version moved into How it works; no emoji on the Measure button. The measure readout is readable on the navy sidebar, and Measure / Cancel / Measure again / Clear say what will happen.
-- The dashed area outline (which ran over land from New York Harbor to Maine) is gone. Tooltip styles now apply (their CSS never matched Leaflet's markup).
 ## 2026-10-16 - Offshore SST: every week loads, the newest day, and the page knows what it served
 
 ### Fixed

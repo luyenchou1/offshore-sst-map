@@ -50,9 +50,10 @@ from layout.sidebar import build_sidebar
 from map.colorscale import build_legend_component, compute_color_bounds
 from map.measure import format_measurement
 from map.overlay import sst_to_base64_png
-from map.pois import build_poi_markers, get_all_poi_names, pois_payload
-from layout.sstabout import build_about_modal
-from map.readout import fmt_day, measure_panel, selection_tip, week_temps
+from map.pois import (
+    build_aoi_geojson, build_poi_markers, build_poi_tooltip,
+    find_nearest_poi, get_all_poi_names, _lookup_temp,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1219,37 +1220,30 @@ def _build_payload_from_disk_cache(cached: dict, raw_only: bool = False, locked_
 def build_sst_page():
     return html.Div(
     [
-        # GotOne branded header (same pattern as Currents: How it works + back to Labs)
+        # GotOne branded header
         html.Div(
             [
                 html.Img(src=app.get_asset_url("gotone-logo.png")),
                 html.Div(
                     [
-                        html.H1("Offshore SST"),
+                        html.H1("Offshore SST Analyzer"),
                         html.P(
-                            "Daily sea-surface temperature, Cape May to Portland, Maine. "
-                            "Tap the water for a temperature.",
+                            "7-day sea-surface temperatures. "
+                            "Click map to read temps. Click spots for details.",
                             className="subtitle",
                         ),
                     ]
                 ),
                 # No public link to the catch map — it's reachable only by
                 # navigating to /catches directly, then entering the access key.
-                html.Div(
-                    [
-                        html.Button("How it works", id="sst-about-open",
-                                    className="header-nav-link currents-about-link"),
-                        dcc.Link("← GotOne Labs", href=labs_href(), refresh=labs_href().startswith("http"),
-                                 className="header-nav-link currents-labs-link"),
-                    ],
-                    className="currents-header-links",
-                ),
+                dcc.Link("← GotOne Labs", href=labs_href(), refresh=labs_href().startswith("http"),
+                         className="header-nav-link"),
             ],
             className="gotone-header",
         ),
         dbc.Container(
             [
-                dbc.Row([build_sidebar(labs_href()), build_map()]),
+                dbc.Row([build_sidebar(), build_map()]),
                 # Backdrop overlay for mobile drawer (hidden on desktop via CSS)
                 html.Div(id="sidebar-backdrop", className="sidebar-backdrop"),
                 dcc.Store(id="sst-store"),
@@ -1257,23 +1251,13 @@ def build_sst_page():
                 dcc.Store(id="gfw-range"),  # "START,END" of the week on the map (fishing tiles)
                 html.Div(id="fetch-spinner-target", style={"display": "none"}),
                 html.Div(id="sst-events-sink", style={"display": "none"}),
-                # click-pos holds the selection: {kind: reading | poi | dump, lat, lng, name?}.
-                # sst-key is the week without its frames, for server callbacks (a tap or a
-                # day change doesn't upload the week's images); sst-pois feeds the tap hit test.
-                dcc.Store(id="sst-key"),
-                dcc.Store(id="sst-pois", data=pois_payload()),
-                html.Div(id="sst-status-sink", style={"display": "none"}),
-                html.Div(id="sst-fetch-sink", style={"display": "none"}),
-                build_about_modal(),
                 # Auto-fetch SST on page load (fires once after 500ms)
                 dcc.Interval(id="auto-fetch", interval=500, max_intervals=1),
             ],
             fluid=True,
             style={"padding": "0"},
         ),
-    ],
-    # Flex column filling the visible viewport (assets/sst.css), like Currents.
-    className="sst-page",
+    ]
     )
 
 
@@ -1480,7 +1464,7 @@ app.clientside_callback(
 
 
 # ---- Loading a week: saved copy, NOAA within the budget, or an honest failure ----
-FETCH_LABEL = "Load week"   # the button's label after a load (the layout sets it first)
+FETCH_LABEL = "Fetch SST"   # the button's label after a load (the layout sets it first)
 _RECENT_DAYS = 10           # weeks this close to the newest day are fetched, never swapped for a nearby saved one
 _REFRESH_BUDGET_S = 10      # a saved copy exists: spend less time trying to refresh it
 _REFRESH_COOLDOWN_S = 1800  # and don't retry the same week more often than this
@@ -1852,10 +1836,11 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, saved_clicks, end_date_str
     )
 
 
-# ---- Callback 2: Render static layers (POIs, legend, initial overlay) ----
+# ---- Callback 2: Render static layers (POIs, legend, AOI, initial overlay) ----
 # Fires on data load or POI selection change. Also sets the SST overlay
 # on initial data load (clientside callback handles frame changes only).
 @app.callback(
+    Output("aoi-outline", "data"),
     Output("poi-layer", "children"),
     Output("legend-container", "children"),
     Output("map-loading-overlay", "style", allow_duplicate=True),
@@ -1867,19 +1852,17 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, saved_clicks, end_date_str
     prevent_initial_call="initial_duplicate",
 )
 def render_static_layers(sst_data, selected_pois, frame_idx):
+    aoi_geojson = build_aoi_geojson(CFG)
     hidden = {"display": "none"}
 
     if not sst_data or "frames" not in sst_data:
-        return build_poi_markers(selected=selected_pois), "", dash.no_update, "", [[0, 0], [0, 0]]
+        return aoi_geojson, build_poi_markers(selected=selected_pois), "", dash.no_update, "", [[0, 0], [0, 0]]
 
     vmin = sst_data["vmin"]
     vmax = sst_data["vmax"]
-    meta = sst_data.get("meta") or {}
-    res_km = meta.get("resolution_km") or sst_data.get("res_km")
-    locked = str(sst_data.get("data_key", "")).endswith("_locked")
-    coarse = meta.get("source") == "OISST" or bool(res_km and res_km >= 5)
+    res_km = sst_data.get("res_km")
 
-    legend = build_legend_component(vmin, vmax, res_km=res_km, locked=locked, coarse=coarse)
+    legend = build_legend_component(vmin, vmax, res_km=res_km)
     poi_markers = build_poi_markers(selected=selected_pois)
 
     # Set overlay for current frame
@@ -1889,7 +1872,7 @@ def render_static_layers(sst_data, selected_pois, frame_idx):
     overlay_url = sst_data["frames"][idx]
     overlay_bounds = sst_data["bounds"]
 
-    return poi_markers, legend, hidden, overlay_url, overlay_bounds
+    return aoi_geojson, poi_markers, legend, hidden, overlay_url, overlay_bounds
 
 
 # ---- Clientside: Swap overlay PNG by frame index (instant, no server trip) ----
@@ -1915,19 +1898,16 @@ app.clientside_callback(
 
 
 # ---- Clientside: Play/Pause toggle (no server trip) ----
-# The sidebar's Play and the floating playbar's (phones, tablets) drive the same interval.
 app.clientside_callback(
     """
-    function(n1, n2, currently_disabled) {
-        var label = currently_disabled ? 'Pause' : 'Play';
-        return [!currently_disabled, label, label];
+    function(n_clicks, currently_disabled) {
+        if (currently_disabled) return [false, 'Pause'];
+        return [true, 'Play'];
     }
     """,
     Output("anim-interval", "disabled"),
     Output("play-pause-btn", "children"),
-    Output("sst-pb-play", "children"),
     Input("play-pause-btn", "n_clicks"),
-    Input("sst-pb-play", "n_clicks"),
     State("anim-interval", "disabled"),
     prevent_initial_call=True,
 )
@@ -1951,24 +1931,22 @@ app.clientside_callback(
 )
 
 
-# ---- Clientside: Step forward/back buttons, sidebar or playbar (no server trip) ----
+# ---- Clientside: Step forward/back buttons (no server trip) ----
 app.clientside_callback(
     """
-    function(back_clicks, fwd_clicks, pb_back, pb_fwd, current_val, max_val) {
+    function(back_clicks, fwd_clicks, current_val, max_val) {
         if (current_val == null || max_val == null) return window.dash_clientside.no_update;
         var ctx = window.dash_clientside.callback_context;
         if (!ctx.triggered.length) return window.dash_clientside.no_update;
         var triggered_id = ctx.triggered[0].prop_id.split('.')[0];
-        if (triggered_id === 'step-back-btn' || triggered_id === 'sst-pb-back') return Math.max(0, current_val - 1);
-        if (triggered_id === 'step-fwd-btn' || triggered_id === 'sst-pb-fwd') return Math.min(max_val, current_val + 1);
+        if (triggered_id === 'step-back-btn') return Math.max(0, current_val - 1);
+        if (triggered_id === 'step-fwd-btn') return Math.min(max_val, current_val + 1);
         return window.dash_clientside.no_update;
     }
     """,
     Output("frame-slider", "value", allow_duplicate=True),
     Input("step-back-btn", "n_clicks"),
     Input("step-fwd-btn", "n_clicks"),
-    Input("sst-pb-back", "n_clicks"),
-    Input("sst-pb-fwd", "n_clicks"),
     State("frame-slider", "value"),
     State("frame-slider", "max"),
     prevent_initial_call=True,
@@ -1980,16 +1958,17 @@ app.clientside_callback(
     """
     function(frame_idx, sst_data) {
         if (!sst_data || !sst_data.dates) return '';
-        var idx = frame_idx == null ? sst_data.dates.length - 1 : frame_idx;
+        var idx = frame_idx || 0;
         var num_days = sst_data.dates.length;
         if (idx >= num_days) idx = num_days - 1;
-        var p = sst_data.dates[idx].split('-');
-        var d = new Date(+p[0], +p[1] - 1, +p[2]);
-        var days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        var day_date = sst_data.dates[idx];
+        var d = new Date(day_date + 'T12:00:00');
         var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        return days[d.getDay()] + ', ' + months[d.getMonth()] + ' ' + d.getDate() + ', ' +
-               d.getFullYear() + ' \\u00b7 day ' + (idx + 1) + ' of ' + num_days;
+        var label = months[d.getMonth()] + ' ' +
+                    String(d.getDate()).padStart(2, '0') + ', ' +
+                    d.getFullYear();
+        return label + '  (Day ' + (idx + 1) + ' of ' + num_days + ')';
     }
     """,
     Output("day-indicator", "children"),
@@ -1998,253 +1977,279 @@ app.clientside_callback(
 )
 
 
-# ---- Clientside: the week's keys without its frames (for server callbacks) ----
-# render_selection only needs the cache key and the dates; handing it the whole
-# sst-store would upload the week's PNGs with every tap and every day change.
-app.clientside_callback(
-    """
-    function(d) {
-        if (!d) { return window.dash_clientside.no_update; }
-        return {data_key: d.data_key || null, dates: d.dates || [], meta: d.meta || null,
-                dataset_id: d.dataset_id || "", res_km: d.res_km || null,
-                vmin: d.vmin, vmax: d.vmax};
-    }
-    """,
-    Output("sst-key", "data"),
-    Input("sst-store", "data"),
-)
-
-
-# ---- Clientside: day-slider marks, weekday over day of the month ("Tu" / "6") ----
-# The load callback writes plain day-of-month marks; these replace them as the week arrives.
-app.clientside_callback(
-    """
-    function(key) {
-        if (!key || !key.dates || !window.SST) { return window.dash_clientside.no_update; }
-        return window.SST.marks(key.dates);
-    }
-    """,
-    Output("frame-slider", "marks", allow_duplicate=True),
-    Input("sst-key", "data"),
-    prevent_initial_call=True,
-)
-
-
-# ---- Clientside: status strip under the map + the playbar's date (assets/sst.js) ----
-app.clientside_callback(
-    """
-    function(frame_idx, key) {
-        if (!key || !key.dates || !key.dates.length) {
-            return ["", {display: "none"}];
-        }
-        if (window.SST) { window.SST.status(key, frame_idx); }
-        return ["", {}];
-    }
-    """,
-    Output("sst-status-sink", "children"),
-    Output("sst-playbar", "style"),
-    Input("frame-slider", "value"),
-    Input("sst-key", "data"),
-)
-
-
-# A failed load (fetch_sst_data's red Alert in the sidebar) also goes to the strip, since
-# phones close the drawer and would never see it. Display only: reads fetch-status.
-app.clientside_callback(
-    """
-    function(children) {
-        if (!window.SST) { return ""; }
-        var c = Array.isArray(children) ? children[0] : children;
-        var p = (c && c.props) || {};
-        var bad = c && (c.type === "Alert" || p.color === "danger");
-        function firstText(x) {                  // the message, not the saved-week buttons
-            if (typeof x === "string") { return x; }
-            if (Array.isArray(x)) { for (var i = 0; i < x.length; i++) { var t = firstText(x[i]); if (t) { return t; } } }
-            if (x && x.props && x.type !== "Button") { return firstText(x.props.children); }
-            return "";
-        }
-        var text = bad ? (firstText(p.children) || "open the menu for details") : null;
-        window.SST.fetchError(text);
-        return "";
-    }
-    """,
-    Output("sst-fetch-sink", "children"),
-    Input("fetch-status", "children"),
-    prevent_initial_call=True,
-)
-
-
-# The fishing-activity note sits under the legend while that layer is ticked (review L4).
-app.clientside_callback(
-    """
-    function(layers) {
-        return ((layers || []).indexOf("gfw") >= 0) ? {} : {display: "none"};
-    }
-    """,
-    Output("sst-gfw-note", "style"),
-    Input("layer-toggles", "value"),
-)
-
-
-# ---- Callback 3a: Route map taps, in the browser (assets/sst.js SST.classify) ----
-# A spot's circle (hit-tested in screen pixels: ~16 px for a finger, 9 px for a
-# mouse) opens its card; anywhere else, including next to a spot or inside The
-# Dump, reads the water there; a second tap on the open reading or spot closes
-# it; in measure mode the tap places A or B (snapping to a spot's circle).
-# Writes the selection (click-pos) or the measure state; render_selection draws
-# both for the day on the map.
-app.clientside_callback(
-    """
-    function(click, pois, selected, measure, current) {
-        var nu = window.dash_clientside.no_update;
-        if (!click || !window.SST) { return [nu, nu]; }
-        var r = window.SST.classify(click, pois, selected, measure, current);
-        var sel = r[0] === null ? nu : (r[0].clear ? null : r[0]);
-        return [sel, r[1] === null ? nu : r[1]];
-    }
-    """,
+# ---- Callback 3a: Route map clicks (SST reading vs measure vs POI) ----
+@app.callback(
     Output("click-pos", "data"),
     Output("measure-state", "data"),
+    Output("measure-readout", "children"),
+    Output("click-marker", "children", allow_duplicate=True),
     Input("sst-map", "clickData"),
-    State("sst-pois", "data"),
-    State("poi-picker", "value"),
     State("measure-state", "data"),
-    State("click-pos", "data"),
+    State("poi-picker", "value"),
+    State("sst-store", "data"),
+    State("frame-slider", "value"),
     prevent_initial_call=True,
 )
+def handle_map_click(click_data, measure, selected_pois, sst_data, frame_idx):
+    if not click_data:
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+    lat = click_data["latlng"]["lat"]
+    lng = click_data["latlng"]["lng"]
+
+    # Check if click is near a POI
+    poi = find_nearest_poi(lat, lng, selected=selected_pois)
+
+    # In measure mode, use POI coordinates if clicked near one
+    click_lat = poi[1] if poi else lat
+    click_lng = poi[2] if poi else lng
+
+    if measure and measure.get("mode") == "a":
+        # Set point A, wait for B
+        label_a = poi[0] if poi else f"{click_lat:.3f}\u00b0N, {abs(click_lng):.3f}\u00b0W"
+        new_state = {"mode": "b", "a": {"lat": click_lat, "lng": click_lng, "label": label_a}, "b": None}
+        readout = html.Div(
+            [
+                html.Div(f"A: {label_a}", style={
+                    "fontWeight": "600", "color": "#334155",
+                }),
+                html.Div("Click point B", style={
+                    "fontSize": "0.8rem", "color": "#0183fe", "marginTop": "2px",
+                }),
+            ]
+        )
+        marker = [
+            dl.CircleMarker(
+                center=[click_lat, click_lng], radius=5,
+                pathOptions={"color": "#0183fe", "weight": 2, "fillOpacity": 0.4},
+                children=[dl.Tooltip(
+                    f"A: {label_a}" if poi else "A",
+                    permanent=True, direction="top",
+                    offset=[0, -8], pane="tooltipPane")],
+            )
+        ]
+        return dash.no_update, new_state, readout, marker
+
+    elif measure and measure.get("mode") == "b":
+        # Set point B, compute distance
+        a = measure["a"]
+        label_b = poi[0] if poi else f"{click_lat:.3f}\u00b0N, {abs(click_lng):.3f}\u00b0W"
+        m = format_measurement(a["lat"], a["lng"], click_lat, click_lng)
+        new_state = {"mode": "done", "a": a, "b": {"lat": click_lat, "lng": click_lng, "label": label_b}}
+        readout = html.Div(
+            [
+                html.Div(m["label"], style={
+                    "fontWeight": "700", "fontSize": "0.9rem", "color": "#1e293b",
+                }),
+                html.Div(
+                    f"A: {a.get('label', '')}",
+                    style={"fontSize": "0.7rem", "color": "#64748b", "marginTop": "4px"},
+                ),
+                html.Div(
+                    f"B: {label_b}",
+                    style={"fontSize": "0.7rem", "color": "#64748b"},
+                ),
+            ]
+        )
+        marker = [
+            dl.Polyline(
+                positions=[[a["lat"], a["lng"]], [click_lat, click_lng]],
+                pathOptions={"color": "#0183fe", "weight": 2, "dashArray": "6 4"},
+            ),
+            dl.CircleMarker(
+                center=[a["lat"], a["lng"]], radius=5,
+                pathOptions={"color": "#0183fe", "weight": 2, "fillOpacity": 0.4},
+                children=[dl.Tooltip(
+                    f"A: {a.get('label', 'A')}", permanent=True, direction="top",
+                    offset=[0, -8], pane="tooltipPane")],
+            ),
+            dl.CircleMarker(
+                center=[click_lat, click_lng], radius=5,
+                pathOptions={"color": "#0183fe", "weight": 2, "fillOpacity": 0.4},
+                children=[dl.Tooltip(
+                    f"B: {label_b}", permanent=True, direction="top",
+                    offset=[0, -8], pane="tooltipPane")],
+            ),
+            dl.CircleMarker(
+                center=[(a["lat"] + click_lat) / 2, (a["lng"] + click_lng) / 2],
+                radius=0,
+                pathOptions={"opacity": 0},
+                children=[dl.Tooltip(
+                    m["label"], permanent=True, direction="top",
+                    offset=[0, -12], pane="tooltipPane",
+                    className="measure-tooltip",
+                )],
+            ),
+        ]
+        return dash.no_update, new_state, readout, marker
+
+    else:
+        # Normal mode — show POI info or SST reading
+        if poi:
+            # Clicked near a POI — show POI tooltip in click-marker layer
+            poi_name, poi_lat, poi_lon = poi
+            temp = None
+            data_key = sst_data.get("data_key") if sst_data else None
+            raw = _get_raw_data(data_key) if data_key else None
+            if raw:
+                fi = min(frame_idx or 0, len(raw["raw_days"]) - 1)
+                arrF = raw["raw_days"][fi]["arrF"]
+                temp = _lookup_temp(poi_lat, poi_lon, arrF, raw["lats"], raw["lons"])
+
+            tooltip_content = build_poi_tooltip(poi_name, poi_lat, poi_lon, temp)
+            marker = [
+                dl.CircleMarker(
+                    center=[poi_lat, poi_lon],
+                    radius=6,
+                    pathOptions={"color": "#475569", "weight": 2, "fillOpacity": 0.3,
+                                 "className": "sst-poi-pick"},   # SST feature use: "poi"
+                    children=[
+                        dl.Tooltip(
+                            tooltip_content,
+                            permanent=True, direction="top",
+                            offset=[0, -10], pane="tooltipPane",
+                        )
+                    ],
+                )
+            ]
+            return dash.no_update, dash.no_update, dash.no_update, marker
+        else:
+            # SST reading — pass to click-pos store (triggers render_click_marker)
+            pos = {"lat": lat, "lng": lng}
+            return pos, dash.no_update, dash.no_update, dash.no_update
 
 
-def _measure_layers(a, b, m):
-    """A/B markers, the line and the midpoint label, in that order (A keeps its
-    place from "tap B" to "done", so its layer is reused, not rebuilt)."""
-    blue = {"color": "#0183fe", "weight": 2, "fillOpacity": 0.4}
-    layers = []
-    for tag, pt in (("A", a), ("B", b)):
-        if not pt:
-            continue
-        layers.append(dl.CircleMarker(
-            center=[pt["lat"], pt["lng"]], radius=5, pathOptions=blue,
-            children=[dl.Tooltip(f"{tag}: {pt['label']}" if pt.get("label") else tag,
-                                 permanent=True, direction="top", offset=[0, -8],
-                                 pane="tooltipPane", className="measure-pt-tooltip")]))
-    if a and b:
-        layers.append(dl.Polyline(positions=[[a["lat"], a["lng"]], [b["lat"], b["lng"]]],
-                                  pathOptions={"color": "#0183fe", "weight": 2.5, "dashArray": "6 4"}))
-    if a and b and m:
-        layers.append(dl.CircleMarker(
-            center=[(a["lat"] + b["lat"]) / 2, (a["lng"] + b["lng"]) / 2], radius=0,
-            pathOptions={"opacity": 0, "fillOpacity": 0},
-            children=[dl.Tooltip(m["label"], permanent=True, direction="top", offset=[0, -12],
-                                 pane="tooltipPane", className="measure-tooltip")]))
-    return layers
-
-
-# ---- Callback 3b: Draw the selection and the measurement for the day on the map ----
-# Fires on a tap, a measure change, a new week or a day change, so a reading, a
-# spot card or a measurement stays put and shows that day's temperature.
+# ---- Callback 3b: Render click marker (fires on click, frame change, or data change) ----
 @app.callback(
     Output("click-marker", "children"),
-    Output("measure-layer", "children"),
-    Output("measure-readout", "children"),
     Input("click-pos", "data"),
-    Input("measure-state", "data"),
-    Input("sst-key", "data"),
+    Input("sst-store", "data"),
     Input("frame-slider", "value"),
     prevent_initial_call=True,
 )
-def render_selection(sel, measure, key, frame_idx):
-    mode = (measure or {}).get("mode", "off")
-    if not sel and mode == "off":
-        if ctx.triggered_id == "frame-slider":
-            return dash.no_update, dash.no_update, dash.no_update   # nothing to redraw
-        return [], [], ""
+def render_click_marker(click_pos, sst_data, frame_idx):
+    if not click_pos or not sst_data:
+        return []
 
-    key = key or {}
-    dates = key.get("dates") or []
-    raw = _get_raw_data(key.get("data_key")) if key.get("data_key") else None
-    if raw is None and key.get("data_key"):
-        logger.warning("render_selection: raw data unavailable for key=%s (cache_keys=%s)",
-                       key.get("data_key"), list(_raw_data_cache.keys()))
-    n = len(raw["raw_days"]) if raw else len(dates)
-    idx = frame_idx if frame_idx is not None else n - 1
-    idx = max(0, min(idx, n - 1)) if n else 0
+    data_key = sst_data.get("data_key")
+    raw = _get_raw_data(data_key) if data_key else None
+    if not raw:
+        logger.warning("render_click_marker: raw data unavailable for key=%s "
+                       "(in_memory=%s, cache_keys=%s)",
+                       data_key,
+                       data_key in _raw_data_cache if data_key else False,
+                       list(_raw_data_cache.keys()))
+        return []
 
-    def temps_at(pt):
-        return week_temps(raw, pt["lat"], pt["lng"]) if (raw and pt) else None
+    frame_idx = frame_idx or 0
+    num_frames = len(raw["raw_days"])
+    if frame_idx >= num_frames:
+        frame_idx = num_frames - 1
 
-    def now(temps):
-        return temps[idx] if temps and idx < len(temps) else None
+    lat = click_pos["lat"]
+    lng = click_pos["lng"]
+    arrF = raw["raw_days"][frame_idx]["arrF"]
+    lats = raw["lats"]
+    lons = raw["lons"]
 
-    layers, mlayers, readout = [], [], ""
-    if mode in ("a", "b", "done"):
-        a, b = measure.get("a"), measure.get("b")
-        m = None
-        if a and b:
-            when = date.fromisoformat(dates[idx][:10]) if dates else None
-            m = format_measurement(a["lat"], a["lng"], b["lat"], b["lng"], when)
-        mlayers = _measure_layers(a, b, m)
-        readout = measure_panel(measure, m, now(temps_at(a)), now(temps_at(b)),
-                                fmt_day(dates[idx]) if dates else "this day")
+    # Find nearest grid point
+    lat_idx = np.argmin(np.abs(lats - lat))
+    lon_idx = np.argmin(np.abs(lons - lng))
 
-    if sel:
-        kind = sel.get("kind", "reading")
-        tip = selection_tip(sel, temps_at(sel), dates, idx)
-        poi = kind == "poi"
-        layers.append(dl.CircleMarker(
-            center=[sel["lat"], sel["lng"]],
-            radius=9 if poi else 6,
-            pathOptions={"color": "#0183fe" if poi else "#e11d48", "weight": 2.5,
-                         "fillOpacity": 0 if poi else 0.3},
-            children=[dl.Tooltip(tip, permanent=True, direction="top", offset=[0, -10],
-                                 pane="tooltipPane", className="sst-tooltip")],
-        ))
-    return layers, mlayers, readout
+    temp = arrF[lat_idx, lon_idx]
+
+    if not np.isfinite(temp):
+        return [
+            dl.CircleMarker(
+                center=[lat, lng],
+                radius=6,
+                pathOptions={"color": "#e11d48", "weight": 2, "fillOpacity": 0.3},
+                children=[
+                    dl.Tooltip(
+                        html.Div(
+                            [
+                                html.Div("No data", style={
+                                    "fontSize": "0.95rem", "fontWeight": "600",
+                                    "color": "#888",
+                                }),
+                                html.Div(f"{lat:.3f}\u00b0N, {abs(lng):.3f}\u00b0W", style={
+                                    "fontSize": "0.7rem", "color": "#999",
+                                    "marginTop": "2px",
+                                }),
+                            ],
+                            style={"textAlign": "center"},
+                        ),
+                        permanent=True, direction="top", offset=[0, -8],
+                        className="sst-tooltip",
+                    )
+                ],
+            )
+        ]
+
+    return [
+        dl.CircleMarker(
+            center=[lat, lng],
+            radius=6,
+            pathOptions={"color": "#e11d48", "weight": 2, "fillOpacity": 0.3},
+            children=[
+                dl.Tooltip(
+                    html.Div(
+                        [
+                            html.Div(f"{temp:.1f}\u00b0F", style={
+                                "fontSize": "1.15rem", "fontWeight": "700",
+                                "color": "#1e293b", "lineHeight": "1.2",
+                            }),
+                            html.Div(f"{lat:.3f}\u00b0N, {abs(lng):.3f}\u00b0W", style={
+                                "fontSize": "0.7rem", "color": "#94a3b8",
+                                "marginTop": "2px",
+                            }),
+                        ],
+                        style={"textAlign": "center"},
+                    ),
+                    permanent=True, direction="top", offset=[0, -8],
+                    className="sst-tooltip",
+                )
+            ],
+        )
+    ]
 
 
-# ---- Callback 8: Measure, Cancel, Measure again, Clear ----
+# ---- Callback 8: Measure toggle ----
 @app.callback(
     Output("measure-state", "data", allow_duplicate=True),
-    Output("click-pos", "data", allow_duplicate=True),
-    Output("sidebar-col", "className", allow_duplicate=True),
-    Output("sidebar-backdrop", "style", allow_duplicate=True),
-    Input("measure-btn", "n_clicks"),
-    Input("measure-clear", "n_clicks"),
-    Input("sst-hint-cancel", "n_clicks"),
-    State("measure-state", "data"),
-    prevent_initial_call=True,
-)
-def toggle_measure(n_measure, n_clear, n_cancel, measure):
-    mode = (measure or {}).get("mode", "off")
-    off = {"mode": "off", "a": None, "b": None}
-    if ctx.triggered_id in ("measure-clear", "sst-hint-cancel") or mode in ("a", "b"):
-        return off, dash.no_update, dash.no_update, dash.no_update
-    # Start a new measurement: drop the open reading or spot card, and on phones /
-    # tablets close the drawer to show the map.
-    return {"mode": "a", "a": None, "b": None}, None, "gotone-sidebar", {"display": "none"}
-
-
-# ---- Clientside: measure button label, Clear and the on-map hint follow the state ----
-app.clientside_callback(
-    """
-    function(m) {
-        var mode = (m && m.mode) || "off";
-        var hide = {display: "none"};
-        if (mode === "a" || mode === "b") {
-            return ["Cancel", "primary", false, hide,
-                    mode === "a" ? "Tap the first point (A)" : "Now tap the second point (B)", {}];
-        }
-        if (mode === "done") { return ["Measure again", "secondary", true, {}, "", hide]; }
-        return ["Measure", "secondary", true, hide, "", hide];
-    }
-    """,
     Output("measure-btn", "children"),
     Output("measure-btn", "color"),
     Output("measure-btn", "outline"),
-    Output("measure-clear", "style"),
-    Output("sst-map-hint-text", "children"),
-    Output("sst-map-hint", "style"),
-    Input("measure-state", "data"),
+    Output("measure-readout", "children", allow_duplicate=True),
+    Output("click-marker", "children", allow_duplicate=True),
+    Input("measure-btn", "n_clicks"),
+    State("measure-state", "data"),
+    prevent_initial_call=True,
 )
+def toggle_measure(n_clicks, measure):
+    mode = measure.get("mode", "off") if measure else "off"
+    if mode == "off":
+        # Activate — waiting for point A
+        return (
+            {"mode": "a", "a": None, "b": None},
+            "\U0001F4CF Measuring...",
+            "primary",
+            False,
+            html.Div("Click point A on the map", style={
+                "fontWeight": "500", "color": "#0183fe", "fontSize": "0.8rem",
+            }),
+            [],  # clear any existing markers
+        )
+    else:
+        # Deactivate
+        return (
+            {"mode": "off", "a": None, "b": None},
+            "\U0001F4CF Measure",
+            "secondary",
+            True,
+            "",
+            [],
+        )
 
 
 # ---- Callback 9: POI count label ----
@@ -2319,9 +2324,7 @@ def toggle_layers(active_layers, gfw_range):
 # empty `triggered` on initial calls and prevent_initial_call skips them anyway, so building
 # the page counts nothing; GotOneLabs sends each name once per page view, on the live hosts
 # only. Names: data/labstats.EVENTS["sst"]. Dragging the day slider ("step") is counted by
-# the data-labs-event wrapper in layout/sidebar.py. The floating playbar's buttons count as
-# play / step like the sidebar's. "readout" / "poi" come from the selection (click-pos kind;
-# a tap inside The Dump is a readout). "how_it_works" is counted by the About callback below.
+# the data-labs-event wrapper in layout/sidebar.py.
 app.clientside_callback(
     """
     function() {
@@ -2333,10 +2336,11 @@ app.clientside_callback(
             var id = x.prop_id || "", v = x.value;
             if (id === "fetch-btn.n_clicks") { ev("load"); }
             else if (id === "anim-interval.disabled") { if (v === false) { ev("play"); } }
-            else if (id === "step-back-btn.n_clicks" || id === "step-fwd-btn.n_clicks" ||
-                     id === "sst-pb-back.n_clicks" || id === "sst-pb-fwd.n_clicks") { ev("step"); }
-            else if (id === "click-pos.data") {
-                if (v && v.kind === "poi") { ev("poi"); } else if (v) { ev("readout"); }
+            else if (id === "step-back-btn.n_clicks" || id === "step-fwd-btn.n_clicks") { ev("step"); }
+            else if (id === "click-pos.data") { if (v) { ev("readout"); } }
+            else if (id === "click-marker.children") {
+                var m = (v || [])[0], po = m && m.props && m.props.pathOptions;
+                if (po && po.className === "sst-poi-pick") { ev("poi"); }
             }
             else if (id === "measure-state.data") { if (v && v.mode === "done") { ev("measure"); } }
             else if (id === "poi-collapse.is_open") { if (v) { ev("spots"); } }
@@ -2357,43 +2361,14 @@ app.clientside_callback(
     Input("anim-interval", "disabled"),
     Input("step-back-btn", "n_clicks"),
     Input("step-fwd-btn", "n_clicks"),
-    Input("sst-pb-back", "n_clicks"),
-    Input("sst-pb-fwd", "n_clicks"),
     Input("click-pos", "data"),
+    Input("click-marker", "children"),
     Input("measure-state", "data"),
     Input("poi-collapse", "is_open"),
     Input("layer-toggles", "value"),
     Input("lock-scale", "value"),
     Input("sst-opacity", "value"),
     prevent_initial_call=True,
-)
-
-
-# ---- SST "How it works": opens by itself on someone's first visit, then on request ----
-# Same rule as Currents (gotone-*-intro-v1 localStorage flag; storage blocked = treat as
-# seen). Only a click counts as feature use ("how_it_works"), not the first-visit opening.
-app.clientside_callback(
-    """
-    function(open1, open2, close) {
-        var t = ((window.dash_clientside.callback_context.triggered || [])[0] || {}).prop_id || "";
-        if (t.indexOf("sst-about-open") === 0) {
-            var ev = function (name) { if (window.GotOneLabs) { window.GotOneLabs.event(name, {tool: "sst"}); } };
-            ev("how_it_works");
-            return true;
-        }
-        if (t.indexOf("sst-about-close") === 0) { return false; }
-        var KEY = "gotone-sst-intro-v1", seen = true;
-        try {
-            seen = !!window.localStorage.getItem(KEY);
-            window.localStorage.setItem(KEY, "1");
-        } catch (e) { seen = true; }        // storage blocked: don't nag every visit
-        return !seen;
-    }
-    """,
-    Output("sst-about", "is_open"),
-    Input("sst-about-open", "n_clicks"),
-    Input("sst-about-open-2", "n_clicks"),
-    Input("sst-about-close", "n_clicks"),
 )
 
 

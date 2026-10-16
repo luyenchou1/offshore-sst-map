@@ -3,8 +3,6 @@
 Bug 2 fix: removed 48°F hard floor that broke winter/spring visualization.
 """
 
-import math
-
 import numpy as np
 from dash import html
 
@@ -40,54 +38,89 @@ def compute_color_bounds(arrF: np.ndarray, locked: bool = False):
     return vmin, vmax
 
 
-def legend_ticks(vmin: float, vmax: float, max_ticks: int = 6):
-    """Round tick values (every 1, 2, 5, 10 or 20 °F) inside [vmin, vmax]."""
-    span = max(vmax - vmin, 1e-6)
-    step = 20
-    for s in (1, 2, 5, 10, 20):
-        if span / s <= max_ticks:
-            step = s
-            break
-    v = math.ceil(vmin / step) * step
-    out = []
-    while v <= vmax + 1e-9:
-        out.append(v)
-        v += step
-    return out
-
-
-def build_legend_component(vmin: float, vmax: float, res_km: float = None,
-                           locked: bool = False, coarse: bool = False):
-    """The map's color legend (a dark translucent card like Currents'). It says
-    whether the scale is this week's range (adaptive, the default) or fixed
-    (Same colors every week), with round ticks and what the end colors mean.
-    Phones get a compact version (assets/sst.css). The source and grid size
-    are in the status strip under the map."""
+def build_legend_component(vmin: float, vmax: float, res_km: float = None):
+    """Return a Dash html.Div positioned as a map overlay color legend."""
     gradient = ", ".join(SST_COLORS)
-    span = max(vmax - vmin, 1e-6)
+    n_ticks = 5
+    tick_vals = np.linspace(vmin, vmax, n_ticks)
     ticks = []
-    for v in legend_ticks(vmin, vmax):
-        pct = (v - vmin) / span * 100
-        if pct < 4 or pct > 96:          # too close to an end to read; the note says the ends
-            continue
-        ticks.append(html.Span(f"{v:.0f}", className="sst-legend-tick", style={"left": f"{pct:.1f}%"}))
-    scale = "fixed scale" if locked else "this week's range"
-    if locked:
-        note = f"Same colors every week: {vmin:.0f} to {vmax:.0f} \u00b0F."
+    for i, v in enumerate(tick_vals):
+        pct = i / (n_ticks - 1) * 100
+        ticks.append(
+            html.Span(
+                f"{v:.0f}",
+                style={
+                    "position": "absolute",
+                    "left": f"{pct}%",
+                    "transform": "translateX(-50%)",
+                    "fontSize": "11px",
+                    "color": "#333",
+                },
+            )
+        )
+
+    # Format resolution label
+    if res_km is not None:
+        if res_km < 2:
+            res_label = f"{res_km:.1f} km grid"
+        else:
+            res_label = f"{res_km:.0f} km grid"
     else:
-        note = (f"Colder than {vmin:.0f} or warmer than {vmax:.0f} \u00b0F "
-                "shows in the end colors.")
+        res_label = None
+
     children = [
-        html.Div([html.Span("Water \u00b0F", className="sst-legend-title"),
-                  html.Span(scale, className="sst-legend-scale")], className="sst-legend-head"),
-        html.Div([html.Span(f"{vmin:.0f}", className="sst-legend-end"),
-                  html.Div(className="sst-legend-bar",
-                           style={"background": f"linear-gradient(to right, {gradient})"}),
-                  html.Span(f"{vmax:.0f}", className="sst-legend-end")],
-                 className="sst-legend-row"),
-        html.Div(ticks, className="sst-legend-ticks"),
-        html.Div(note, className="sst-legend-note"),
+        html.Div(
+            "SST (°F)",
+            style={
+                "fontWeight": "600",
+                "fontSize": "12px",
+                "marginBottom": "4px",
+                "color": "#333",
+            },
+        ),
+        html.Div(
+            style={
+                "width": "200px",
+                "height": "14px",
+                "background": f"linear-gradient(to right, {gradient})",
+                "borderRadius": "2px",
+                "border": "1px solid #999",
+            }
+        ),
+        html.Div(
+            ticks,
+            style={
+                "position": "relative",
+                "width": "200px",
+                "height": "18px",
+                "marginTop": "2px",
+            },
+        ),
     ]
-    if coarse:
-        children.append(html.Div("25 km grid: broad pattern only", className="sst-legend-warn"))
-    return html.Div(children, className="sst-legend" + (" locked" if locked else ""))
+
+    if res_label:
+        children.append(
+            html.Div(
+                res_label,
+                style={
+                    "fontSize": "10px",
+                    "color": "#666",
+                    "marginTop": "4px",
+                    "textAlign": "right",
+                },
+            )
+        )
+
+    return html.Div(
+        children,
+        style={
+            "position": "absolute",
+            "bottom": "40px",
+            "right": "10px",
+            "zIndex": "999",
+            "backgroundColor": "rgba(255,255,255,0.92)",
+            "padding": "8px 12px",
+            "borderRadius": "4px",
+            "boxShadow": "0 1px 4px rgba(0,0,0,0.3)",
+        },
+    )

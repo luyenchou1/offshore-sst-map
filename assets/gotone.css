@@ -235,9 +235,17 @@ body {
     padding-bottom: 0.15rem;
 }
 
-/* --- Sidebar slider on dark bg ---
-   Dash 4's slider has no rc-slider-* classes (the old rules here never matched);
-   brand colors and marks are set via its CSS variables in assets/sst.css. */
+/* --- Sidebar slider on dark bg --- */
+.gotone-sidebar .rc-slider-rail {
+    background-color: #334155 !important;
+}
+.gotone-sidebar .rc-slider-mark-text {
+    color: #94a3b8 !important;
+    font-size: 0.65rem !important;
+}
+.gotone-sidebar .rc-slider-dot {
+    display: none !important;
+}
 /* Slider tooltip: dark text on white bg (inherits sidebar light text otherwise) */
 .gotone-sidebar .dash-slider-tooltip {
     color: #0a1628 !important;
@@ -258,7 +266,29 @@ body {
     border-color: #0183fe !important;
 }
 
-/* (Measure tool labels: assets/tooltips.css, .leaflet-tooltip.measure-tooltip) */
+/* --- Slider track --- */
+.rc-slider-track {
+    background-color: #0183fe !important;
+}
+.rc-slider-handle {
+    border-color: #0183fe !important;
+}
+.rc-slider-handle:active,
+.rc-slider-handle:focus {
+    border-color: #0183fe !important;
+    box-shadow: 0 0 0 3px rgba(1, 131, 254, 0.2) !important;
+}
+.rc-slider-dot-active {
+    border-color: #0183fe !important;
+}
+
+/* --- Measure tool: use brand blue instead of indigo --- */
+.measure-tooltip .leaflet-tooltip {
+    background: rgba(1, 131, 254, 0.9) !important;
+}
+.measure-tooltip .leaflet-tooltip::before {
+    border-top-color: rgba(1, 131, 254, 0.9) !important;
+}
 
 /* --- "Was this helpful?" (both tools' sidebars; filled by assets/labs.js) --- */
 .labs-helpful {
@@ -343,8 +373,8 @@ body {
 }
 /* Touch screens and phones: bigger targets */
 @media (max-width: 767.98px), (max-height: 500px), (hover: none) and (pointer: coarse) {
-    .labs-helpful .lh-thumb { width: 44px; height: 44px; }
-    .labs-helpful .lh-note, .labs-helpful .lh-send { height: 44px; }
+    .labs-helpful .lh-thumb { width: 44px; height: 36px; }
+    .labs-helpful .lh-note, .labs-helpful .lh-send { height: 36px; }
 }
 .labs-helpful .lh-hp {                  /* honeypot: off screen, never shown or focused */
     position: absolute !important;
@@ -472,7 +502,11 @@ body {
     .playback-btn-main {
         width: 64px !important;
     }
-    /* (Slider thumbs on touch: assets/sst.css, .dash-slider-thumb) */
+    .rc-slider-handle {
+        width: 24px !important;
+        height: 24px !important;
+        margin-top: -10px !important;
+    }
 }
 
 /* Hide mobile-only elements on desktop (wide AND tall screens) */

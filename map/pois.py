@@ -74,17 +74,6 @@ _DUMP_STYLE = {
 }
 
 
-def pois_payload():
-    """Spot positions for the browser's tap hit test (assets/sst.js classify):
-    points [name, lat, lon] and The Dump's box."""
-    d = DUMP_BOX
-    return {
-        "points": [[name, lat, lon] for name, lat, lon in ALL_POIS],
-        "dump": {"name": d["name"], "s": d["sw"][0], "n": d["nw"][0],
-                 "w": d["sw"][1], "e": d["ne"][1]},
-    }
-
-
 def get_poi_options():
     """Return list of {label, value} for the multi-select dropdown."""
     options = [{"label": name, "value": name} for name, _, _ in ALL_POIS]

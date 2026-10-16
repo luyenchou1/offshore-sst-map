@@ -66,11 +66,9 @@ def build_map():
                         id="sidebar-open",
                         className="hamburger-btn",
                     ),
-                    # First view: assets/sst.js fits the fishing grounds (phones) or the
-                    # whole area, then restores the reader's last view.
                     dl.Map(
                         id="sst-map",
-                        center=[40.6, -71.6],
+                        center=[41.2, -71.5],
                         zoom=7,
                         minZoom=5,
                         maxZoom=12,
@@ -88,8 +86,17 @@ def build_map():
                                 url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
                                 attribution='Tiles &copy; <a href="https://www.esri.com/">Esri</a> &mdash; Esri, HERE, Garmin, FAO, NOAA, USGS',
                             ),
-                            # (The dashed area outline is gone: it ran over land from New
-                            # York Harbor to Maine; the colors show the mapped area.)
+                            dl.GeoJSON(
+                                id="aoi-outline",
+                                options={
+                                    "style": {
+                                        "color": "#94a3b8",
+                                        "weight": 1.5,
+                                        "fillOpacity": 0,
+                                        "dashArray": "6 4",
+                                    }
+                                },
+                            ),
                             # Chart layers render BELOW the SST overlay.
                             # SST is semi-transparent (RGBA PNGs) so chart
                             # features show through, and the SST opacity
@@ -130,52 +137,14 @@ def build_map():
                                 name="poi-pane",
                                 style={"zIndex": 450},
                             ),
-                            # The selection (a reading or a spot card) and the measurement
-                            # live in separate groups so each keeps a stable layer order
-                            # (react-leaflet reuses layers by position; a Tooltip's
-                            # className is fixed when it's created).
                             dl.Pane(
-                                [dl.LayerGroup(id="measure-layer"),
-                                 dl.LayerGroup(id="click-marker")],
+                                dl.LayerGroup(id="click-marker"),
                                 name="click-pane",
                                 style={"zIndex": 500},
                             ),
                         ],
                     ),
-                    # Legend (render_static_layers) + the fishing-activity note, shown while
-                    # that layer is ticked (GFW_NOTE: lane D's text when merged).
-                    html.Div(
-                        [html.Div(id="legend-container"),
-                         html.Div(globals().get("GFW_NOTE") or (
-                                      "Fishing activity: where commercial fishing boats carrying AIS "
-                                      "trackers fished on the same days, from Global Fishing Watch. "
-                                      "Most recreational boats don't show up, and the last few days "
-                                      "can be empty while GFW catches up."),
-                                  id="sst-gfw-note", className="sst-gfw-note",
-                                  style={"display": "none"})],
-                        className="sst-legend-box",
-                    ),
-                    # Measure instructions on the map (the sidebar is a drawer on phones)
-                    html.Div(
-                        [html.Span(id="sst-map-hint-text"),
-                         html.Button("Cancel", id="sst-hint-cancel", className="sst-hint-cancel")],
-                        id="sst-map-hint", className="sst-map-hint", style={"display": "none"},
-                    ),
-                    # Floating day controls (shown when the sidebar is a drawer: phones,
-                    # tablets, narrow windows), wired to the same callbacks as the sidebar's.
-                    html.Div(
-                        [
-                            html.Button("\u25C0", id="sst-pb-back", title="Day before",
-                                        **{"aria-label": "Day before"}),
-                            html.Button("Play", id="sst-pb-play", className="main"),
-                            html.Button("\u25B6", id="sst-pb-fwd", title="Next day",
-                                        **{"aria-label": "Next day"}),
-                            html.Span(id="sst-pb-date", className="sst-pb-date"),
-                        ],
-                        id="sst-playbar",
-                        className="currents-playbar sst-playbar",
-                        style={"display": "none"},
-                    ),
+                    html.Div(id="legend-container"),
                     # Loading overlay on map — shown during all fetches
                     html.Div(
                         id="map-loading-overlay",
@@ -228,19 +197,12 @@ def build_map():
                     ),
                 ],
                 className="map-wrapper",
-                # Height: the page's flex column (.sst-page in assets/sst.css), with the
-                # status strip under the map. MAP_HEIGHT (72 px; the header is 80) is unused.
                 style={
                     "position": "relative",
+                    "height": MAP_HEIGHT,
                     "overflow": "hidden",
                 },
-            ),
-            # The day on the map, the source and how fresh it is (filled by
-            # assets/sst.js SST.status). Fixed height, so the map never resizes.
-            html.Div(
-                html.Div("Loading the week\u2026", className="sst-st-l1"),
-                id="sst-status-line", className="sst-status-line",
-            ),
+            )
         ],
         width=10,
         className="map-col",

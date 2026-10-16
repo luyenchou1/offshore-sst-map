@@ -4,71 +4,54 @@
     pointer-events: none !important;
 }
 
-/* Leaflet puts a tooltip's className on the tooltip element itself, so these
-   are written .leaflet-tooltip.<class> (the old ".sst-tooltip .leaflet-tooltip"
-   never matched and every card rendered in Leaflet's plain white default). */
-
-/* SST reading / spot card (map/readout.py selection_tip) */
-.leaflet-tooltip.sst-tooltip {
-    background: #ffffff;
+/* SST click-to-read tooltip */
+.sst-tooltip .leaflet-tooltip {
+    background: white;
     border: 1px solid #cbd5e1;
-    border-radius: 8px;
-    padding: 6px 10px 7px;
-    box-shadow: 0 3px 12px rgba(10, 22, 40, 0.22);
-    color: #1e293b;
+    border-radius: 6px;
+    padding: 5px 10px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
     white-space: nowrap;
 }
-.leaflet-tooltip.sst-tooltip::before { border-top-color: #cbd5e1; }
-.sst-tip { text-align: center; }
-.sst-tip-name { font-size: 0.85rem; font-weight: 700; color: #0a1628; line-height: 1.2; }
-.sst-tip-poi .sst-tip-name { color: #0170d8; }
-.sst-tip-temp { font-size: 1.2rem; font-weight: 700; color: #0a1628; line-height: 1.2; }
-.sst-tip-none { font-size: 0.85rem; font-weight: 600; color: #64748b; line-height: 1.3; white-space: normal; max-width: 180px; }
-.sst-tip-date { font-size: 0.72rem; color: #334155; margin-top: 1px; }
-.sst-tip-pos { font-size: 0.68rem; color: #64748b; margin-top: 1px; }
-/* The same point each day of the week; the day on the map is highlighted */
-.sst-week {
-    display: flex;
-    justify-content: center;
-    gap: 2px;
-    margin-top: 5px;
-    padding-top: 4px;
-    border-top: 1px solid #e2e8f0;
+.sst-tooltip .leaflet-tooltip::before {
+    border-top-color: #cbd5e1;
 }
-.sst-wk-cell { width: 22px; text-align: center; border-radius: 4px; padding: 1px 0; }
-.sst-wk-t { font-size: 0.72rem; font-weight: 600; color: #334155; line-height: 1.2; min-height: 0.85rem; }
-.sst-wk-d { font-size: 0.6rem; color: #94a3b8; line-height: 1.1; }
-.sst-wk-cell.cur { background: #0183fe; }
-.sst-wk-cell.cur .sst-wk-t, .sst-wk-cell.cur .sst-wk-d { color: #ffffff; }
 
-/* Measure tool: A / B labels and the distance + course label */
-.leaflet-tooltip.measure-pt-tooltip {
-    background: #ffffff;
-    border: 1px solid #0183fe;
+/* POI fishing-spot hover tooltip */
+.poi-tooltip .leaflet-tooltip {
+    background: white;
+    border: 1px solid #86efac;
     border-radius: 6px;
-    padding: 2px 7px;
-    color: #0a1628;
-    font-size: 0.75rem;
-    font-weight: 600;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    padding: 4px 8px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+    white-space: nowrap;
 }
-.leaflet-tooltip.measure-pt-tooltip::before { border-top-color: #0183fe; }
-.leaflet-tooltip.measure-tooltip {
-    background: rgba(1, 131, 254, 0.95);
-    color: #ffffff;
+.poi-tooltip .leaflet-tooltip::before {
+    border-top-color: #86efac;
+}
+
+/* Measure tool distance label */
+.measure-tooltip .leaflet-tooltip {
+    background: rgba(99, 102, 241, 0.9);
+    color: white;
     border: none;
-    border-radius: 6px;
-    padding: 3px 9px;
+    border-radius: 4px;
+    padding: 3px 8px;
     font-weight: 600;
     font-size: 0.8rem;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
     white-space: nowrap;
 }
-.leaflet-tooltip.measure-tooltip::before { border-top-color: rgba(1, 131, 254, 0.95); }
+.measure-tooltip .leaflet-tooltip::before {
+    border-top-color: rgba(99, 102, 241, 0.9);
+}
 
-/* Phones: smaller labels. They stay on one line (an absolutely placed tooltip
-   with white-space: normal shrinks to its narrowest word and stacks). */
+/* Mobile: tooltips can wrap (narrow or landscape phone) */
 @media (max-width: 767.98px), (max-height: 500px) {
-    .leaflet-tooltip.measure-tooltip { font-size: 0.74rem; padding: 2px 7px; }
-    .leaflet-tooltip.measure-pt-tooltip { font-size: 0.7rem; }
+    .sst-tooltip .leaflet-tooltip,
+    .poi-tooltip .leaflet-tooltip,
+    .measure-tooltip .leaflet-tooltip {
+        white-space: normal !important;
+        max-width: 200px;
+    }
 }
