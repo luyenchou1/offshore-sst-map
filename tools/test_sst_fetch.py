@@ -531,6 +531,76 @@ def test_app_failure_not_reasked_within_a_minute():
         appmod._failed_recently.clear()
 
 
+def _old_style_entry(appmod, path):
+    """Rewrite a saved entry the way entries were saved before the Web Mercator fix (Oct 16, 2026): frames with one
+    image row per grid row (rows evenly spaced in latitude), no "frame_format", bounds at the first/last cell centres."""
+    import base64
+    import io as _io
+    from PIL import Image
+    from map.overlay import array_to_rgba
+    with gzip.open(path, "rt") as f:
+        entry = json.load(f)
+    lats, lons = appmod._deserialize_array(entry["lats"]), appmod._deserialize_array(entry["lons"])
+    frames = []
+    for rd in entry["raw_days"]:
+        buf = _io.BytesIO()
+        Image.fromarray(array_to_rgba(appmod._deserialize_array(rd["arrF"]), entry["vmin"], entry["vmax"]),
+                        "RGBA").save(buf, format="PNG")
+        frames.append("data:image/png;base64," + base64.b64encode(buf.getvalue()).decode())
+    entry.update(frames=frames, bounds=[[float(lats.min()), float(lons.min())], [float(lats.max()), float(lons.max())]])
+    entry.pop("frame_format", None)
+    with gzip.open(path, "wt") as f:
+        json.dump(entry, f)
+    return entry
+
+
+def test_app_old_frames_redrawn_from_saved_arrays():
+    """Frames saved before the Web Mercator fix are redrawn from the entry's own arrays, without asking NOAA
+    (Render can't reach it), served at once and written back; then the entry is served as saved."""
+    from map.overlay import FRAME_FORMAT
+    appmod = _app()
+    fresh()
+    fake = install(FakeErddap())
+    end = date(2014, 8, 20)
+    w = appmod._load_week(end, False, LATEST)
+    assert w["store"]["frame_format"] == FRAME_FORMAT
+    appmod._write_week(w, False)
+    path = cachemod._path_for(end, False)
+    with gzip.open(path, "rt") as f:
+        assert json.load(f)["frame_format"] == FRAME_FORMAT
+    old = _old_style_entry(appmod, path)
+    asked = len(fake.calls)
+    appmod._raw_data_cache.clear()
+    w2 = appmod._load_week(end, False, LATEST)
+    assert len(fake.calls) == asked, fake.calls[asked:]                 # NOAA not asked
+    assert w2["write"] == "upgrade" and w2["meta_out"]["from_cache"] is True
+    assert w2["store"]["frame_format"] == FRAME_FORMAT and w2["store"]["frames"] != old["frames"]
+    assert w2["store"]["frames"] == w["store"]["frames"]               # the same picture as a fresh fetch
+    assert w2["store"]["bounds"] == w["store"]["bounds"] != old["bounds"]   # cell edges again
+    appmod._write_week(w2, False)
+    with gzip.open(path, "rt") as f:
+        e2 = json.load(f)
+    assert e2["frame_format"] == FRAME_FORMAT and e2["frames"] == w["store"]["frames"]
+    assert e2["bounds"] == w["store"]["bounds"] and e2["meta"]["built_at"] == old["meta"]["built_at"]
+    appmod._raw_data_cache.clear()
+    w3 = appmod._load_week(end, False, LATEST)
+    assert w3["write"] is None and w3["store"]["frames"] == e2["frames"]   # current frames: served as saved
+    # the other color mode from an old-style entry is drawn fresh too, and a raw-only entry (the seeder's) as before
+    _old_style_entry(appmod, path)
+    appmod._raw_data_cache.clear()
+    w4 = appmod._load_week(end, True, LATEST)
+    assert w4["write"] == "cross" and w4["store"]["frame_format"] == FRAME_FORMAT and w4["store"]["vmin"] == 30.0
+    with gzip.open(path, "rt") as f:
+        e = json.load(f)
+    e["frames"] = None
+    with gzip.open(path, "wt") as f:
+        json.dump(e, f)
+    appmod._raw_data_cache.clear()
+    w5 = appmod._load_week(end, False, LATEST)
+    assert w5["write"] == "upgrade" and w5["store"]["frames"] == w["store"]["frames"]
+    assert len(fake.calls) == asked
+
+
 # ---------------- app: routes and layers ----------------
 
 def test_gfw_proxy_reads_range_per_request():

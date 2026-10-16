@@ -40,7 +40,6 @@ from data import geo
 from data import labstats
 from data import outbound
 from data import sstmeta
-from data.convert import upsample_visual
 from data.erddap import SSTUnavailable, get_sst_multiday, latest_mur_date, noaa_down
 from data.geo import grid_bounds, mask_aoi_rasterized, mask_land_rasterized, orient_to_leaflet
 from layout.catchview import build_catch_page
@@ -51,7 +50,7 @@ from layout.statsview import render_stats_page
 from layout.sidebar import build_sidebar
 from map.colorscale import build_legend_component, compute_color_bounds
 from map.measure import format_measurement
-from map.overlay import sst_to_base64_png
+from map.overlay import FRAME_FORMAT, sst_to_base64_png
 from map.pois import build_poi_markers, get_all_poi_names, pois_payload
 from layout.sstabout import build_about_modal
 from map.readout import fmt_day, measure_panel, selection_tip, week_temps
@@ -1128,6 +1127,18 @@ def _get_raw_data(data_key):
     return None
 
 
+def _render_frames(raw_days, lats, bounds, vmin, vmax):
+    """The week's PNG frames for the ImageOverlay at `bounds`, rows resampled to Web Mercator (map/overlay: drawn
+    rows evenly spaced in latitude put the SST up to 5.3 km north of true). The payload carries
+    "frame_format": FRAME_FORMAT with them, so the cache can tell these from frames drawn the old way."""
+    return [sst_to_base64_png(d["arrF"], vmin, vmax, lats=lats, bounds=bounds) for d in raw_days]
+
+
+def _frames_current(entry) -> bool:
+    """A cache entry's PNG frames can be served as they are (drawn in Web Mercator rows, map/overlay)."""
+    return bool(entry.get("frames")) and entry.get("frame_format") == FRAME_FORMAT
+
+
 # ---- Shared helper: build SST payload from raw ERDDAP result ----
 def _build_payload(sst: dict, locked: bool) -> dict:
     """Process raw ERDDAP result into the full payload.
@@ -1173,20 +1184,15 @@ def _build_payload(sst: dict, locked: bool) -> dict:
         vmin, vmax = 30.0, 90.0
 
     # Pre-render each day's PNG
-    frames = []
-    dates = []
-    for pd_item in processed_days:
-        arrF_vis = upsample_visual(pd_item["arrF"], 1)
-        png_url = sst_to_base64_png(arrF_vis, vmin, vmax)
-        frames.append(png_url)
-        dates.append(pd_item["date"])
-
     bounds = grid_bounds(lats, lons)
+    frames = _render_frames(processed_days, lats, bounds, vmin, vmax)
+    dates = [pd_item["date"] for pd_item in processed_days]
     meta = sstmeta.meta_from_fetch(sst)
 
     # Store payload — goes to browser via dcc.Store (~7 MB)
     store_payload = {
         "frames": frames,
+        "frame_format": FRAME_FORMAT,
         "dates": dates,
         "bounds": bounds,
         "vmin": float(vmin),
@@ -1330,20 +1336,15 @@ def _rebuild_payload_from_raw(raw_data: dict, locked: bool) -> dict:
         else:
             vmin, vmax = 30.0, 90.0
 
-    frames = []
-    dates = []
-    for rd in raw_days:
-        arrF_vis = upsample_visual(rd["arrF"], 1)
-        png_url = sst_to_base64_png(arrF_vis, vmin, vmax)
-        frames.append(png_url)
-        dates.append(rd["date"])
-
-    res_km = abs(float(lats[1] - lats[0])) * 111.0 if len(lats) > 1 else None
     bounds = grid_bounds(lats, lons)
+    frames = _render_frames(raw_days, lats, bounds, vmin, vmax)
+    dates = [rd["date"] for rd in raw_days]
+    res_km = abs(float(lats[1] - lats[0])) * 111.0 if len(lats) > 1 else None
     meta = raw_data.get("meta") or {}
 
     return {
         "frames": frames,
+        "frame_format": FRAME_FORMAT,
         "dates": dates,
         "bounds": bounds,
         "vmin": float(vmin),
@@ -1366,6 +1367,11 @@ def _build_payload_from_disk_cache(cached: dict, raw_only: bool = False, locked_
 
     If raw_only=True, skip PNG rendering even for raw-only entries
     (used by _get_raw_data which only needs arrays for click lookups).
+
+    Frames are served as saved only when they're the current frame format (_frames_current); older ones (rows
+    evenly spaced in latitude, drawn up to 5.3 km north of true) are re-rendered here from the entry's raw arrays,
+    and _saved_week has the entry rewritten with them. The bounds always come from the grid (geo.grid_bounds,
+    the cell edges; entries from before Oct 2026 saved the first and last cell centres).
     """
     raw_days = []
     dates = []
@@ -1406,22 +1412,23 @@ def _build_payload_from_disk_cache(cached: dict, raw_only: bool = False, locked_
     else:
         vmin, vmax = cached["vmin"], cached["vmax"]
 
-    # Handle raw-only pre-cache entries (frames=None) or cross-mode rerender
+    # Raw-only entries (frames=None), frames drawn the old way, or a cross-mode rerender: render from the raw arrays
+    bounds = grid_bounds(raw_data["lats"], raw_data["lons"])
     frames = cached.get("frames")
-    if (frames is None or need_rerender) and not raw_only:
-        logger.info("Rendering PNGs on the fly (rerender=%s)", need_rerender)
-        frames = []
-        for rd in raw_days:
-            arrF_vis = upsample_visual(rd["arrF"], 1)
-            png_url = sst_to_base64_png(arrF_vis, vmin, vmax)
-            frames.append(png_url)
-    elif frames is None:
+    current = _frames_current(cached)
+    if (not current or need_rerender) and not raw_only:
+        logger.info("Rendering PNGs on the fly (rerender=%s, saved frames %s)", need_rerender,
+                    "none" if not frames else f"format {cached.get('frame_format', 1)}")
+        frames = _render_frames(raw_days, raw_data["lats"], bounds, vmin, vmax)
+        current = True
+    elif not current:
         frames = []  # raw_only mode — caller doesn't need PNGs
 
     store_payload = {
         "frames": frames,
+        "frame_format": FRAME_FORMAT if current else None,
         "dates": dates,
-        "bounds": cached["bounds"],
+        "bounds": bounds,
         "vmin": float(vmin),
         "vmax": float(vmax),
         "res_km": cached.get("res_km"),
@@ -1733,12 +1740,12 @@ def _saved_week(end_date, locked):
     """The saved week ending end_date: this color mode on disk, then memory, then the other mode
     (memory, disk). Returns {"meta", "end", "write", "make"} or None; make() builds the page
     payload and raw arrays only when the week is actually served (see _ready). "write" says what
-    to write back in the background ("upgrade": add PNGs to a raw-only entry, "cross": save this
-    color mode)."""
+    to write back in the background ("upgrade": add PNGs to a raw-only entry, or replace frames drawn the old way,
+    map/overlay.FRAME_FORMAT; "cross": save this color mode)."""
     entry = get_cached(end_date, locked)
     if entry:
         return {"meta": entry_meta(entry, end_date, locked), "end": end_date,
-                "write": "upgrade" if entry.get("frames") is None else None,
+                "write": None if _frames_current(entry) else "upgrade",
                 "make": lambda: _build_payload_from_disk_cache(entry)}
     key = _cache_key(end_date, locked)
     if key in _raw_data_cache:  # fetched moments ago; its disk write may still be running
@@ -3134,6 +3141,29 @@ app.clientside_callback(
     Input("sidebar-backdrop", "n_clicks"),
     prevent_initial_call=True,
 )
+
+
+# ---- Finish Dash's setup at import, not on the first request (relaunch, Oct 16 2026) ----
+# Dash 4.0 builds the page's script and stylesheet lists (it walks assets/) in a before_request hook,
+# `Dash._setup_server`, that marks itself done *before* it starts. The listening socket (opened by gunicorn's master)
+# queues connections while the worker is still importing this module, so the first page loads after a boot are
+# served together: the ones that skipped the half-done setup got a page with no /assets at all (no sst.js, so no
+# window.SST: map taps and the fishing-activity tile retry did nothing; no labs.js, currents.js or gotone.css).
+# Reproduced: 8 of 32 cold-boot /sst loads, 4 at once. Running it here, on one thread before the worker serves
+# anything, closes that window; Dash's own hook then returns at once (tools/boot_sst_pages.mjs).
+def _finish_dash_setup():
+    setup = getattr(app, "_setup_server", None)
+    if setup is None:  # a Dash without it: nothing to do here, but say so (CLAUDE.md, Dash 4.0 Gotchas)
+        logger.warning("dash.Dash has no _setup_server: can't finish Dash's setup at import")
+        return
+    with server.app_context():
+        setup()
+    scripts = [os.path.basename(f) for f in getattr(app, "_assets_files", [])]
+    if "sst.js" not in scripts:
+        logger.warning("Dash setup at import: assets/sst.js not among the page's assets (%s)", scripts)
+
+
+_finish_dash_setup()
 
 
 # ---- Startup pre-warm: populate server-side cache from disk ----

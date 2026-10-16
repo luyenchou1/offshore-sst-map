@@ -4,11 +4,14 @@ Runs the app exactly like Render (gunicorn gthread: 1 worker, 16 threads, timeou
 (and Global Fishing Watch) fail the way they can fail from Render, fires 50 concurrent mixed requests twice (the
 SST page, Currents, the currents manifest, GFW tiles, the SST fetch callback for uncached old weeks, analytics
 beacons) and requires every response within 30 s. Then it checks that `kill -USR1 <worker>` writes every thread's
-stack to the log, that /api/debug/threads answers, and that no request is left running.
+stack to the log, that /api/debug/threads answers, that no request is left running, and that 16 connections that
+send nothing don't stop the server answering (gunicorn >= 24's gthread worker reads each new connection on a request
+thread: 24 and 25 with no timeout, 26 for 5 s; 23.0.0, the pinned version, waits in its poller instead).
 
     OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES .venv/bin/python tools/load_sst_outage.py
     .venv/bin/python tools/load_sst_outage.py --scenarios render --port 8071 --log-dir /tmp/sst-load
     .venv/bin/python tools/load_sst_outage.py --extra-path /path/to/other/gunicorn   # another gunicorn version
+    #   (e.g. python -m pip install --target /tmp/g26 gunicorn==26.2.0, then --extra-path /tmp/g26)
 
 Scenarios:
   unreachable  NOAA fails at once with errno 101; no GFW token
@@ -24,6 +27,7 @@ import os
 import random
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -37,6 +41,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LIMIT_S = 30.0
+IDLE_CONNS = 16        # = gunicorn --threads
+IDLE_LIMIT_S = 2.0
 TOKEN = "load-test-token"
 
 SCENARIOS = {
@@ -151,6 +157,21 @@ def wave(base, n, seed, gfw_range, cb):
         return list(ex.map(start, range(n)))
 
 
+def idle_connections(base, port, n=IDLE_CONNS):
+    """n TCP connections that connect and send nothing (a scanner, a proxy's idle pool), then one request.
+    Returns (status, seconds) for that request."""
+    socks = []
+    try:
+        for _ in range(n):
+            socks.append(socket.create_connection(("127.0.0.1", port), timeout=5))
+        time.sleep(0.5)                     # let the worker accept them
+        st, el, _ = http(base, "/api/currents/manifest.json", timeout=30)
+        return st, el
+    finally:
+        for s in socks:
+            s.close()
+
+
 def worker_pid(master_pid):
     try:
         import psutil
@@ -256,6 +277,13 @@ def run_scenario(name, args, workdir: Path) -> bool:
         else:
             log(f"[{name}] /api/debug/threads ok; " + "; ".join(ln.strip() for ln in text.splitlines()
                                                                  if ln.startswith("upstream"))[:300])
+        # connections that send nothing must not hold the request threads
+        st, el = idle_connections(base, args.port)
+        if st != 200 or el > IDLE_LIMIT_S:
+            fail(f"with {IDLE_CONNS} idle connections open, the manifest took {el:.1f}s ({st}); limit "
+                 f"{IDLE_LIMIT_S:.0f}s (gunicorn {version}: >= 24 reads new connections on request threads)")
+        else:
+            log(f"[{name}] {IDLE_CONNS} connections that send nothing: the server still answers in {el:.2f}s")
         # kill -USR1 <worker>: every thread's stack in the log
         pid = worker_pid(proc.pid)
         before = (d / "server.log").read_text().count("Current thread 0x")

@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-10-16 - SST relaunch: the map is drawn where its readings are, and works on every load after a deploy
+
+### Fixed
+- **The sea-surface temperatures were drawn up to 5.3 km (2.9 nm) north of where they are**, worst along 41.3 N (Rhode Island Sound, just south of Martha's Vineyard) and about 3.6 km on average. The map stretches each day's image in Web Mercator while the data's rows are evenly spaced in latitude, so the colors sat north of their true position while a tap read the right spot: the color under your finger could be a degree off its own reading. Each image is now drawn on Mercator rows: a cell's edge lands within 0.28 km of true. Saved weeks redraw themselves from their own data the first time they're opened (no new download from NOAA).
+- **Right after a deploy or restart, the SST page sometimes came up without its helpers**: taps did nothing and fishing-activity tiles weren't retried (and the page could miss its styles and visit counter). The server sent some of the first pages before it had finished listing the page's scripts (8 of 32 such loads in testing). It now finishes that before it serves anything. The page's own script also no longer depends on load order: it waits for the map library if it isn't there yet, picks up a map that's already on the page, and sets itself up only once.
+
+### Changed
+- **gunicorn pinned to 23.0.0** (was "21.2 or newer", which installed 26.2.0). From version 24 a connection that sends nothing holds one of the 16 request threads (indefinitely in 24 and 25, 5 s in 26); 23.0.0 doesn't. The load test now checks this.
+- Each day's image is 1041 rows instead of 501 (a week's images about 190 KB instead of 152 KB).
+
+### Added
+- `tools/boot_sst_pages.mjs`: boots the server as on Render again and again and opens four SST pages at once right after each boot; checks the page script's setup paths.
+- Checks that the color drawn at a map position matches the reading there: `tools/test_sst_ui.py` (pixel under 600 random points, a saved week), `tools/test_sst_fetch.py` (old saved weeks redrawn without NOAA), `tools/smoke_sst.mjs` (in Chrome, the color under 10 taps).
+
 ## 2026-10-16 - The server no longer stops answering when NOAA or Global Fishing Watch is down or slow
 
 ### Fixed

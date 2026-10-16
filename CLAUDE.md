@@ -15,7 +15,7 @@
 - Dev server: `python app.py` (port 8050)
 - Production: **Render Starter** ($7/month) at https://offshore-sst-map.onrender.com
   - Custom domain: `sst.gotoneapp.com` (CNAME → Render, SSL auto-provisioned)
-  - Start command: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --threads 16 --timeout 180`
+  - Start command: `gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --threads 16 --timeout 180` (gunicorn pinned to 23.0.0 in requirements.txt: see Render Deployment)
   - Must be 1 worker (raw data cache is in-memory per process)
   - 16 threads allows concurrent I/O (GFW tile proxy, click callbacks) without separate processes
   - Auto-deploy is ON — every push to `main` goes live in ~2–3 min (observed Oct 2026). Put `[skip render]` in a commit message to skip that deploy
@@ -65,7 +65,7 @@ User picks date → Fetch button → _load_week(): a saved copy, or get_sst_mult
   (22 s budget, 3 days at a time newest first, OISST only if MUR sends nothing)
   → orient_to_leaflet() → mask_aoi → mask_land (per day, 2D only)
   → compute unified vmin/vmax across all 7 days
-  → pre-render 7 base64 PNGs
+  → pre-render 7 base64 PNGs (rows resampled to Web Mercator, map/overlay.mercator_rows; "frame_format": 2)
 
 Two-part storage:
   → dcc.Store (browser): PNG frames + metadata (~7 MB)
@@ -94,7 +94,8 @@ Pre-cache (memory-efficient raw-only mode):
     → put_cache() with frames=None (no PNG rendering)
     → 120s hard timeout per date via ThreadPoolExecutor
   On user load of raw-only cache entry:
-    _build_payload_from_disk_cache() renders PNGs on-the-fly (~2-3s)
+    _build_payload_from_disk_cache() renders PNGs on-the-fly (~0.4 s; also entries whose frames
+      aren't frame_format 2, i.e. saved before Oct 16 2026: redrawn from their raw arrays, no NOAA)
     → background thread upgrades cache with PNGs for instant future loads
 ```
 
@@ -211,7 +212,7 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 | `data/cache.py` | Disk-based gzip JSON cache, refresh checks from meta, saved-week index, the seeder's wanted list |
 | `layout/sidebar.py` | Date picker, animation controls, collapsible POI checklist, fetch button, version indicator |
 | `layout/mapview.py` | dl.Map with custom panes, loading overlay, hamburger button |
-| `map/overlay.py` | Array → RGBA → base64 PNG |
+| `map/overlay.py` | Array → RGBA → base64 PNG, rows resampled to Web Mercator first (`mercator_rows`: Leaflet stretches an ImageOverlay linearly in Mercator); `FRAME_FORMAT` marks frames drawn this way (see ImageOverlay Is Stretched in Web Mercator) |
 | `map/colorscale.py` | Legend component, adaptive color bounds |
 | `map/pois.py` | 32 fishing spots + The Dump rectangle, multi-select picker |
 | `map/measure.py` | Haversine distance, initial bearing, compass direction, magnetic variation (bilinear lookup in `map/declination.py`) and the true + magnetic course |
@@ -220,7 +221,7 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 | `config.json` | AOI polygon, ERDDAP servers, search terms |
 | `assets/gotone.css` | GotOne brand CSS overrides (colors, dark sidebar, inputs, mobile responsive) |
 | `assets/tooltips.css` | Tooltip card styles (`.leaflet-tooltip.<class>`: Leaflet puts the class on the tooltip itself) |
-| `assets/sst.js` | /sst page helpers (`window.SST`): tap routing in screen pixels (`classify`), the status strip and playbar date (`status`), weekday slider marks, failed-load notice, first view + remembered view, retrying fishing-activity tiles the server answered 503 "busy" (`gfwRetry`). Not the data engine (readouts are still server-side) |
+| `assets/sst.js` | /sst page helpers (`window.SST`): tap routing in screen pixels (`classify`), the status strip and playbar date (`status`), weekday slider marks, failed-load notice, first view + remembered view, retrying fishing-activity tiles the server answered 503 "busy" (`gfwRetry`). Defined at once and only once (`SST._setup`); the Leaflet hooks go in when `window.L` exists (retried every 50 ms), and a map or fishing-activity layer made earlier is adopted (`SST.ready()`). Not the data engine (readouts are still server-side) |
 | `assets/sst.css` | /sst styles, scoped to `.sst-page`: flex page, status strip, legend, playbar, measure hint, drawer below 1200 px and on touch, 44 px targets |
 | `layout/sstabout.py` | The SST "How it works" modal (`sst-about`), sharing Currents' modal styles; facts checked Oct 16, 2026 |
 | `assets/gotone-logo.png` | White fish logotype on transparent background |
@@ -229,8 +230,9 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 | `tools/build_currents.py` | Off-Render builder for the example weeks: NECOFS → gridded frames + NOAA predictions → upload |
 | `tools/build_tide_atlas.py` | Off-Render builder for the tide-stage atlas behind Today / Tide cycle (see Architecture → Currents Page) |
 | `tools/build_inlets.py` | Builder for the harbor-inlet estimates (DEM hypsometry, inlet survey, outside-tide offsets, report, Lake Montauk check, selftest) → `data/inlets.json` |
-| `tools/smoke_sst.mjs` | Headless smoke test of /sst at 1440x900, 390x664 and 820x1180 against a local server (run before pushing; see Running Locally) |
-| `tools/test_sst_ui.py` | Checks of the SST readout / legend / measure / declination helpers (no server) |
+| `tools/smoke_sst.mjs` | Headless smoke test of /sst at 1440x900, 390x664 and 820x1180 against a local server (run before pushing; see Running Locally); on the laptop also the SST image on its bounds and the color drawn under 10 taps vs each tap's reading |
+| `tools/boot_sst_pages.mjs` | Cold-boot test: boots gunicorn as production N times, opens 4 /sst pages at once right after each boot, requires every /assets script and `window.SST` on the map; then sst.js before Leaflet, after the map exists, twice, and across page changes |
+| `tools/test_sst_ui.py` | Checks of the SST readout / legend / measure / declination helpers, and that the overlay is drawn where its data is (pixel under a lat/lon vs the readout there; synthetic field and the newest saved week) (no server) |
 | `tools/build_declination.py` | WMM-2025 synthesis → `map/declination.py`; `--check` compares with NOAA's calculator |
 | `data/inlets.json` | Harbor-inlet model inputs (committed; read by `data/currents.read_inlets()`, run in the browser) |
 | `layout/currentsview.py` | /currents layout: view switch, date / strength / week panels, controls, dark map, chart, "How it works" modal (accuracy text) |
@@ -247,6 +249,7 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 | `tools/load_sst_outage.py` | Load test: gunicorn exactly as production under tools/netsim (NOAA unreachable / Render's Oct 16 failure / slow), 2 x 50 concurrent mixed requests, every answer within 30 s, SIGUSR1 dump and `/api/debug/threads` checked |
 | `tools/netsim/sitecustomize.py` | Test-only network simulator: on PYTHONPATH with `NETSIM="host=mode,..."` it makes chosen hosts unreachable (errno 101), refused, unresolvable, blackholed, tarpitted, dripping, or `v4drop` (Render's NOAA failure) |
 | `docs/incident-2026-10-16.md` | The Oct 16 outage: timeline, reproduction, thread stacks, root cause, fix, verification |
+| `docs/relaunch-progress.md` | The sprint 1 relaunch fixes (Oct 16): window.SST missing after a boot (Dash setup race), the SST image 5.3 km north of true (Web Mercator rows), gunicorn pinned to 23.0.0; measurements, test results, Render checklist |
 | `tools/test_labstats.py` | Analytics tests (Flask test client, temp `LABS_STATS_DIR`; no pytest): `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES .venv/bin/python tools/test_labstats.py` |
 | `requirements-tools.txt` | Build-only deps (`netCDF4`, Pillow for DEM TIFFs, etc.) — never installed on Render |
 | `.github/workflows/` | `seed-sst-cache.yml` (daily SST seed), `build-currents.yml` (currents), `keepalive.yml` (heartbeat), `sync-catches.yml` (catch sync — not wired up yet) |
@@ -285,7 +288,7 @@ Full write-up: `docs/incident-2026-10-16.md`. About 10 minutes after SST sprint 
 - **Rules since**: no lock is held across a network call; every outside call goes through `data/outbound.py` (a whole-call deadline that holds even against a drip, its own threads, a cap on calls in flight and on callers waiting, a breaker that opens on connect failures); failures are remembered briefly (a GFW range for 60 s, a week for 60 s, the newest-day lookup for 5 min) and logged at most once a minute; at most `SST_NOAA_READERS` request threads wait on NOAA; every wait has a timeout (`_call_with_timeout`, never `with ThreadPoolExecutor(...)` around a timed `result()`: leaving the block waits for the work).
 - **When the site hangs again, before restarting**: in the Render shell, `ps aux | grep gunicorn` and `kill -USR1 <worker pid>` (or the master's pid: gunicorn forwards USR1 to its workers). Every thread's stack goes to the log (faulthandler, `Thread 0x... (most recent call first)`), and the server keeps running. While a thread is still free: `curl -H "X-Upload-Token: $CACHE_UPLOAD_TOKEN" https://offshore-sst-map.onrender.com/api/debug/threads` lists the requests running and their ages, each upstream's calls in flight and breaker state, NOAA reader slots, week locks, recent failures and every thread's stack (403 if the token isn't set, 401 if wrong).
 - **What the log shows by itself now**: "Slow request: GET /... running for 61s; its stack: ..." for any request over `SLOW_REQUEST_S` (60 s; the watchdog checks every 10 s); "All 16 request threads busy for over 60s; every thread's stack follows" plus a full faulthandler dump (at most every 10 minutes); "NOAA ERDDAP (coastwatch.pfeg.noaa.gov) is failing (...): not asking it for 60s" / "... answers again"; "Global Fishing Watch is failing ..."; "GFW generate-png failed: ..." and "GFW tile ... not fetched: ..." (once a minute per kind).
-- **gunicorn >= 24's gthread worker** hands each accepted connection straight to a pool thread, which blocks reading the request with no timeout (23.0.0 waited in its poller until the socket was readable): 16 connections that connect and send nothing freeze every route, silently (reproduced on 25.1.0; 23.0.0 answers in 6 ms). Render's proxy sends the request with the connection, so this isn't known to have happened, but `requirements.txt` says `gunicorn>=21.2.0`: production runs whatever pip resolved at the build ("Starting gunicorn X" at boot). The load test passes on 25.1.0 and 26.2.0.
+- **gunicorn >= 24's gthread worker** hands each accepted connection straight to a pool thread, which waits for the request on it (24 and 25 with no timeout; 26 for 5 s, then it goes back to the poller). 23.0.0 waits in its poller until the socket is readable. So 16 connections that connect and send nothing freeze every route on 24 and 25, silently, and stall it about 5 s on 26 (23.0.0 answers in 0.01 s). **Pinned to `gunicorn==23.0.0`** since the relaunch (it used to be `>=21.2.0`, so production ran whatever pip resolved: 26.2.0 in Oct 2026). `tools/load_sst_outage.py` checks it (16 idle connections, then a request within 2 s): 23.0.0 passes every scenario; check "Starting gunicorn 23.0.0" at boot.
 
 ### NOAA Blocks Render's Datacenter IP — Data Must Be Fetched Off-Render
 *(Lifted as of 2026-10-10 — see Architecture → SST Data Sourcing. Kept for the diagnosis technique and in case it returns.)*
@@ -335,7 +338,7 @@ Full write-up: `docs/incident-2026-10-16.md`. About 10 minutes after SST sprint 
 - **The currents are locked to the tide cycle in the passes, so a typical cycle works there**: 2026 NOAA predictions put The Race's slack 2h38 after Montauk HW (80% within about ±20 min) and its strength varies ~±20% with the range; that's why the default view is a tide-stage atlas, not a forecast. It fails on the ocean side south of Montauk (wind and shelf currents dominate) — hazed on the map.
 
 ### Dash + Custom JS Gotchas (/currents)
-- **Leaflet is a global (`window.L`) loaded by dash-leaflet before `/assets/*.js`**, but `window.dash_clientside` is created *after* assets — look it up lazily. Grab a dash-leaflet map with `L.Map.addInitHook` (match `getContainer().id`); dash-leaflet's `eventHandlers.load` misses the initial load. react-leaflet calls `map.remove()` on page swap, which fires `unload` — clean up there.
+- **Leaflet is a global (`window.L`) loaded by dash-leaflet before `/assets/*.js`**, but `window.dash_clientside` is created *after* assets: look it up lazily. Grab a dash-leaflet map with `L.Map.addInitHook` (match `getContainer().id`); dash-leaflet's `eventHandlers.load` misses the initial load. react-leaflet calls `map.remove()` on page swap, which fires `unload`: clean up there. assets/sst.js doesn't rely on the order (relaunch): it defines `window.SST` at once, installs its hooks when `window.L` appears and adopts an earlier map at its next event (a pan, zoom or tap; a bare mouse move doesn't fire a map event unless something listens for it).
 - **Plotly isn't on the page until a `dcc.Graph` mounts** (lazy-loaded). /currents mounts a hidden 1-px `dcc.Graph` (`responsive=False`) just to load it, then draws its own chart with `Plotly.react` into a plain div.
 - **Don't drive a `dcc.Graph` at animation rate**: it pushes `relayoutData` back into Dash on every relayout. The time cursor is an absolutely-positioned div placed from the known axis range.
 - **Never use the class name `row` in custom HTML**: Bootstrap's `.row` (negative margins + flex-wrap) clipped and wrapped the map clock. Prefix custom classes (`cur-row`).
@@ -369,6 +372,7 @@ Full write-up: `docs/incident-2026-10-16.md`. About 10 minutes after SST sprint 
 - **Server must be restarted for code changes to take effect.** Committing and pushing is not enough — the running Dash dev server serves from memory. Preview server must be stopped and restarted.
 - **Dash 4 CSS class names differ from older versions.** Date picker uses `.dash-datepicker-input` (not `.DateInput_input`). Dropdown uses `.dash-dropdown-value`, `.dash-options-list-option-text` (not `.Select-value-label`). Calendar uses `.dash-datepicker-calendar`. Always inspect the actual DOM to find the right selectors — don't guess from docs for older versions.
 - **Dark sidebar + white inputs require aggressive CSS overrides.** Dash components inherit text color from their parent. When the sidebar has light text, every input/dropdown/calendar inside it also gets light text. Must use `!important` on the specific Dash 4 class names for each component.
+- **Dash 4.0 finishes its setup on the first request, and that races** (found Oct 16, 2026): `Dash._setup_server` (a `before_request` hook) walks `assets/` and builds the script and stylesheet lists, but sets its "done" flag *before* doing so, with no lock. After a boot the first page loads arrive together (gunicorn's listening socket queues them while the worker imports app.py), and the threads that skipped the half-done setup sent pages with **no `/assets` at all**: no sst.js (`window.SST` missing: map taps and the GFW retry dead), no labs.js, currents.js or gotone.css. 8 of 32 cold-boot /sst loads, 4 at once. Fix: `app._finish_dash_setup()` runs `_setup_server()` once at import, after every callback is registered. Check with `node tools/boot_sst_pages.mjs`. If a Dash upgrade drops `_setup_server`, the app logs a warning at boot.
 - **Initial overlay must be set by a server callback, not clientside.** Clientside callbacks that depend on `dcc.Store` data from background or long-running callbacks can fire before the store data is fully propagated. Use `render_static_layers` (server callback) to set the initial overlay, and clientside callbacks only for frame changes.
 
 ### Mobile Responsive Layout
@@ -434,7 +438,7 @@ Full write-up: `docs/incident-2026-10-16.md`. About 10 minutes after SST sprint 
 - **Endpoint**: `GET /api/precache` triggers background fetching of historical SST data for tuna season dates (Jun–Nov, weekly intervals, 2020–2025).
 - **Status**: `GET /api/precache/status` returns JSON with `running`, `done`, `total`, `errors`, `cache_dir`, `cached_files`.
 - **Raw-only mode**: Pre-cache uses `_precache_single_date()` which skips PNG rendering entirely. Processes each day individually (serialize → free → next), uses running percentiles instead of `np.concatenate`. Peak memory ~30-35 MB per iteration (down from 65-70 MB with `_build_payload`).
-- **On-the-fly PNG rendering**: When a user loads a raw-only cache entry (`frames: None`), `_build_payload_from_disk_cache()` renders PNGs on-the-fly (~2-3s). A background thread then upgrades the cache entry with PNGs so subsequent loads are instant.
+- **On-the-fly PNG rendering**: When a user loads a raw-only cache entry (`frames: None`), or one whose frames aren't the current `frame_format` (saved before Oct 16, 2026; see ImageOverlay Is Stretched in Web Mercator), `_build_payload_from_disk_cache()` renders PNGs on-the-fly (~0.4 s on this Mac). A background thread then upgrades the cache entry with PNGs so subsequent loads are instant.
 - **Per-date timeout**: 120s hard timeout via `_call_with_timeout` (a ThreadPoolExecutor shut down with `wait=False`). If ERDDAP hangs, the date is skipped and logged as an error instead of blocking the worker indefinitely. Before Oct 16, 2026 it was `with ThreadPoolExecutor(...)`, whose exit waits for the fetch, so the timeout never applied.
 - **Query params**: `start_year`, `end_year`, `months` (comma-sep), `interval` (days between dates, default 7), `delay` (seconds between fetches, default 45).
 - **Skips already-cached dates**: Checks disk cache before fetching. Safe to re-run after interruptions or worker restarts.
@@ -454,7 +458,7 @@ Full write-up: `docs/incident-2026-10-16.md`. About 10 minutes after SST sprint 
 - **`GFW_API_TOKEN` env var** must be set in Render Environment for fishing activity layer. Without it, the layer degrades gracefully (transparent tiles).
 - **Health check failures**: Caused by ERDDAP stalls blocking the single worker. The pre-cache 120s timeout and GFW tile `updateWhenZooming=False` mitigate this. If the worker restarts, persistent disk preserves cache files.
 - **Thread budget** (since the Oct 16 outage): at most 4 request threads wait on NOAA (`SST_NOAA_READERS`), at most 6 + 4 on GFW calls, each for a bounded time (NOAA one 22 s budget, GFW 3 s + 6 s), so a NOAA or GFW outage can't hold all 16 for long. Plus at most 4 tiles waiting up to 4 s for their range's generate-png (`GFW_STYLE_WAITERS`; the others get 503 "busy" and the page retries). Any request over 60 s is logged with its stack; `kill -USR1 <pid>` and `/api/debug/threads` show every thread (see Incident 2026-10-16).
-- **gunicorn version**: not pinned (`>=21.2.0`), so a deploy picks up whatever pip resolves; check "Starting gunicorn X" in the boot log. From 24.0 the gthread worker reads each new connection's request on a pool thread with no timeout (see Incident 2026-10-16). Run `tools/load_sst_outage.py` before moving to a new major version.
+- **gunicorn version: pinned to 23.0.0** (`requirements.txt`, since the Oct 16, 2026 relaunch; was `>=21.2.0`, which resolved to 26.2.0). From 24.0 the gthread worker waits for each new connection's request on a pool thread (24 and 25 with no timeout, 26 for 5 s), so 16 connections that send nothing hold every request thread; 23.0.0 waits in its poller (see Incident 2026-10-16). Everything passes on 23.0.0 with Python 3.12: the tests, `tools/load_sst_outage.py` (3 scenarios, now with an idle-connection check that 25.1.0 and 26.2.0 fail) and the smoke test. 23.0.0 has the gthread worker with `--threads` and the same flags as the start command; it has no `--control-socket` (25+ only). Check "Starting gunicorn 23.0.0" in the boot log after the deploy. Run the load test before moving off it.
 
 ### Custom Domain & Squarespace Integration
 - **Home: `labs.gotoneapp.com`** — CNAME `labs` in Squarespace DNS → `offshore-sst-map.onrender.com`, added as a custom domain in Render (SSL automatic). Tools are paths on it (`/sst`, `/currents`), not subdomains: one address to share, one DNS record and certificate, one counter, and the tools share browser storage.
@@ -496,6 +500,13 @@ If POI markers and tooltipPane have the same z-index, the markers render ON TOP 
 
 ### ImageOverlay Must Be Non-Interactive
 Set `interactive=False` on `dl.ImageOverlay` AND add `pointer-events: none !important` in CSS (`.leaflet-image-layer`). Otherwise the overlay swallows all mouse events, preventing clicks on POI markers underneath.
+
+### ImageOverlay Is Stretched in Web Mercator (the image's rows must be too)
+- Leaflet projects an ImageOverlay's corners and stretches the image linearly between them in Web Mercator. Until the relaunch each frame had one image row per grid row, evenly spaced in latitude, so the SST was drawn up to **5.36 km (2.9 nm) north of true at 41.3 N** (mean 3.6 km), while tap readouts (the raw arrays, nearest grid latitude) were right: the color under a tap could be a degree off its own reading. Found by the sprint 2 designer (depth contours on top made it obvious).
+- **Fix** (`map/overlay.mercator_rows`): before encoding, output row r is centred where Leaflet draws it and shows the grid row with the nearest centre to that latitude (nearest: exact raw values, land and the AOI mask; no row skipped), rows at most 0.005 deg (0.56 km) tall, so a cell edge lands within 0.28 km of true (max 0.274 km, mean 0.13 km; OISST too). A MUR frame is 1041 rows for 501 grid rows, about 27 KB (190 KB for a week, was 152 KB). Bounds and raw arrays are unchanged.
+- **Saved weeks**: frames carry `"frame_format": 2` (`map/overlay.FRAME_FORMAT`). An entry without it (saved before Oct 16, 2026) is redrawn from its own raw arrays when served (about 0.4 s, no NOAA call, so it works on Render) and rewritten in the background (`"write": "upgrade"`); its bounds are recomputed from the grid too (entries from before sprint 1 saved the first/last cell centres instead of the edges). Older code serves the redrawn frames correctly, so a rollback is safe. **Bump `FRAME_FORMAT` whenever the drawing changes** (palette, projection): every saved week then redraws itself on its next view.
+- Tests: `tools/test_sst_ui.py` (every image row shows the cell under it; the pixel under 600 random points is the readout's color; the old drawing fails 414 of them), `tools/test_sst_fetch.py` (an old entry is redrawn without NOAA and written back), `tools/smoke_sst.mjs` (in Chrome: the image on its bounds, the legend color under 10 taps vs their readings).
+- Sprint 2's client-side engine needs the same: a row lookup through the Mercator formula when it draws the canvas.
 
 ### Interaction Model — Unified Click System
 Every tap goes through one clientside callback (`SST.classify`, assets/sst.js) into one selection (`click-pos`: `{kind: "reading" | "poi" | "dump", lat, lng, name}`) or the measure state; `render_selection` draws both for the day on the map. One card at a time; a second tap on it closes it.
@@ -592,12 +603,16 @@ python app.py
 .venv/bin/python tools/test_sst_ui.py
 OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES .venv/bin/python tools/test_sst_fetch.py
 OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES .venv/bin/python tools/test_sst_hang.py
-# gunicorn exactly as production, with NOAA / GFW failing (tools/netsim), 2 x 50 concurrent requests (~2 min)
+# The venv must have the pinned gunicorn (23.0.0): .venv/bin/python -m pip install -r requirements.txt
+# gunicorn exactly as production, with NOAA / GFW failing (tools/netsim), 2 x 50 concurrent requests and 16 idle
+# connections per scenario (~3 min)
 OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES .venv/bin/python tools/load_sst_outage.py
+# 6 cold boots x 4 /sst pages at once (window.SST on every page), then sst.js's init paths (~2 min)
+node tools/boot_sst_pages.mjs              # --rounds 10 --pages 4 --port 8072 --cache-dir DIR (default ./cache)
 # by hand: the venv's `gunicorn` launcher has a stale shebang, so use `python -m gunicorn`
+# (gunicorn >= 25 also wants --control-socket /tmp/gunicorn.ctl, or it leaves gunicorn.ctl in the repo)
 OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES NETSIM="*.noaa.gov=v4drop" PYTHONPATH=tools/netsim LABS_STATS_DIR=$(mktemp -d) \
-  .venv/bin/python -m gunicorn app:server --bind 127.0.0.1:8071 --workers 1 --threads 16 --timeout 180 \
-  --control-socket /tmp/gunicorn.ctl
+  .venv/bin/python -m gunicorn app:server --bind 127.0.0.1:8071 --workers 1 --threads 16 --timeout 180
 OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES LABS_STATS_DIR=$(mktemp -d) \
   .venv/bin/python -c 'from app import app; app.run(debug=False, port=8062, threaded=True)' &
 node tools/smoke_sst.mjs --base http://127.0.0.1:8062      # --sizes phone --shots DIR
