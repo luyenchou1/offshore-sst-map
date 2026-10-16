@@ -4,7 +4,7 @@
 **GotOne Labs** (labs.gotoneapp.com): free, experimental tools for saltwater anglers from [gotoneapp.com](https://www.gotoneapp.com), one Dash 4.0 app. The home page has a tile per tool; the tools are the **Offshore SST** map (`/sst`) and **Currents** (`/currents`). The SST map shows daily sea-surface temperatures for the Cape May, NJ to Portland, ME offshore corridor. Users pick any 7-day date window (back to June 2002) and animate through the week's SST evolution to spot fishing-relevant trends (warm eddies, cold upwelling, thermoclines).
 
 ## Tech Stack
-- **Current version**: v1.0 (displayed in sidebar UI; next release: v1.01)
+- **Current version**: v1.0 (shown at the bottom of the SST "How it works" panel, `layout/sstabout.VERSION`; next release: v1.01)
 - **Dash 4.0** + **dash-leaflet** + **dash-bootstrap-components** (Flatly theme + GotOne CSS overrides)
 - **Basemap**: Esri World Light Gray Canvas — keyless raster tiles, `{z}/{y}/{x}` scheme. Replaced CARTO Positron (`basemaps.cartocdn.com/light_all`), which began requiring an API key and served "API KEY REQUIRED" watermarks. Defined in `layout/mapview.py` (SST map) and `layout/catchview.py` (catch map). `/currents` uses the dark counterpart (`World_Dark_Gray_Base` + `World_Dark_Gray_Reference` labels), also keyless.
 - **Pages** (one Dash app; hand-written router `route_page` in `app.py`): `/` GotOne Labs home (tiles; `layout/labsview.py`) · `/sst` SST map · `/currents` tidal currents — Today / Tide cycle / Example weeks, plus estimated currents in six harbor inlets · `/catches` catch map (gated by `CATCHES_ACCESS_KEY`, no public link). Both tools link back with "← GotOne Labs". **On the old host `sst.gotoneapp.com`, `/` is still the SST map** (the Squarespace embed points there) and the Labs home is `/labs`; set `LABS_HOST` to redirect it (see Custom Domain).
@@ -194,16 +194,24 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 | `map/overlay.py` | Array → RGBA → base64 PNG |
 | `map/colorscale.py` | Legend component, adaptive color bounds |
 | `map/pois.py` | 32 fishing spots + The Dump rectangle, multi-select picker |
-| `map/measure.py` | Haversine distance, initial bearing, compass direction |
+| `map/measure.py` | Haversine distance, initial bearing, compass direction, magnetic variation (bilinear lookup in `map/declination.py`) and the true + magnetic course |
+| `map/declination.py` | Generated WMM-2025 declination grid over the SST area (0.5°, with yearly change); `tools/build_declination.py` rebuilds it from a WMM.COF |
+| `map/readout.py` | The tapped-point / spot card (with the week's temperatures at that point) and the measure panel, built for the day on the map |
 | `config.json` | AOI polygon, ERDDAP servers, search terms |
 | `assets/gotone.css` | GotOne brand CSS overrides (colors, dark sidebar, inputs, mobile responsive) |
-| `assets/tooltips.css` | Tooltip card styles + mobile wrapping |
+| `assets/tooltips.css` | Tooltip card styles (`.leaflet-tooltip.<class>`: Leaflet puts the class on the tooltip itself) |
+| `assets/sst.js` | /sst page helpers (`window.SST`): tap routing in screen pixels (`classify`), the status strip and playbar date (`status`), weekday slider marks, failed-load notice, first view + remembered view. Not the data engine (readouts are still server-side) |
+| `assets/sst.css` | /sst styles, scoped to `.sst-page`: flex page, status strip, legend, playbar, measure hint, drawer below 1200 px and on touch, 44 px targets |
+| `layout/sstabout.py` | The SST "How it works" modal (`sst-about`), sharing Currents' modal styles; facts checked Oct 16, 2026 |
 | `assets/gotone-logo.png` | White fish logotype on transparent background |
 | `data/currents.py` | Currents data dir, GOCUR1 frame format (pack / parse / validate), filename allow-list, manifest reader |
 | `data/currents_weeks.json` | Curated hindcast weeks (+ lesson text) and featured NOAA stations for /currents |
 | `tools/build_currents.py` | Off-Render builder for the example weeks: NECOFS → gridded frames + NOAA predictions → upload |
 | `tools/build_tide_atlas.py` | Off-Render builder for the tide-stage atlas behind Today / Tide cycle (see Architecture → Currents Page) |
 | `tools/build_inlets.py` | Builder for the harbor-inlet estimates (DEM hypsometry, inlet survey, outside-tide offsets, report, Lake Montauk check, selftest) → `data/inlets.json` |
+| `tools/smoke_sst.mjs` | Headless smoke test of /sst at 1440x900, 390x664 and 820x1180 against a local server (run before pushing; see Running Locally) |
+| `tools/test_sst_ui.py` | Checks of the SST readout / legend / measure / declination helpers (no server) |
+| `tools/build_declination.py` | WMM-2025 synthesis → `map/declination.py`; `--check` compares with NOAA's calculator |
 | `data/inlets.json` | Harbor-inlet model inputs (committed; read by `data/currents.read_inlets()`, run in the browser) |
 | `layout/currentsview.py` | /currents layout: view switch, date / strength / week panels, controls, dark map, chart, "How it works" modal (accuracy text) |
 | `assets/currents.js` | /currents engine: view timelines, atlas math (mirrors build_tide_atlas.py), harbor-inlet model (mirrors build_inlets.py), particles, haze, stations, chart, cursor, badge, live NOAA fetch |
@@ -223,13 +231,17 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 2. **fetch_sst_data** — Synchronous: fetches 7 days (or reads disk cache), processes, pre-renders PNGs, stores raw data server-side (memory-first, then background disk write). `lock-scale` is an **Input** (not State) so toggling triggers re-fetch. Also auto-closes mobile drawer.
 3. **render_static_layers** — Sets initial overlay PNG + bounds, POIs, legend, hides loading overlay. Fires on POI picker changes.
 4. **clientside: swap overlay** — Swaps overlay PNG by frame index (sst-store as State, not Input)
-5. **clientside: play/pause** — Toggles dcc.Interval
+5. **clientside: play/pause** — Toggles dcc.Interval, from the sidebar's Play or the floating playbar's (`sst-pb-play`); returns both labels
 6. **clientside: auto-advance** — Increments frame slider on interval tick (wraps 6→0)
-7. **clientside: step frame** — Step forward/back buttons
-8. **clientside: day indicator** — Shows "Mar 15, 2026 (Day 3 of 7)" from `dates[]` array
-9. **handle_map_click** — Routes clicks: POI info (reads server-side cache), SST reading (sets click-pos), or measure tool
-10. **render_click_marker** — Shows temp reading at clicked position (reads server-side cache)
-11. **toggle_measure** — Activates/deactivates measure mode
+7. **clientside: step frame** — Step forward/back buttons (sidebar or playbar `sst-pb-back` / `sst-pb-fwd`)
+8. **clientside: day indicator** — Shows "Mon, Oct 12, 2026 · day 7 of 7" from `dates[]` (partial weeks: "day 3 of 5")
+8b. **clientside: sst-key** — copies the week's `data_key`, `dates`, `meta` (no frames) from `sst-store` into `sst-key`. Server callbacks that only need those take `sst-key`: Dash uploads every Input/State with the request, and the old click callbacks uploaded the whole week's PNGs (~180 KB) on every tap and day change
+8c. **clientside: status strip** — `SST.status(sst-key, frame)` fills `#sst-status-line` and the playbar date (and shows the playbar once a week is loaded); weekday slider marks from `SST.marks` (`frame-slider.marks`, allow_duplicate over the load callback's day-of-month marks); a load failure (an Alert in `fetch-status`) goes to `SST.fetchError`
+9. **clientside: classify taps** (`sst-map.clickData` → `click-pos` or `measure-state`) — `SST.classify` in assets/sst.js: a spot's circle within ~16 px (finger) / 9 px (mouse) opens its card, anywhere else reads the water (inside The Dump: that point, named), a second tap on the open card closes it, measure mode places A then B (snapping to a circle). Replaces the server `handle_map_click`, saving a round trip per tap
+10. **render_selection** — draws `click-pos` (`click-marker` group) and the measurement (`measure-layer` group, A/B/line/label in a fixed order) for the day on the map, plus the measure panel; fires on a tap, a measure change, a new week (`sst-key`) or a day change, so readings, spot cards and measurements survive day changes and show each day's value (the card has the week's 7 values at that point). Reads raw arrays via `_get_raw_data`. Two layer groups because react-leaflet reuses layers by position and a Tooltip's `className` is fixed at creation
+11. **toggle_measure** — Measure / Cancel / Measure again / Clear / the on-map hint's Cancel → `measure-state`; starting clears the open card and closes the drawer. A clientside callback sets the button label, the Clear button and the on-map hint (`sst-map-hint`) from `measure-state`
+11b. **clientside: How it works (SST)** — like Currents: `sst-about` opens once per browser (`gotone-sst-intro-v1` localStorage flag) and from the header / sidebar links; only a click counts (`how_it_works`)
+11c. **clientside: fishing-activity note** — shows `#sst-gfw-note` under the legend while "Fishing activity" is ticked
 12. **update_poi_count** — Shows "All" or "n/total" count next to "Spots" label
 13. **toggle_layers** — Shows/hides NOAA ENC, GEBCO, and GFW fishing activity layers based on sidebar checklist
 14. **update_sst_opacity** — Adjusts SST overlay opacity from sidebar slider
@@ -237,7 +249,7 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 16. **clientside: POI collapse toggle** — Expands/collapses POI checklist, flips chevron (▾/▴)
 17. **poi_select_all** — Server callback for Select all / Deselect all links in POI checklist
 18. **route_page** — Router: `/catches` (gated), `/currents`, `/sst`, `/labs`; `/` and unknown paths = Labs home (on the old `sst.` host: the SST map). A clientside callback on the same `url.pathname` calls `GotOneLabs.page()` (assets/labs.js): tab title + anonymous count (output `page-sink`). `update_title=None`, so Dash doesn't flash "Updating..." over those titles.
-18b. **clientside: SST feature use**: one callback (output `sst-events-sink`, `prevent_initial_call`) on Fetch, play state, step buttons, `click-pos` (readout), `click-marker` children (a POI pick carries `pathOptions.className = "sst-poi-pick"`), `measure-state` (done), spot list, layers, lock scale, opacity → `GotOneLabs.event(..., {tool: "sst"})`. The day slider is wrapped in a `data-labs-event="step"` div (labs.js counts pointer/keyboard use). Dash 4 gives clientside callbacks an empty `callback_context.triggered` on initial calls, which is how both pages tell a user's change from a new page's defaults.
+18b. **clientside: SST feature use**: one callback (output `sst-events-sink`, `prevent_initial_call`) on Load week, play state, step buttons (sidebar and playbar), `click-pos` (`kind: "poi"` → poi, otherwise readout), `measure-state` (done), spot list, layers, lock scale, opacity → `GotOneLabs.event(..., {tool: "sst"})`. The day slider is wrapped in a `data-labs-event="step"` div (labs.js counts pointer/keyboard use). Dash 4 gives clientside callbacks an empty `callback_context.triggered` on initial calls, which is how both pages tell a user's change from a new page's defaults.
 19. **Currents (clientside only)** — week / depth / rate / station / options / strength / date forward to `window.Currents.*` (each writes `''` to a `currents-sink-*` div; initial calls hand the engine its defaults; setters only record state and one coalesced apply() loads data once the map exists); the view switch (`currents-mode`) also returns the three panels' `style`; "Now" calls `goNow()` and returns today (ET) to the date picker; the `currents-inlets` store (data/inlets.json) goes to `setInlets()`; "How it works" opens the modal (auto-opens once per browser via a localStorage flag); play/pause toggles and returns the button label; step ±1 h; lesson text comes from the `currents-weeks` store. All per-frame work is in `assets/currents.js`, which pushes back into Dash only via `dash_clientside.set_props` (station click → dropdown, auto-play → button label). Feature use: the forwarders and the view switch call `Currents.noteUse(ctrl, value)` only when `triggered` is non-empty (a real change); `track()` in currents.js covers play, step, scrub, Now, full screen and map station clicks; the "How it works" callback counts only a click (not the first-visit auto-open).
 
 ## Critical Lessons Learned
@@ -336,7 +348,9 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 - **Hamburger button**: Positioned `top: 10px; right: 10px; z-index: 1100` on the map (above Leaflet zoom controls at z-index 1000).
 - **/currents keeps the map clear**: the map's time / tide stage / spot current / Montauk tide live in `#currents-status-line`, a strip between the map and the chart (`updateClock()` in currents.js), not a Leaflet control — the old top-left box covered a third of an iPhone's map (beta feedback). Fixed height (one line ≥ 992 px wide, two below) so changing text never resizes the map, which would reseed the particles; each line ellipsizes, and line 2 puts the spot's current before the tide so a long spot name trims the tide, not the current. Skip no-op `innerHTML` writes (it updates ~5×/s).
 - **/currents on tablets**: the drawer also applies under `(max-width: 1199.98px), (hover: none) and (pointer: coarse)` (any touch screen — iPad landscape is 1133–1376 px wide — plus narrow windows), scoped to `.currents-page` so the SST page is untouched. The playback controls float on the map (`.currents-playbar`, created by currents.js) because the sidebar is hidden while you watch, and picking a view / date / week / strength / spot closes the drawer (clientside callback with `allow_duplicate` outputs). gotone.css hides `.sidebar-backdrop` with `!important` above phone width, which beats the toggle callback's inline style, so the backdrop is shown with `.currents-page:has(.gotone-sidebar.drawer-open)`.
-- **/currents is a flex column exactly as tall as the visible viewport** (`.currents-page { height: 100dvh }`, header `flex: none`, content `flex: 1; min-height: 0`, columns `height: 100%`). The old `calc(100vh - 72px)` was wrong twice: the header is 80 px (56 px logo + padding), so the page overflowed by 8 px even on desktop, and iPad/iPhone Safari's `100vh` includes the area under the toolbars, which pushed the tide chart off-screen. The SST page still has the 72 px assumption.
+- **/currents is a flex column exactly as tall as the visible viewport** (`.currents-page { height: 100dvh }`, header `flex: none`, content `flex: 1; min-height: 0`, columns `height: 100%`). The old `calc(100vh - 72px)` was wrong twice: the header is 80 px (56 px logo + padding), so the page overflowed by 8 px even on desktop, and iPad/iPhone Safari's `100vh` includes the area under the toolbars, which pushed the tide chart off-screen. The SST page does the same since Oct 2026 (`.sst-page` in assets/sst.css, plus `.row { margin: 0 }`: Bootstrap's negative margins put the sidebar at x = -12 and the map 12 px past the right edge).
+- **/sst on phones and tablets** (Oct 2026): the drawer applies under the same `(max-width: 1199.98px), (hover: none) and (pointer: coarse)` query, scoped to `.sst-page`; at 820 px the old 2-column sidebar was 141 px. The day controls float on the map (`#sst-playbar`, Dash buttons with Currents' `.currents-playbar` look, shown in drawer mode by currents.css) with the date beside them; the status strip under the map always shows the day, so a screenshot carries its date. The legend moves to the top centre on phones (compact), clear of the playbar and attribution. Touch targets are 44 px (checkbox rows with the whole label tappable, buttons, zoom, close), slider thumbs 28 px. Measure closes the drawer and puts its instructions (with a Cancel) on the map. First view: the whole area when it fits at zoom 7, else the fishing grounds at zoom 7 (whole zoom levels only: fractional zooms showed seams between basemap tiles); then the reader's last view (`gotone-sst-view-v1`).
+- **/sst status strip** (`#sst-status-line`, filled by `SST.status`): line 1 the day on the map, "day n of m", missing days, "preliminary"; line 2 the source (`meta.source_label`), "updated N hours ago" (`meta.built_at`), "newest available Oct 15" (`meta.latest_available`, green when newer than the week shown), the closest saved week / saved copy (`meta.week_match`), "full week due" (`meta.queued`), and a failed load first. Every meta field may be missing (old cache entries): it falls back to dataset_id / res_km, its own preliminary rule (under 4 days old when fetched) and requested vs served end. Fixed height, one line ≥ 992 px, two below; phones get short forms in priority order.
 - **Full screen (/currents)**: a map button calls `requestFullscreen` (or `webkitRequestFullscreen`) on the whole page; `html.currents-fs` shrinks the header to a 44 px branded bar (logo, title, "How it works"; no subtitle or SST link). In iPadOS full screen the **status bar (time, battery) stays drawn over the top of the page** and Safari adds its own **exit "X" (~56 pt square, ~20 pt in, ~32 pt down)** that a page can't hide — measured from an iPad screenshot. So on touch screens the bar is `max(24px, env(safe-area-inset-top))` of status-bar strip + a 60 px row, with 92 px left padding: the X lands in the bar instead of on the map's zoom buttons, and the status text sits on navy instead of the logo. iPadOS Safari supports it, iPhone Safari doesn't for non-video elements (no button there), and inside an iframe without `allow="fullscreen"` (the Squarespace embed) the button opens the page in a new tab instead. The Claude preview pane refuses fullscreen requests — test the class/layout by faking `document.fullscreenElement` and dispatching `fullscreenchange`.
 
 ### Radix / Dash 4 Calendar Stacking Context Gotchas
@@ -428,7 +442,7 @@ Map layer panes and their z-index values matter enormously:
 - **sst-pane**: 410 (custom — SST ImageOverlay, opacity controlled by sidebar slider)
 - **gfw-pane**: 420 (custom — GFW fishing activity tiles, above SST for visibility)
 - **poi-pane**: 450 (custom — above SST, below tooltips)
-- **click-pane**: 500 (custom — above POIs, below tooltips)
+- **click-pane**: 500 (custom — above POIs, below tooltips; holds `measure-layer` and `click-marker`)
 - **tooltipPane**: 650 (Leaflet default — tooltips render here)
 - **popupPane**: 700 (Leaflet default — POI click popups render here)
 - **Loading overlay**: 1000 (HTML div above everything)
@@ -443,19 +457,19 @@ If POI markers and tooltipPane have the same z-index, the markers render ON TOP 
 Set `interactive=False` on `dl.ImageOverlay` AND add `pointer-events: none !important` in CSS (`.leaflet-image-layer`). Otherwise the overlay swallows all mouse events, preventing clicks on POI markers underneath.
 
 ### Interaction Model — Unified Click System
-All clicks route through a single `handle_map_click` callback. Only one tooltip visible at a time.
-- **Click near a POI** (~0.08° threshold via `find_nearest_poi()`) → shows POI info (name, temp, coords) in the click-marker layer with slate-blue left border accent
-- **Click empty map** → shows SST reading (temp + coords) with red circle marker
-- **Measure mode** → two-click distance/bearing tool. If clicked near a POI, snaps to POI coordinates and shows POI name in the A/B labels
-- POI markers are **visual-only** (`bubblingMouseEvents=True`, no Popup/Tooltip children). All info display is callback-driven through the click-marker layer
-- This unified model works identically on mobile (tap = click)
+Every tap goes through one clientside callback (`SST.classify`, assets/sst.js) into one selection (`click-pos`: `{kind: "reading" | "poi" | "dump", lat, lng, name}`) or the measure state; `render_selection` draws both for the day on the map. One card at a time; a second tap on it closes it.
+- **A spot's circle** (hit-tested in screen pixels, ~16 px for a finger, 9 px for a mouse, so the target is the same at every zoom) → its card: name, temperature, date, position, the week's 7 values there. The old fixed 0.08° radius was 7 px at zoom 7 but 58 px at zoom 10, and hid the water around every spot.
+- **Anywhere else**, including next to a spot → the temperature where you tapped. **Inside The Dump** → that point's temperature, named "The Dump" (it used to jump to the box's centre).
+- **Measure mode** → A then B, snapping to a spot's circle (not to The Dump's centre).
+- POI markers are **visual-only** (`bubblingMouseEvents=True`, no Popup/Tooltip children); the spot list (`sst-pois` store, `map/pois.pois_payload()`) feeds the hit test.
+- Readings show whole degrees ("71 °F": the data is rounded to whole °F at ingest; tenths print once the data has them). Out-of-grid taps read "No data here", not the edge pixel.
+- Two quick taps are Leaflet's double-tap zoom: closing a card needs a separate tap.
 
 ### Measure Tool
-- Toggle via "Measure" button in sidebar
-- Click point A, click point B → dashed indigo line with distance label at midpoint
-- Shows: nautical miles, statute miles, bearing, compass direction (e.g. "42.3 nm (48.7 mi) • 225° SW")
-- Snaps to POI coordinates when clicking near a fishing spot
-- Math in `map/measure.py`: haversine distance + initial bearing formula
+- "Measure" in the sidebar (Cancel while placing points, then "Measure again" and "Clear"); on phones the instructions and a Cancel are on the map
+- Tap A, tap B → dashed brand-blue line, A/B labels, and "88.4 nm · 187° true · 201° magnetic" at the midpoint; the sidebar panel adds statute miles, the compass point and each end's temperature on the day shown. The line survives day changes; a tap after it's done reads the water
+- **Magnetic**: true minus the declination at A, from the WMM-2025 grid in `map/declination.py` (bilinear, moved along its yearly change; 11.9° W off Cape May to 14.7° W at Cashes Ledge in 2026). `tools/build_declination.py --check` reproduces NOAA's calculator (Hudson Canyon 13.09 vs 13.1 W, Stellwagen 14.17 vs 14.2 W). Rebuild the grid when WMM-2030 comes out
+- Math in `map/measure.py`: haversine distance, initial bearing, `magnetic_variation()`
 
 ### Performance Notes
 - **dcc.Store payload**: ~2.5 MB (7 base64 PNGs at 1x native resolution + dates + metadata). Raw arrays stored server-side.
@@ -533,6 +547,12 @@ python app.py
 .venv/bin/python tools/build_tide_atlas.py --start 2016-08-01 --end 2016-08-15 --force  # quick dev atlas
 .venv/bin/python tools/build_inlets.py      # → data/inlets.json (commit it; ships with the code)
 # → http://localhost:8050/currents
+
+# SST checks before a push (Render deploys main): helpers, then the page at three sizes
+.venv/bin/python tools/test_sst_ui.py
+OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES LABS_STATS_DIR=$(mktemp -d) \
+  .venv/bin/python -c 'from app import app; app.run(debug=False, port=8062, threaded=True)' &
+node tools/smoke_sst.mjs --base http://127.0.0.1:8062      # --sizes phone --shots DIR
 # Production: dispatch the workflow (uses the GitHub secret; no local token needed)
 gh workflow run build-currents.yml -f source=hindcast -f weeks=all
 gh workflow run build-currents.yml -f source=atlas -f publish=false   # build + artifact only
