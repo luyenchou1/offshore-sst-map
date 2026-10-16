@@ -43,11 +43,14 @@ for counting; bots ignored; only our origins accepted.
      play bar), `step` (stepped an hour back or forward), `speed` (changed the playback speed), `depth` (switched
      surface / depth-averaged), `fullscreen` (went full screen, or opened the page in a new tab from an embed)
    - sst (as wired in app.py's SST feature-use clientside callback, plus the day slider's `data-labs-event`):
-     `load` (pressed Fetch SST; the automatic first load isn't counted), `play` (played the week's animation),
-     `step` (moved to another day: step buttons or the day slider), `readout` (tapped the map for a temperature),
-     `poi` (tapped a fishing spot for its details), `measure` (measured a distance: both points placed), `spots`
-     (opened the spot list), `chart` (turned on the nautical chart), `bathymetry` (turned on bathymetry), `gfw`
-     (turned on fishing activity), `lock_scale` (locked the color scale), `opacity` (changed the SST opacity)
+     `load` (pressed Load week, formerly Fetch SST; the automatic first load isn't counted), `play` (played the
+     week's animation, sidebar or the map's play bar), `step` (moved to another day: step buttons, the map's play
+     bar or the day slider), `readout` (tapped the map for a temperature, including inside The Dump), `poi`
+     (tapped a fishing spot's circle for its details), `measure` (measured a distance: both points placed),
+     `spots` (opened the spot list), `chart` (turned on the nautical chart), `bathymetry` (turned on bathymetry),
+     `gfw` (turned on fishing activity), `lock_scale` (turned on "Same colors every week"), `opacity` (changed
+     Color strength, the SST opacity), `how_it_works` (opened the How it works panel from the header or the
+     sidebar; the automatic first-visit opening isn't counted)
 
 3. `POST https://labs.gotoneapp.com/api/feedback` (new) body
    `{"t": TOOL, "v": "up"|"down"|"", "n": NOTE, "w": HONEYPOT, "d": SECONDS_ON_PAGE}`

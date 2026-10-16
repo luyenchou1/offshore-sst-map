@@ -7,21 +7,26 @@ from dash import dcc, html
 
 from map.pois import get_all_poi_names, get_poi_options
 
+LOAD_LABEL = "Load week"     # the date box's button (fetch_sst_data resets it after a load)
+_WD = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+
+
+def day_marks(dates):
+    """Day-slider marks: weekday over day of the month ("Tu" / "6"), from the
+    week's ISO dates (assets/sst.css shows the two lines)."""
+    marks = {}
+    for i, d_str in enumerate(dates or []):
+        d = date.fromisoformat(d_str[:10])
+        marks[i] = f"{_WD[d.weekday()]}\n{d.day}"
+    return marks
+
 
 def _section_label(text, first=False):
-    """Muted uppercase section label for sidebar grouping."""
+    """Muted uppercase section label for sidebar grouping (assets/sst.css)."""
     return html.Div(
         text,
         className="sidebar-section-label",
-        style={
-            "fontSize": "0.65rem",
-            "fontWeight": "600",
-            "color": "#64748b",
-            "textTransform": "uppercase",
-            "letterSpacing": "0.08em",
-            "marginBottom": "0.5rem",
-            "marginTop": "0" if first else "0.5rem",
-        },
+        style={"marginTop": "0" if first else "0.5rem"},
     )
 
 
@@ -37,7 +42,7 @@ def _divider():
     )
 
 
-def build_sidebar():
+def build_sidebar(labs_href="/"):
     today = date.today()
     default_end = today - timedelta(days=4)  # MUR has ~2-day latency
 
@@ -66,7 +71,7 @@ def build_sidebar():
             # ── Sidebar header: non-scrolling, allows calendar overflow ──
             html.Div(
                 [
-                    _section_label("Data", first=True),
+                    _section_label("Week ending", first=True),
                     dcc.DatePickerSingle(
                         id="end-date-picker",
                         date=default_end,
@@ -76,7 +81,7 @@ def build_sidebar():
                         style={"width": "100%"},
                     ),
                     dbc.Button(
-                        "Fetch SST",
+                        LOAD_LABEL,
                         id="fetch-btn",
                         color="primary",
                         className="w-100 mt-2 fetch-btn-cta",
@@ -99,16 +104,10 @@ def build_sidebar():
                         style={"display": "none"},
                         children=[
                             _divider(),
-                            _section_label("Playback"),
+                            _section_label("Day on the map"),
                             html.Div(
                                 id="day-indicator",
-                                className="text-center",
-                                style={
-                                    "fontSize": "0.8rem",
-                                    "fontWeight": "600",
-                                    "color": "#e2e8f0",
-                                    "marginBottom": "0.25rem",
-                                },
+                                className="text-center sst-day-indicator",
                             ),
                             # Dragging the day slider counts as "step" (assets/labs.js)
                             html.Div(
@@ -119,6 +118,8 @@ def build_sidebar():
                                     step=1,
                                     value=6,
                                     marks=None,
+                                    allow_direct_input=False,
+                                    className="sst-day-slider",
                                 ),
                                 **{"data-labs-event": "step", "data-labs-tool": "sst"},
                             ),
@@ -127,6 +128,7 @@ def build_sidebar():
                                     dbc.Button(
                                         "\u25C0",
                                         id="step-back-btn",
+                                        title="Day before",
                                         outline=True,
                                         color="secondary",
                                         size="sm",
@@ -142,6 +144,7 @@ def build_sidebar():
                                     dbc.Button(
                                         "\u25B6",
                                         id="step-fwd-btn",
+                                        title="Next day",
                                         outline=True,
                                         color="secondary",
                                         size="sm",
@@ -169,14 +172,7 @@ def build_sidebar():
                         [
                             html.Div(
                                 [
-                                    html.Span(
-                                        "Spots",
-                                        style={
-                                            "fontSize": "0.8rem",
-                                            "fontWeight": "500",
-                                            "color": "#cbd5e1",
-                                        },
-                                    ),
+                                    html.Span("Spots", className="sst-spots-label"),
                                     html.Span(
                                         " \u00b7 ",
                                         style={"color": "#475569"},
@@ -220,55 +216,46 @@ def build_sidebar():
                         children=[
                             html.Div(
                                 [
-                                    html.Span(
-                                        "Select all",
-                                        id="poi-select-all",
-                                        style={
-                                            "fontSize": "0.7rem",
-                                            "color": "#0183fe",
-                                            "cursor": "pointer",
-                                            "textDecoration": "underline",
-                                        },
-                                    ),
-                                    html.Span(
-                                        " \u00b7 ",
-                                        style={"color": "#475569", "fontSize": "0.7rem"},
-                                    ),
-                                    html.Span(
-                                        "Deselect all",
-                                        id="poi-deselect-all",
-                                        style={
-                                            "fontSize": "0.7rem",
-                                            "color": "#0183fe",
-                                            "cursor": "pointer",
-                                            "textDecoration": "underline",
-                                        },
-                                    ),
+                                    html.Button("Show all", id="poi-select-all", className="sst-link-btn"),
+                                    html.Span(" \u00b7 ", className="sst-link-sep"),
+                                    html.Button("Hide all", id="poi-deselect-all", className="sst-link-btn"),
                                 ],
-                                className="mb-1",
+                                className="mb-1 sst-spot-links",
                             ),
                             dbc.Checklist(
                                 id="poi-picker",
                                 options=get_poi_options(),
                                 value=get_all_poi_names(),
-                                style={"fontSize": "0.75rem", "maxHeight": "200px", "overflowY": "auto"},
                                 className="poi-checklist",
                             ),
                         ],
                     ),
 
-                    dbc.Button(
-                        "Measure",
-                        id="measure-btn",
-                        outline=True,
-                        color="secondary",
-                        size="sm",
-                        className="w-100 mt-2",
+                    html.Div(
+                        [
+                            dbc.Button(
+                                "Measure",
+                                id="measure-btn",
+                                outline=True,
+                                color="secondary",
+                                size="sm",
+                                className="sst-measure-btn",
+                            ),
+                            dbc.Button(
+                                "Clear",
+                                id="measure-clear",
+                                outline=True,
+                                color="secondary",
+                                size="sm",
+                                className="sst-measure-clear",
+                                style={"display": "none"},
+                            ),
+                        ],
+                        className="sst-measure-row mt-2",
                     ),
                     html.Div(
                         id="measure-readout",
-                        className="mt-2",
-                        style={"fontSize": "0.75rem"},
+                        className="mt-2 measure-readout",
                     ),
 
                     _divider(),
@@ -283,26 +270,18 @@ def build_sidebar():
                             {"label": " Fishing activity", "value": "gfw"},
                         ],
                         value=[],
-                        style={"fontSize": "0.8rem"},
-                        className="mb-2",
+                        className="mb-2 sst-checks",
                     ),
 
                     dbc.Checklist(
                         id="lock-scale",
-                        options=[{"label": " Lock scale (30-90\u00b0F)", "value": "lock"}],
+                        options=[{"label": " Same colors every week (30 to 90\u00b0F)", "value": "lock"}],
                         value=[],
-                        style={"fontSize": "0.8rem"},
-                        className="mb-2",
+                        className="mb-2 sst-checks",
                     ),
                     html.Div(
                         [
-                            html.Span(
-                                "SST opacity",
-                                style={
-                                    "fontSize": "0.75rem",
-                                    "color": "#94a3b8",
-                                },
-                            ),
+                            html.Span("Color strength", className="sst-small-label"),
                             dcc.Slider(
                                 id="sst-opacity",
                                 min=0.1,
@@ -317,15 +296,16 @@ def build_sidebar():
                     ),
                     # "Was this helpful?" (filled by assets/labs.js; posts to /api/feedback)
                     html.Div(className="labs-helpful", **{"data-tool": "sst"}),
+                    # The version moved into How it works (layout/sstabout.py).
                     html.Div(
-                        "v1.0",
-                        style={
-                            "fontSize": "0.6rem",
-                            "color": "#475569",
-                            "textAlign": "right",
-                            "marginTop": "auto",
-                            "paddingTop": "0.75rem",
-                        },
+                        [
+                            html.Button("How it works", id="sst-about-open-2",
+                                        className="currents-link-btn"),
+                            dcc.Link("\u2190 GotOne Labs", href=labs_href,
+                                     refresh=labs_href.startswith("http"),
+                                     className="sst-sidebar-labs"),
+                        ],
+                        className="d-flex justify-content-between align-items-center sst-sidebar-foot",
                     ),
                 ],
                 className="sidebar-body",
@@ -336,9 +316,9 @@ def build_sidebar():
         id="sidebar-col",
         width=2,
         className="gotone-sidebar",
+        # Height comes from the page's flex layout (.sst-page in assets/sst.css).
         style={
             "padding": "1rem 1.25rem",
-            "height": "calc(100vh - 72px)",
             "position": "relative",
         },
     )
