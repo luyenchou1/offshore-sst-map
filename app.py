@@ -519,7 +519,18 @@ def precache_endpoint():
       delay      (int seconds between fetches, default 30)
 
     Returns status JSON. Hit again to check progress.
+
+    Locked like /api/cache/upload: the X-Upload-Token header must match CACHE_UPLOAD_TOKEN (403 when the token
+    isn't configured, 401 otherwise), so nobody can start an hours-long crawl from the open web.
     """
+    import hmac
+    token = os.environ.get("CACHE_UPLOAD_TOKEN")
+    if not token:
+        return (json.dumps({"error": "precache disabled (CACHE_UPLOAD_TOKEN not set)"}),
+                403, {"Content-Type": "application/json"})
+    supplied = request.headers.get("X-Upload-Token", "")
+    if not (supplied and hmac.compare_digest(supplied, token)):
+        return (json.dumps({"error": "unauthorized"}), 401, {"Content-Type": "application/json"})
     if _precache_status["running"]:
         return json.dumps(_precache_status), 200, {"Content-Type": "application/json"}
 
