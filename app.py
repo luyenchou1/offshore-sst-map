@@ -1641,6 +1641,9 @@ def _day_label(d):
 
 
 def _span(first, last):
+    """"Oct 9 to 15, 2026", "Sep 30 to Oct 6, 2026", "Dec 28, 2025 to Jan 3, 2026"."""
+    if first.year == last.year and first.month == last.month:
+        return f"{_day_label(first)} to {last.day}, {last.year}"
     if first.year == last.year:
         return f"{_day_label(first)} to {_day_label(last)}, {last.year}"
     return f"{_day_label(first)}, {first.year} to {_day_label(last)}, {last.year}"
@@ -1753,7 +1756,9 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, saved_clicks, end_date_str
             end_date = datetime.strptime(end_date_str[:10], "%Y-%m-%d").date()
         except ValueError:
             end_date = None
-    if end_date is None:
+    if end_date is None or (trig == "auto-fetch" and latest):
+        # The automatic first load is always the newest week, even if the page was built
+        # before the newest day was known (its date box then said two days back)
         end_date = latest or (date.today() - timedelta(days=2))
     locked = "lock" in (lock_scale or [])
 
@@ -2838,6 +2843,7 @@ def _prewarm_cache():
 
 if not os.environ.get("_SST_PREWARM_STARTED"):
     os.environ["_SST_PREWARM_STARTED"] = "1"
+    latest_mur_date(CFG, block=False)  # one small request in the background, so pages open on it
     threading.Thread(target=_prewarm_cache, daemon=True).start()
 
 
