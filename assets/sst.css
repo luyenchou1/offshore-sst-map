@@ -51,7 +51,7 @@
 .sst-st-sub, .sst-st-dot { color: #94a3b8; }
 .sst-st-prelim, .sst-st-warn { color: #fbbf24; }
 .sst-st-new { color: #4ade80; font-weight: 600; }
-.sst-st-src .src-short { display: none; }
+.sst-status-line .st-short { display: none; }
 @media (min-width: 992px) and (min-height: 501px) {
     .sst-status-line { height: 1.9rem; display: flex; align-items: center; }
     .sst-st-l1 { flex: 0 0 auto; }
@@ -60,8 +60,8 @@
 }
 @media (max-width: 767.98px), (max-height: 500px) {
     .sst-status-line { font-size: 0.74rem; height: 2.6rem; padding: 0.25rem 0.6rem; line-height: 1.05rem; }
-    .sst-st-src .src-long { display: none; }
-    .sst-st-src .src-short { display: inline; }
+    .sst-status-line .st-long { display: none; }
+    .sst-status-line .st-short { display: inline; }
 }
 
 /* ---- Legend (map/colorscale.py): dark translucent card like Currents' ---- */
@@ -264,6 +264,7 @@
     .sst-page .gotone-sidebar .playback-btn { width: 44px !important; height: 44px !important; }
     .sst-page .gotone-sidebar .playback-btn-main { width: 64px !important; }
     .sst-page #poi-collapse-toggle { min-height: 44px; }
+    .sst-page .poi-checklist { max-height: none; overflow-y: visible; }   /* the drawer scrolls */
     .sst-page .sst-link-btn,
     .sst-page .currents-link-btn,
     .sst-page .sst-sidebar-labs {
@@ -284,6 +285,8 @@
     .sst-page .sidebar-section-label { font-size: 0.75rem; }
     .sst-page .dash-slider-thumb { width: 28px; height: 28px; }
     .sst-page .dash-slider-root { --radix-slider-thumb-width: 28px; }
+    .sst-day-slider .dash-slider-root.has-marks { padding-top: 10px; padding-bottom: 42px; }
+    .sst-day-slider .dash-slider-mark { font-size: 0.75rem; }
     .sst-page .leaflet-touch .leaflet-bar a { width: 44px; height: 44px; line-height: 44px; font-size: 22px; }
     .sst-page .currents-header-links .header-nav-link { display: inline-flex; align-items: center; min-height: 44px; }
     .sst-hint-cancel { min-height: 36px; }

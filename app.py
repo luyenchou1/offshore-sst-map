@@ -1206,6 +1206,7 @@ def build_sst_page():
                 html.Div(id="fetch-spinner-target", style={"display": "none"}),
                 html.Div(id="sst-events-sink", style={"display": "none"}),
                 html.Div(id="sst-status-sink", style={"display": "none"}),
+                html.Div(id="sst-fetch-sink", style={"display": "none"}),
                 build_about_modal(),
                 # Auto-fetch SST on page load (fires once after 500ms)
                 dcc.Interval(id="auto-fetch", interval=500, max_intervals=1),
@@ -1818,6 +1819,26 @@ app.clientside_callback(
 )
 
 
+# A failed load (fetch_sst_data's red Alert in the sidebar) also goes to the strip, since
+# phones close the drawer and would never see it. Display only: reads fetch-status.
+app.clientside_callback(
+    """
+    function(children) {
+        if (!window.SST) { return ""; }
+        var c = Array.isArray(children) ? children[0] : children;
+        var p = (c && c.props) || {};
+        var bad = c && (c.type === "Alert" || p.color === "danger");
+        var text = bad ? (typeof p.children === "string" ? p.children : "see the menu for details") : null;
+        window.SST.fetchError(text);
+        return "";
+    }
+    """,
+    Output("sst-fetch-sink", "children"),
+    Input("fetch-status", "children"),
+    prevent_initial_call=True,
+)
+
+
 # ---- Callback 3a: Route map taps, in the browser (assets/sst.js SST.classify) ----
 # A spot's circle (hit-tested in screen pixels: ~16 px for a finger, 9 px for a
 # mouse) opens its card; anywhere else, including next to a spot or inside The
@@ -2055,7 +2076,9 @@ app.clientside_callback(
             else if (id === "anim-interval.disabled") { if (v === false) { ev("play"); } }
             else if (id === "step-back-btn.n_clicks" || id === "step-fwd-btn.n_clicks" ||
                      id === "sst-pb-back.n_clicks" || id === "sst-pb-fwd.n_clicks") { ev("step"); }
-            else if (id === "click-pos.data") { if (v) { ev(v.kind === "poi" ? "poi" : "readout"); } }
+            else if (id === "click-pos.data") {
+                if (v && v.kind === "poi") { ev("poi"); } else if (v) { ev("readout"); }
+            }
             else if (id === "measure-state.data") { if (v && v.mode === "done") { ev("measure"); } }
             else if (id === "poi-collapse.is_open") { if (v) { ev("spots"); } }
             else if (id === "layer-toggles.value") {
@@ -2095,7 +2118,8 @@ app.clientside_callback(
     function(open1, open2, close) {
         var t = ((window.dash_clientside.callback_context.triggered || [])[0] || {}).prop_id || "";
         if (t.indexOf("sst-about-open") === 0) {
-            if (window.GotOneLabs) { window.GotOneLabs.event("how_it_works", {tool: "sst"}); }
+            var ev = function (name) { if (window.GotOneLabs) { window.GotOneLabs.event(name, {tool: "sst"}); } };
+            ev("how_it_works");
             return true;
         }
         if (t.indexOf("sst-about-close") === 0) { return false; }

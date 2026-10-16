@@ -77,13 +77,19 @@
         var ms = Date.parse(t);
         return isNaN(ms) ? null : new Date(ms);
     }
-    function ago(stamp) {
+    function ago(stamp, short) {
         var mins = (Date.now() - stamp.getTime()) / 60000;
         if (mins < 0) { mins = 0; }
         if (mins < 50) { return mins < 2 ? "updated just now" : "updated " + Math.round(mins) + " min ago"; }
         var h = Math.round(mins / 60);
-        if (h < 36) { return "updated " + h + (h === 1 ? " hour ago" : " hours ago"); }
+        if (h < 36) { return "updated " + h + (short ? " h ago" : (h === 1 ? " hour ago" : " hours ago")); }
         return "updated " + fmtShort(stamp);
+    }
+    // A segment with a long form (wide strip) and a short one (phones, assets/sst.css).
+    function dual(long, short, cls) {
+        if (long === short) { return '<span class="' + cls + '">' + esc(long) + "</span>"; }
+        return '<span class="' + cls + '"><span class="st-long">' + esc(long) + '</span><span class="st-short">' +
+               esc(short) + "</span></span>";
     }
 
     // ---------------------------------------------------------- source ---
@@ -106,6 +112,11 @@
     function status(key, idx) {
         var el = $("sst-status-line"), pb = $("sst-pb-date");
         if (!el) { return; }
+        var sig = key ? (key.data_key || "") + "|" + (key.dates || []).join(",") : "";
+        if (sig !== S.lastSig) { S.error = null; }       // a new week arrived
+        S.lastSig = sig;
+        S.lastKey = key;
+        S.lastIdx = idx;
         var dates = (key && key.dates) || [];
         if (!dates.length) { return; }
         var meta = key.meta || {};
@@ -132,21 +143,30 @@
             l1.push('<span class="sst-st-prelim" title="MUR revises its newest days for about four days">preliminary</span>');
         }
 
+        // Line 2, most important first (phones show what fits, in shorter words):
+        // source, freshness, the newest day NOAA has, then which week this is.
         var src = source(key), l2 = [];
-        l2.push('<span class="sst-st-src"><span class="src-long">' + esc(src.long) +
-                '</span><span class="src-short">' + esc(src.short) + "</span></span>");
-        if (src.coarse) { l2.push('<span class="sst-st-warn">broad pattern only</span>'); }
-        var req = parseDay(meta.requested_end), served = parseDay(meta.served_end || dates[dates.length - 1]);
-        if (req && served && dayNum(req) !== dayNum(served)) {
-            l2.push('<span class="sst-st-warn">' + esc(fmtShort(first) + " to " + fmtShort(served)) +
-                    ", the closest week to " + esc(fmtShort(req)) + "</span>");
-        }
-        if (built) { l2.push("<span>" + esc(ago(built)) + "</span>"); }
+        // (On phones the legend carries the OISST "broad pattern only" warning.)
+        l2.push('<span class="sst-st-src"><span class="st-long">' + esc(src.long) +
+                (src.coarse ? '<span class="sst-st-dot"> \u00b7 </span><span class="sst-st-warn">broad pattern only</span>' : "") +
+                '</span><span class="st-short">' + esc(src.short) + "</span></span>");
+        if (built) { l2.push(dual(ago(built), ago(built, true), "")); }
         var latest = parseDay(meta.latest_available);
+        var req = parseDay(meta.requested_end), served = parseDay(meta.served_end || dates[dates.length - 1]);
         if (latest) {
             var newer = served && dayNum(latest) > dayNum(served);
-            l2.push('<span class="' + (newer ? "sst-st-new" : "") + '">newest available ' +
-                    esc(fmtShort(latest)) + "</span>");
+            l2.push(dual("newest available " + fmtShort(latest), "newest " + fmtShort(latest),
+                         newer ? "sst-st-new" : ""));
+        }
+        if (req && served && dayNum(req) !== dayNum(served)) {
+            var sameMonth = first.getMonth() === served.getMonth();
+            var range = fmtShort(first) + " to " + (sameMonth ? served.getDate() : fmtShort(served));
+            l2.push(dual(range + ", the closest week to " + fmtShort(req),
+                         "closest week to " + fmtShort(req), "sst-st-warn"));
+        }
+
+        if (S.error) {                                   // the last Load week failed
+            l2.unshift('<span class="sst-st-warn">Couldn\'t load that week: ' + esc(S.error) + "</span>");
         }
 
         var dot = '<span class="sst-st-dot"> · </span>';
@@ -242,9 +262,25 @@
         }
     });
 
+    // A failed Load week (the sidebar's red message, which phones don't see:
+    // the drawer closes). The map still shows the last week, so the strip keeps
+    // its date and leads line 2 with the error until a week loads.
+    function fetchError(msg) {
+        var el = $("sst-status-line");
+        S.error = msg ? String(msg).replace(/^Error:\s*/, "") : null;
+        if (S.lastKey && S.lastKey.dates && S.lastKey.dates.length) {
+            S.statusHtml = "";
+            status(S.lastKey, S.lastIdx);
+        } else if (el && S.error) {
+            el.innerHTML = '<div class="sst-st-l1 sst-st-warn">Couldn\'t load the week</div>' +
+                           '<div class="sst-st-l2">' + esc(S.error) + "</div>";
+        }
+    }
+
     window.SST = {
         classify: classify,
         status: status,
+        fetchError: fetchError,
         _state: S
     };
 })();

@@ -34,7 +34,7 @@ def _p(label, *text):
 _RELIABILITY = [
     ("Open water after a clear day or two", "High", "conf-high",
      "Breaks and eddy edges are where the map shows them. On average MUR agrees with other "
-     "global ocean analyses to within about a degree Fahrenheit."),
+     "global ocean analyses to within about two-thirds of a degree Fahrenheit."),
     ("The newest day or two", "Good", "conf-good",
      "A first version that gets revised over the next few days. The strip under the map "
      "marks these days preliminary."),
@@ -145,8 +145,8 @@ def about_body():
                 "compared directly. It also flattens the detail, so leave it off when you're "
                 "looking for breaks."),
             html.P(
-                "Temperatures are rounded to the nearest whole degree Fahrenheit. Water without "
-                "color is outside the mapped area."),
+                "Temperatures are rounded to the nearest whole degree Fahrenheit. Areas without "
+                "color are land or outside the mapped area."),
 
             _h("Where the data comes from"),
             html.P(

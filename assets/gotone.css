@@ -343,8 +343,8 @@ body {
 }
 /* Touch screens and phones: bigger targets */
 @media (max-width: 767.98px), (max-height: 500px), (hover: none) and (pointer: coarse) {
-    .labs-helpful .lh-thumb { width: 44px; height: 36px; }
-    .labs-helpful .lh-note, .labs-helpful .lh-send { height: 36px; }
+    .labs-helpful .lh-thumb { width: 44px; height: 44px; }
+    .labs-helpful .lh-note, .labs-helpful .lh-send { height: 44px; }
 }
 .labs-helpful .lh-hp {                  /* honeypot: off screen, never shown or focused */
     position: absolute !important;
