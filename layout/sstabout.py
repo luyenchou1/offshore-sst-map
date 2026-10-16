@@ -205,8 +205,11 @@ def about_body():
                 html.Li(["Fishing activity: Global Fishing Watch, apparent fishing effort (",
                          _a("globalfishingwatch.org",
                             "https://globalfishingwatch.org/dataset-and-code-fishing-effort/"), ")."]),
-                html.Li(["Spots: well-known offshore wrecks, canyons, banks and The Dump; positions are "
-                         "approximate."]),
+                html.Li(["Spots: 11 offshore spots from Marine Basin's list (",
+                         _a("marinebasin.com", "https://www.marinebasin.com/fishing_spots"),
+                         ") and The Dump from Salty Cape (",
+                         _a("saltycape.com", "https://saltycape.com/the-dump/"),
+                         "); the canyon, bank and other positions are approximate."]),
                 html.Li(["Magnetic variation: the World Magnetic Model, WMM-2025, from NOAA NCEI and the "
                          "British Geological Survey (",
                          _a("ncei.noaa.gov", "https://www.ncei.noaa.gov/products/world-magnetic-model"),
