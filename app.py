@@ -109,6 +109,18 @@ def labs_href():
     return "/labs" if _request_host() in LEGACY_HOSTS else "/"
 
 
+# Tools hosted elsewhere, so labs.gotoneapp.com/<name> works like the app's own pages
+EXTERNAL_TOOLS = {"/striper-recount": "https://striperrecount.gotoneapp.com/"}
+
+
+@server.before_request
+def redirect_external_tools():
+    if request.method != "GET":
+        return None
+    to = EXTERNAL_TOOLS.get(request.path.rstrip("/").lower())
+    return redirect(to, code=302) if to else None
+
+
 @server.before_request
 def redirect_labs_home():
     """With LABS_HOME_URL set, the app's own Labs home redirects to it (302, so it can move later).

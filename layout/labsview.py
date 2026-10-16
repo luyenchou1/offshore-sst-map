@@ -39,7 +39,7 @@ TOOLS = [
         "button": "Open Currents",
     },
     {
-        "href": "https://luyenchou1.github.io/striper-recount/",
+        "href": "https://striperrecount.gotoneapp.com/",
         "short": "striper-recount",           # gotoneapp.com/striper-recount (Squarespace URL mapping)
         "img": "/assets/labs/recount.jpg",
         "alt": "The Striper Recount title card: Kit and the Striper on a sunburst",
