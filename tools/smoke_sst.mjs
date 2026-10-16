@@ -177,12 +177,17 @@ async function run(size) {
     await tap(40.70, -70.95); await waitNewTip(prevCard);
     const dump = await tipText();
     check(size, 'inside The Dump: reads the tapped point', /The Dump/.test(dump) && /40\.(69|70)\d°N, 70\.9[45]\d°W/.test(dump), dump);
+    await sleep(800);                                    // (two quick taps are a double-tap zoom)
+    await tap(40.70, -70.95);
+    const closed = await page.waitForFunction(() => !document.querySelector('.leaflet-tooltip.sst-tooltip'), null, { timeout: 8000 }).then(() => true).catch(() => false);
+    check(size, 'a second tap on the open reading closes it', closed);
     await setView(41.05, -71.10, 10); await sleep(1000);
     const prevTip = await tipText();
     await tap(41.05, -71.08);                            // ~4 nm east of Coxes Ledge, ~58 px at zoom 10
     await waitNewTip(prevTip);
     const near = await tipText();
-    check(size, 'next to a spot at zoom 10: reads the water', /°F/.test(near) && !/Coxes/.test(near), near.split(' | ').slice(0, 1).join(''));
+    const zinfo = await page.evaluate(() => { const m = window.__maps[0]; const a = m.latLngToContainerPoint([41.05, -71.08]), c = m.latLngToContainerPoint([41.05, -71.158]); return `zoom ${m.getZoom()}, ${Math.round(Math.hypot(a.x - c.x, a.y - c.y))} px from the spot; click ${JSON.stringify(window.dash_component_api.getLayout('sst-map').props.clickData.containerPoint)}`; });
+    check(size, 'next to a spot at zoom 10: reads the water', /°F/.test(near) && !/Coxes/.test(near), near.split(' | ').slice(0, 1).join('') + '; ' + zinfo);
     await setView(40.4, -71.6, 7); await sleep(1000);
 
     // ---- measure ----

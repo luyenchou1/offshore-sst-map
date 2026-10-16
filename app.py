@@ -1842,16 +1842,18 @@ app.clientside_callback(
 # ---- Callback 3a: Route map taps, in the browser (assets/sst.js SST.classify) ----
 # A spot's circle (hit-tested in screen pixels: ~16 px for a finger, 9 px for a
 # mouse) opens its card; anywhere else, including next to a spot or inside The
-# Dump, reads the water there; in measure mode the tap places A or B (snapping
-# to a spot's circle). Writes the selection (click-pos) or the measure state;
-# render_selection draws both for the day on the map.
+# Dump, reads the water there; a second tap on the open reading or spot closes
+# it; in measure mode the tap places A or B (snapping to a spot's circle).
+# Writes the selection (click-pos) or the measure state; render_selection draws
+# both for the day on the map.
 app.clientside_callback(
     """
-    function(click, pois, selected, measure) {
+    function(click, pois, selected, measure, current) {
         var nu = window.dash_clientside.no_update;
         if (!click || !window.SST) { return [nu, nu]; }
-        var r = window.SST.classify(click, pois, selected, measure);
-        return [r[0] === null ? nu : r[0], r[1] === null ? nu : r[1]];
+        var r = window.SST.classify(click, pois, selected, measure, current);
+        var sel = r[0] === null ? nu : (r[0].clear ? null : r[0]);
+        return [sel, r[1] === null ? nu : r[1]];
     }
     """,
     Output("click-pos", "data"),
@@ -1860,6 +1862,7 @@ app.clientside_callback(
     State("sst-pois", "data"),
     State("poi-picker", "value"),
     State("measure-state", "data"),
+    State("click-pos", "data"),
     prevent_initial_call=True,
 )
 

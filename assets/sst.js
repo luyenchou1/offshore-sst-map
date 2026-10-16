@@ -204,12 +204,20 @@
         return best;
     }
 
-    // Returns [click-pos, measure-state]; null means "no change".
-    function classify(click, pois, selected, measure) {
+    // Returns [click-pos, measure-state]; null means "no change", {clear: true}
+    // drops the selection (a second tap on the open reading or spot closes it).
+    function classify(click, pois, selected, measure, current) {
         if (!click || !click.latlng) { return [null, null]; }
         var lat = click.latlng.lat, lng = click.latlng.lng;
         var spot = nearestSpot(click, pois, selected);
         var mode = (measure && measure.mode) || "off";
+        if (mode !== "a" && mode !== "b" && current && S.map && click.containerPoint) {
+            var q = S.map.latLngToContainerPoint([current.lat, current.lng]);
+            var r = coarse() ? HIT_TOUCH : HIT_MOUSE;
+            if (Math.hypot(q.x - click.containerPoint.x, q.y - click.containerPoint.y) <= r) {
+                return [{ clear: true }, null];
+            }
+        }
         if (mode === "a" || mode === "b") {
             var pt = spot ? { lat: spot[1], lng: spot[2], label: spot[0] } : { lat: lat, lng: lng, label: null };
             if (mode === "a") { return [null, { mode: "b", a: pt, b: null }]; }
