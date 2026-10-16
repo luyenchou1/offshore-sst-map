@@ -79,7 +79,7 @@ _RECOUNT_EVENTS.update({
 
 EVENTS = {
     "sst": {
-        "load": "Pressed Fetch SST to load a week (the automatic first load isn't counted)",
+        "load": "Pressed Load week (was Fetch SST; the automatic first load isn't counted)",
         "play": "Played the week's animation",
         "step": "Moved to another day (step buttons or the day slider)",
         "readout": "Tapped the map for a temperature",
@@ -90,7 +90,8 @@ EVENTS = {
         "bathymetry": "Turned on bathymetry",
         "gfw": "Turned on fishing activity",
         "lock_scale": "Locked the color scale",
-        "opacity": "Changed the SST opacity",
+        "opacity": "Changed the color strength (SST opacity)",
+        "how_it_works": "Opened How it works (not the automatic first-visit opening)",
     },
     "currents": {
         "view_today": "Switched to the Today view",

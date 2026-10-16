@@ -1,0 +1,315 @@
+/* ===== Offshore SST page (/sst) =====
+   Dash loads every assets/*.css on every page, so the rules are scoped to
+   .sst-page (or sst-* classes). Loads after gotone.css and currents.css
+   (alphabetical), so it overrides both. Shares Currents' header links,
+   "How it works" modal, playbar and drawer look. */
+
+/* ---- Page: a flex column exactly as tall as the visible viewport (like
+   Currents). The old calc(100vh - 72px) was 8 px short of the 80 px header,
+   and Bootstrap's .row margins pushed the sidebar to x = -12 and the map
+   12 px past the right edge, so the page scrolled when the map got focus. */
+.sst-page {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+}
+.sst-page > .gotone-header { flex: 0 0 auto; }
+.sst-page > .container-fluid {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+.sst-page > .container-fluid > .row { flex: 1 1 auto; min-height: 0; margin: 0; }
+.sst-page .gotone-sidebar { height: 100%; }
+.sst-page .map-col { height: 100%; display: flex; flex-direction: column; min-width: 0; }
+.sst-page .map-wrapper { flex: 1 1 auto; min-height: 0; height: auto !important; }
+.sst-page .gotone-sidebar .sidebar-body { display: flex; flex-direction: column; }
+.sst-page .gotone-sidebar .sidebar-body > * { flex-shrink: 0; }
+
+/* "How it works" above the phone / tablet drawer (z 2000) */
+.modal-backdrop { z-index: 2050; }
+.modal { z-index: 2060; }
+.sst-about-version { margin-top: 0.25rem; color: #64748b; }
+
+/* ---- Status strip under the map (filled by assets/sst.js SST.status) ---- */
+.sst-status-line {
+    flex: 0 0 auto;
+    height: 2.75rem;
+    padding: 0.3rem 0.75rem;
+    background: #0d1d38;
+    border-top: 1px solid #1e293b;
+    color: #cbd5e1;
+    font-size: 0.78rem;
+    line-height: 1.1rem;
+    overflow: hidden;
+}
+.sst-st-l1, .sst-st-l2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sst-st-date { color: #ffffff; font-weight: 600; }
+.sst-st-sub, .sst-st-dot { color: #94a3b8; }
+.sst-st-prelim, .sst-st-warn { color: #fbbf24; }
+.sst-st-new { color: #4ade80; font-weight: 600; }
+.sst-status-line .st-short { display: none; }
+@media (min-width: 992px) and (min-height: 501px) {
+    .sst-status-line { height: 1.9rem; display: flex; align-items: center; }
+    .sst-st-l1 { flex: 0 0 auto; }
+    .sst-st-l2 { flex: 1 1 auto; min-width: 0; }
+    .sst-st-l2::before { content: " \00b7  "; color: #94a3b8; white-space: pre; }
+}
+@media (max-width: 767.98px), (max-height: 500px) {
+    .sst-status-line { font-size: 0.74rem; height: 2.6rem; padding: 0.25rem 0.6rem; line-height: 1.05rem; }
+    .sst-status-line .st-long { display: none; }
+    .sst-status-line .st-short { display: inline; }
+}
+
+/* ---- Legend (map/colorscale.py): dark translucent card like Currents' ---- */
+.sst-legend-box { position: absolute; right: 10px; bottom: 26px; z-index: 999; pointer-events: none; }
+.sst-gfw-note {
+    width: 236px;
+    margin-top: 4px;
+    padding: 0.35rem 0.6rem;
+    background: rgba(10, 22, 40, 0.86);
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    color: #cbd5e1;
+    font-size: 0.7rem;
+    line-height: 1.35;
+}
+.sst-legend {
+    width: 236px;
+    padding: 0.45rem 0.65rem 0.4rem;
+    background: rgba(10, 22, 40, 0.86);
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    color: #cbd5e1;
+    font-size: 0.75rem;
+    line-height: 1.3;
+}
+.sst-legend-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
+.sst-legend-title { color: #ffffff; font-weight: 600; }
+.sst-legend-scale { color: #94a3b8; font-size: 0.72rem; }
+.sst-legend.locked .sst-legend-scale { color: #fbbf24; }
+.sst-legend-row { display: flex; align-items: center; gap: 6px; margin-top: 0.3rem; }
+.sst-legend-end { flex: 0 0 22px; text-align: center; color: #ffffff; font-weight: 600; }
+.sst-legend-bar { flex: 1 1 auto; height: 12px; border-radius: 3px; }
+.sst-legend-ticks { position: relative; height: 14px; margin: 1px 28px 0; color: #94a3b8; font-size: 0.72rem; }
+.sst-legend-tick { position: absolute; top: 0; transform: translateX(-50%); }
+.sst-legend-note { margin-top: 0.15rem; color: #94a3b8; font-size: 0.7rem; }
+.sst-legend-warn { margin-top: 0.15rem; color: #fbbf24; font-size: 0.72rem; font-weight: 600; }
+.sst-page .leaflet-control-attribution { font-size: 10px; }
+
+/* ---- Floating day controls (shown in drawer mode by currents.css) ---- */
+.sst-playbar { position: absolute; left: 10px; bottom: 24px; z-index: 1001; }
+.sst-pb-date { padding: 0 0.65rem 0 0.15rem; color: #ffffff; font-size: 0.85rem; font-weight: 600; white-space: nowrap; }
+
+/* ---- Measure: the on-map hint and the sidebar readout ---- */
+.sst-map-hint {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1002;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    max-width: calc(100% - 130px);
+    padding: 0.3rem 0.35rem 0.3rem 0.9rem;
+    background: rgba(1, 131, 254, 0.96);
+    border-radius: 100px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    color: #ffffff;
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.sst-hint-cancel {
+    border: none;
+    border-radius: 100px;
+    padding: 0.3rem 0.8rem;
+    background: #ffffff;
+    color: #0a1628;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+.sst-measure-row { display: flex; gap: 6px; }
+.sst-measure-row .sst-measure-btn { flex: 1 1 auto; }
+.sst-measure-row .sst-measure-clear { flex: 0 0 auto; padding-left: 0.9rem; padding-right: 0.9rem; }
+.measure-readout { font-size: 0.78rem; line-height: 1.4; color: #e2e8f0; }
+.measure-readout .mr-dist { color: #ffffff; font-size: 0.95rem; font-weight: 700; }
+.measure-readout .mr-course { color: #ffffff; font-weight: 600; }
+.measure-readout .mr-pt { color: #cbd5e1; margin-top: 0.15rem; }
+.measure-readout .mr-hint { color: #7cc0ff; font-weight: 600; }
+.measure-readout .mr-note { color: #94a3b8; font-size: 0.7rem; margin-top: 0.3rem; }
+
+/* ---- Sidebar copy and small controls ---- */
+.sst-page .sidebar-section-label {
+    margin-bottom: 0.5rem;
+    color: #94a3b8;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.sst-day-indicator { margin-bottom: 0.25rem; color: #e2e8f0; font-size: 0.82rem; font-weight: 600; }
+.sst-spots-label { color: #cbd5e1; font-size: 0.8rem; font-weight: 500; }
+.sst-link-btn {
+    padding: 0;
+    border: none;
+    background: none;
+    color: #4da6ff;
+    font-size: 0.75rem;
+    text-decoration: underline;
+    cursor: pointer;
+}
+.sst-link-btn:hover { color: #ffffff; }
+.sst-link-sep { color: #475569; font-size: 0.75rem; }
+.sst-page .poi-checklist { max-height: 220px; overflow-y: auto; font-size: 0.78rem; }
+.sst-page .sst-checks { font-size: 0.8rem; }
+.sst-small-label { color: #94a3b8; font-size: 0.75rem; }
+.sst-sidebar-foot { margin-top: auto; padding-top: 0.75rem; }
+.sst-sidebar-labs { color: #0183fe; font-size: 0.7rem; text-decoration: none; }
+.sst-sidebar-labs:hover { color: #4da6ff; text-decoration: underline; }
+
+/* Day slider (Dash 4 class names): brand blue, readable weekday marks */
+.gotone-sidebar .dash-slider-root {
+    --Dash-Fill-Interactive-Strong: #0183fe;
+    --Dash-Fill-Disabled: #334155;
+    --Dash-Fill-Inverse-Strong: #ffffff;
+    --Dash-Text-Strong: #e2e8f0;
+    --Dash-Text-Disabled: #94a3b8;
+}
+.sst-day-slider .dash-slider-root.has-marks { padding-bottom: 32px; }
+.sst-day-slider .dash-slider-mark { font-size: 0.68rem; line-height: 1.15; white-space: pre-line; text-align: center; }
+
+/* ---- Tablets (any touch screen) and windows < 1200 px: the sidebar is a
+   slide-in drawer (as on phones and on Currents) and the day controls float
+   on the map. At 820 px the fixed 2-column sidebar was 141 px wide. ---- */
+@media (max-width: 1199.98px), (hover: none) and (pointer: coarse) {
+    .sst-page .gotone-sidebar {
+        position: fixed !important;
+        top: 0;
+        left: -330px;
+        width: 300px !important;
+        max-width: 85vw !important;
+        height: 100vh !important;
+        height: 100dvh !important;
+        z-index: 2000;
+        transition: left 0.3s ease;
+        flex: none !important;
+        padding-top: 2.75rem !important;
+        padding-left: max(1.25rem, env(safe-area-inset-left)) !important;
+        overflow: visible !important;
+        display: flex !important;
+        flex-direction: column !important;
+    }
+    .sst-page .gotone-sidebar.drawer-open { left: 0; box-shadow: 4px 0 20px rgba(0, 0, 0, 0.35); }
+    .sst-page .gotone-sidebar .sidebar-header { flex-shrink: 0; position: relative; z-index: 10; }
+    .sst-page .gotone-sidebar .sidebar-body {
+        flex: 1;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        touch-action: pan-y;
+        min-height: 0;
+    }
+    .sst-page .gotone-sidebar .dash-datepicker-calendar { z-index: 2100 !important; }
+    .sst-page .sidebar-close-btn { display: flex !important; }
+    .sst-page .sidebar-backdrop { display: none !important; }
+    .sst-page:has(.gotone-sidebar.drawer-open) .sidebar-backdrop {
+        display: block !important;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.4);
+        z-index: 1999;
+    }
+    .sst-page .map-col { flex: 0 0 100% !important; max-width: 100% !important; }
+    .sst-page .hamburger-btn {
+        display: block !important;
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        z-index: 1100;
+        width: 44px;
+        height: 44px;
+        background: rgba(255, 255, 255, 0.95);
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        font-size: 1.4rem;
+        color: #0a1628;
+        cursor: pointer;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    }
+    .sst-page .leaflet-top.leaflet-right { top: 54px; }
+}
+
+/* ---- Touch screens and phones: 44 px targets, larger text ---- */
+@media (hover: none) and (pointer: coarse), (max-width: 767.98px), (max-height: 500px) {
+    .sst-page .gotone-sidebar .form-check {
+        display: flex;
+        align-items: center;
+        min-height: 44px;
+        margin: 0;
+        padding: 0;
+    }
+    .sst-page .gotone-sidebar .form-check-input {
+        float: none;
+        flex: none;
+        width: 22px;
+        height: 22px;
+        margin: 0 0.6rem 0 0;
+    }
+    .sst-page .gotone-sidebar .form-check-label {
+        flex: 1 1 auto;
+        display: flex;
+        align-items: center;
+        min-height: 44px;
+        font-size: 0.85rem;
+        cursor: pointer;
+    }
+    .sst-page .gotone-sidebar .btn,
+    .sst-page .gotone-sidebar .dash-datepicker-input { min-height: 44px; }
+    .sst-page .gotone-sidebar .playback-btn { width: 44px !important; height: 44px !important; }
+    .sst-page .gotone-sidebar .playback-btn-main { width: 64px !important; }
+    .sst-page #poi-collapse-toggle { min-height: 44px; }
+    .sst-page .poi-checklist { max-height: none; overflow-y: visible; }   /* the drawer scrolls */
+    .sst-page .sst-link-btn,
+    .sst-page .currents-link-btn,
+    .sst-page .sst-sidebar-labs {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+        padding: 0 0.35rem;
+        font-size: 0.8rem;
+    }
+    .sst-page .sidebar-close-btn {
+        width: 44px;
+        height: 44px;
+        align-items: center;
+        justify-content: center;
+        top: 0.25rem !important;
+        right: 0.4rem !important;
+    }
+    .sst-page .sidebar-section-label { font-size: 0.75rem; }
+    .sst-page .dash-slider-thumb { width: 28px; height: 28px; }
+    .sst-page .dash-slider-root { --radix-slider-thumb-width: 28px; }
+    .sst-day-slider .dash-slider-root.has-marks { padding-top: 10px; padding-bottom: 42px; }
+    .sst-day-slider .dash-slider-mark { font-size: 0.75rem; }
+    .sst-page .leaflet-touch .leaflet-bar a { width: 44px; height: 44px; line-height: 44px; font-size: 22px; }
+    .sst-page .currents-header-links .header-nav-link { display: inline-flex; align-items: center; min-height: 44px; }
+    .sst-hint-cancel { min-height: 36px; }
+}
+
+/* ---- Phones: compact legend at the top centre (the bottom has the play bar
+   and the attribution), the measure hint below it ---- */
+@media (max-width: 767.98px), (max-height: 500px) {
+    .sst-page .sst-legend-box { top: 10px; bottom: auto; left: 50%; right: auto; transform: translateX(-50%); }
+    .sst-page .sst-legend { width: 196px; padding: 0.3rem 0.5rem 0.25rem; }
+    .sst-page .sst-legend-note { display: none; }
+    .sst-page .sst-gfw-note { width: 196px; font-size: 0.66rem; padding: 0.25rem 0.5rem; }
+    .sst-page .sst-map-hint { top: 74px; max-width: calc(100% - 20px); font-size: 0.8rem; }
+    .sst-page .currents-header-links .header-nav-link { font-size: 0.78rem; padding-left: 0.5rem; }
+    .sst-page .leaflet-control-attribution { font-size: 9px; max-width: 70vw; }
+}
