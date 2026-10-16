@@ -4,7 +4,10 @@ dash-leaflet>=1.1.3,<2
 dash-extensions>=2.0.0
 dash-bootstrap-components>=1.5.0
 plotly>=5.0.0
-gunicorn>=21.2.0
+# Pinned (Oct 16, 2026): from 24.0 the gthread worker reads each new connection on a request thread (24, 25: no
+# timeout; 26: 5 s), so connections that send nothing hold all 16 threads. 23.0.0 waits in its poller. Run
+# tools/load_sst_outage.py (its idle-connection check) before changing this.
+gunicorn==23.0.0
 pandas>=2.1.0
 numpy>=1.26.0
 xarray>=2023.8.0

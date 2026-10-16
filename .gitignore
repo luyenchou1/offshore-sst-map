@@ -20,3 +20,6 @@ build/
 # the internal build uses full-precision spot locations (privacy-sensitive).
 data/gotone_catches.csv
 data/gotone_species.csv
+
+# gunicorn >= 25 control socket (created in the working directory)
+gunicorn.ctl

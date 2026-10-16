@@ -17,7 +17,7 @@ import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 
-import requests as http_requests
+import requests as http_requests  # noqa: F401 - outbound calls go through data/outbound; tests patch this module
 from flask import Response, abort, jsonify, redirect, request, send_from_directory
 
 import dash
@@ -36,10 +36,11 @@ from data.catches import (
     load_catches,
 )
 from data import currents as currents_data
+from data import geo
 from data import labstats
+from data import outbound
 from data import sstmeta
-from data.convert import upsample_visual
-from data.erddap import SSTUnavailable, get_sst_multiday, latest_mur_date
+from data.erddap import SSTUnavailable, get_sst_multiday, latest_mur_date, noaa_down
 from data.geo import grid_bounds, mask_aoi_rasterized, mask_land_rasterized, orient_to_leaflet
 from layout.catchview import build_catch_page
 from layout.currentsview import build_currents_page
@@ -49,13 +50,31 @@ from layout.statsview import render_stats_page
 from layout.sidebar import build_sidebar
 from map.colorscale import build_legend_component, compute_color_bounds
 from map.measure import format_measurement
-from map.overlay import sst_to_base64_png
+from map.overlay import FRAME_FORMAT, sst_to_base64_png
 from map.pois import build_poi_markers, get_all_poi_names, pois_payload
 from layout.sstabout import build_about_modal
 from map.readout import fmt_day, measure_panel, selection_tip, week_temps
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ---- Hang diagnostics (incident 2026-10-16, docs/incident-2026-10-16.md) ----
+# `kill -USR1 <pid>` (the worker, or the gunicorn master, which forwards USR1 to its workers) writes every
+# thread's Python stack to stderr, i.e. Render's log, even when all request threads are stuck. Under gunicorn its
+# own USR1 handler (reopen log files) still runs after the dump. /api/debug/threads (below) does the same over HTTP
+# while a request thread is still free.
+import faulthandler  # noqa: E402
+import signal  # noqa: E402
+import sys  # noqa: E402
+
+faulthandler.enable()  # also dump stacks on a hard crash (segfault, abort)
+if hasattr(signal, "SIGUSR1"):
+    try:
+        # Chain only to a real handler (gunicorn's): chaining to the default action would kill the process
+        faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True,
+                              chain=callable(signal.getsignal(signal.SIGUSR1)))
+    except (ValueError, RuntimeError, OSError):  # not the main thread / no usable stderr
+        logger.warning("faulthandler: SIGUSR1 stack dump not registered", exc_info=True)
 
 with open("config.json") as f:
     CFG = json.load(f)
@@ -83,6 +102,71 @@ app = dash.Dash(
     ],
 )
 server = app.server  # for gunicorn
+
+# A reader's fetch waits at most this for the land mask download (normally loaded by the startup pre-warm)
+geo.LAND_WAIT_S = 5.0
+
+
+# ---- Slow-request watchdog (incident 2026-10-16) ----
+# Every request is noted in _inflight while it runs. A request still running after SLOW_REQUEST_S (longer than any
+# budget: NOAA 22 s + processing, GFW 6 s) is logged once, with its thread's stack; when every request thread is busy
+# that long, all threads' stacks are dumped (faulthandler). So a stall shows in Render's log by itself.
+SLOW_REQUEST_S = float(os.environ.get("SLOW_REQUEST_S", "60"))
+_REQUEST_THREADS = int(os.environ.get("REQUEST_THREADS", "16"))   # gunicorn --threads
+_inflight = {}            # thread ident -> (monotonic start, "METHOD /path")
+_inflight_reported = set()
+
+
+@server.before_request
+def _note_request():
+    _inflight[threading.get_ident()] = (time.monotonic(), f"{request.method} {request.path}")
+
+
+@server.teardown_request
+def _end_request(exc=None):
+    ident = threading.get_ident()
+    _inflight.pop(ident, None)
+    _inflight_reported.discard(ident)
+
+
+_watchdog_last_dump = [-1e9]
+
+
+def _watchdog_check():
+    """Log requests running longer than SLOW_REQUEST_S (once each, with their stack); dump every thread's stack when
+    all request threads are that slow (at most every 10 minutes). Returns the slow requests' descriptions."""
+    import traceback
+    now = time.monotonic()
+    slow = [(i, t0, what) for i, (t0, what) in list(_inflight.items()) if now - t0 > SLOW_REQUEST_S]
+    if not slow:
+        return []
+    frames = sys._current_frames()
+    for ident, t0, what in slow:
+        if ident in _inflight_reported:
+            continue
+        _inflight_reported.add(ident)
+        stack = "".join(traceback.format_stack(frames[ident])[-12:]) if ident in frames else "(gone)\n"
+        logger.warning("Slow request: %s running for %.0fs; its stack:\n%s", what, now - t0, stack)
+    if len(slow) >= _REQUEST_THREADS and now - _watchdog_last_dump[0] > 600:
+        _watchdog_last_dump[0] = now
+        logger.error("All %d request threads busy for over %.0fs; every thread's stack follows",
+                     len(slow), SLOW_REQUEST_S)
+        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+    return [what for _, _, what in slow]
+
+
+def _watchdog(period=10.0):
+    while True:
+        time.sleep(period)
+        try:
+            _watchdog_check()
+        except Exception:  # noqa: BLE001 - the watchdog must never die
+            logger.warning("watchdog error", exc_info=True)
+
+
+if not os.environ.get("_SST_WATCHDOG_STARTED"):
+    os.environ["_SST_WATCHDOG_STARTED"] = "1"
+    threading.Thread(target=_watchdog, daemon=True, name="request-watchdog").start()
 
 
 # ---- Each tool page carries its own link preview ----
@@ -338,9 +422,31 @@ def labs_stats_page():
 # Proxy tiles through Flask so the token stays server-side.
 # The date range comes with each tile request (?dr=START,END, set by the SST week the page shows),
 # so visitors on different weeks never share tiles. Both caches are keyed by it.
+# Incident 2026-10-16: the generate-png call used to run under one process-wide lock with no memory of failures, so
+# when GFW was failing or slow every tile queued behind it, one 15-30 s attempt at a time, until all 16 request threads
+# were waiting. Now: the lock only guards these dicts (never held during a call), one call per range is in flight and
+# other tiles wait for it briefly (GFW_STYLE_WAIT_S), a failed range isn't asked again for GFW_FAIL_S, and every call
+# goes through data/outbound's GFW upstream (bounded time, at most GFW_MAX_CALLS at once, breaker).
 _gfw_style_cache = {}  # dr -> url template (OrderedDict-like: oldest evicted first)
 _GFW_STYLE_CACHE_MAX = 32
-_gfw_style_lock = threading.Lock()
+_gfw_style_lock = threading.Lock()   # guards _gfw_style_cache / _gfw_style_failed / _gfw_style_pending only
+_gfw_style_failed = {}   # dr -> monotonic time generate-png last failed for it
+_gfw_style_pending = {}  # dr -> threading.Event set when the call in flight for it ends
+GFW_STYLE_S = 6.0        # the whole generate-png call
+GFW_STYLE_WAIT_S = 4.0   # a tile waiting for another tile's generate-png call
+GFW_STYLE_WAITERS = 4    # at most this many tiles wait for it; the rest get 503 "busy" at once (the page retries)
+_gfw_style_waiting = [0]
+GFW_TILE_S = 6.0         # the whole tile fetch
+GFW_FAIL_S = 60.0        # a range whose generate-png failed isn't asked again for a minute
+_GFW_FAIL_HEADERS = {"Cache-Control": "no-store"}  # an empty tile from a failure must not be cached for a day
+# Too busy right now (all GFW calls in flight, or the range's generate-png still running): 503, which the page
+# retries after a short pause (assets/sst.js gfwRetry). A real GFW failure is an empty 200 tile (not retried).
+_GFW_BUSY_HEADERS = {"Cache-Control": "no-store", "Retry-After": "1"}
+
+
+def _gfw_busy():
+    # No image in the body: a browser shows an image sent with an error status, and then Leaflet sees no error
+    return Response(b"busy", status=503, content_type="text/plain", headers=_GFW_BUSY_HEADERS)
 _gfw_tile_cache = {}  # (z, x, y, dr) → (content_bytes, status_code)
 _GFW_TILE_CACHE_MAX = 300  # max cached tiles before the oldest go (~3-6 MB)
 _GFW_DR_RE = __import__("re").compile(r"^(\d{4}-\d{2}-\d{2}),(\d{4}-\d{2}-\d{2})$")
@@ -425,38 +531,95 @@ def catches_upload():
             200, {"Content-Type": "application/json"})
 
 
+_GFW_API = os.environ.get("GFW_API_BASE", "https://gateway.api.globalfishingwatch.org").rstrip("/")  # tests: a local fake
+_log_last = {}  # key -> monotonic time last logged
+
+
+def _log_every(key, seconds, msg, *args):
+    """logger.warning at most once per `seconds` per key (an outage must show in the log without flooding it)."""
+    now = time.monotonic()
+    if now - _log_last.get(key, -1e9) >= seconds:
+        _log_last[key] = now
+        logger.warning(msg, *args)
+
+
 def _get_gfw_style(date_range: str) -> str | None:
     """Call GFW generate-png to get a styled tile URL template.
 
     Must be called once per date range before tiles can be fetched.
-    Returns the full URL template with {z}/{x}/{y} placeholders, or None.
+    Returns the full URL template with {z}/{x}/{y} placeholders, or None. Returns within GFW_STYLE_S.
     """
     token = os.environ.get("GFW_API_TOKEN")
     if not token:
         return None
     try:
-        resp = http_requests.post(
-            "https://gateway.api.globalfishingwatch.org/v3/4wings/generate-png",
+        rep = outbound.upstream("gfw").request(
+            "POST", f"{_GFW_API}/v3/4wings/generate-png", outbound.Deadline(GFW_STYLE_S),
             params={
                 "datasets[0]": "public-global-fishing-effort:latest",
                 "interval": "DAY",
                 "date-range": date_range,
             },
             headers={"Authorization": f"Bearer {token}"},
-            timeout=15,
+            connect_s=3.0, read_s=GFW_STYLE_S, max_bytes=1024 * 1024,
         )
-        resp.raise_for_status()
-        url = resp.json().get("url", "")
+        if rep.status != 200:
+            raise RuntimeError(f"HTTP {rep.status}: {rep.text(200)}")
+        url = rep.json().get("url", "")
         # The API returns URLs pointing to the prod subdomain which has
         # SSL issues with Python's ssl module. Use the main domain instead.
         url = url.replace(
             "gateway.api.prod.globalfishingwatch.org",
             "gateway.api.globalfishingwatch.org",
         )
-        return url
-    except Exception as e:
-        logger.warning("GFW generate-png failed: %s", e)
+        return url or None
+    except Exception as e:  # noqa: BLE001 - a failure means no fishing layer, never a failed page
+        _log_every(("gfw-style", getattr(e, "kind", type(e).__name__)), 60, "GFW generate-png failed: %s", e)
         return None
+
+
+def _gfw_style(dr: str):
+    """(tile URL template or None, pending): cached, the call already in flight (waited for briefly), or one call.
+    pending: another tile's call for this range was still running when the wait ran out (try again shortly)."""
+    with _gfw_style_lock:
+        url_tpl = _gfw_style_cache.get(dr)
+        if url_tpl:
+            return url_tpl, False
+        if time.monotonic() - _gfw_style_failed.get(dr, -1e9) < GFW_FAIL_S:
+            return None, False
+        ev = _gfw_style_pending.get(dr)
+        leader = ev is None
+        if leader:
+            ev = _gfw_style_pending[dr] = threading.Event()
+        elif _gfw_style_waiting[0] >= GFW_STYLE_WAITERS:
+            return None, True
+        else:
+            _gfw_style_waiting[0] += 1
+    if not leader:
+        try:
+            done = ev.wait(GFW_STYLE_WAIT_S)
+        finally:
+            with _gfw_style_lock:
+                _gfw_style_waiting[0] -= 1
+                url_tpl = _gfw_style_cache.get(dr)
+        return url_tpl, (url_tpl is None and not done)
+    url_tpl = None
+    try:
+        url_tpl = _get_gfw_style(dr)
+    finally:
+        with _gfw_style_lock:
+            if url_tpl:
+                _gfw_style_cache[dr] = url_tpl
+                _gfw_style_failed.pop(dr, None)
+                while len(_gfw_style_cache) > _GFW_STYLE_CACHE_MAX:
+                    _gfw_style_cache.pop(next(iter(_gfw_style_cache)), None)
+            else:
+                _gfw_style_failed[dr] = time.monotonic()
+                if len(_gfw_style_failed) > 256:
+                    _gfw_style_failed.clear()
+            _gfw_style_pending.pop(dr, None)
+        ev.set()
+    return url_tpl, False
 
 
 @server.route("/api/gfw/<int:z>/<int:x>/<int:y>.png")
@@ -487,19 +650,12 @@ def gfw_tile_proxy(z, x, y):
             return Response(content, content_type="image/png", headers=tile_headers)
         return Response(_EMPTY_PNG, content_type="image/png", headers=tile_headers)
 
-    # One generate-png call per date range, even when a screenful of tiles arrives at once
-    url_tpl = _gfw_style_cache.get(dr)
-    if url_tpl is None:
-        with _gfw_style_lock:
-            url_tpl = _gfw_style_cache.get(dr)
-            if url_tpl is None:
-                url_tpl = _get_gfw_style(dr)
-                if url_tpl:
-                    _gfw_style_cache[dr] = url_tpl
-                    while len(_gfw_style_cache) > _GFW_STYLE_CACHE_MAX:
-                        _gfw_style_cache.pop(next(iter(_gfw_style_cache)), None)
+    # One generate-png call per date range, even when a screenful of tiles arrives at once (no lock held during it)
+    url_tpl, pending = _gfw_style(dr)
     if not url_tpl:
-        return "", 204
+        if pending:
+            return _gfw_busy()
+        return Response(_EMPTY_PNG, content_type="image/png", headers=_GFW_FAIL_HEADERS)
 
     tile_url = (url_tpl
                 .replace("{z}", str(z))
@@ -507,29 +663,45 @@ def gfw_tile_proxy(z, x, y):
                 .replace("{y}", str(y)))
 
     try:
-        resp = http_requests.get(
-            tile_url,
+        resp = outbound.upstream("gfw").request(
+            "GET", tile_url, outbound.Deadline(GFW_TILE_S),
             headers={"Authorization": f"Bearer {token}"},
-            timeout=10,
+            connect_s=3.0, read_s=GFW_TILE_S, max_bytes=4 * 1024 * 1024,
         )
-        # Cache both successes and empty tiles (404s are ~half of requests)
-        if resp.status_code == 200:
-            _gfw_tile_cache[tile_key] = (resp.content, 200)
-        elif resp.status_code in (404, 204):
-            _gfw_tile_cache[tile_key] = (b"", resp.status_code)
-        while len(_gfw_tile_cache) > _GFW_TILE_CACHE_MAX:
-            _gfw_tile_cache.pop(next(iter(_gfw_tile_cache)), None)
-        if resp.status_code in (404, 204):
-            return Response(_EMPTY_PNG, content_type="image/png", headers=tile_headers)
-        if resp.status_code != 200:
-            return "", resp.status_code
-        return Response(
-            resp.content,
-            content_type=resp.headers.get("Content-Type", "image/png"),
-            headers=tile_headers,
-        )
-    except Exception:
-        return "", 502
+    except outbound.OutboundError as e:   # down, busy, unreachable, timeout: answer now, never a held thread
+        if e.kind == outbound.BUSY:       # all GFW calls in flight: the page asks again in a moment
+            return _gfw_busy()
+        _log_every(("gfw-tile", e.kind), 60, "GFW tile %s/%s/%s not fetched: %s", z, x, y, e)
+        return Response(_EMPTY_PNG, content_type="image/png", headers=_GFW_FAIL_HEADERS)
+    # Cache both successes and empty tiles (404s are ~half of requests)
+    if resp.status == 200:
+        _gfw_tile_cache[tile_key] = (resp.body, 200)
+    elif resp.status in (404, 204):
+        _gfw_tile_cache[tile_key] = (b"", resp.status)
+    while len(_gfw_tile_cache) > _GFW_TILE_CACHE_MAX:
+        _gfw_tile_cache.pop(next(iter(_gfw_tile_cache)), None)
+    if resp.status in (404, 204):
+        return Response(_EMPTY_PNG, content_type="image/png", headers=tile_headers)
+    if resp.status != 200:
+        _log_every(("gfw-tile", resp.status), 60, "GFW tile %s/%s/%s: HTTP %s", z, x, y, resp.status)
+        return Response(_EMPTY_PNG, content_type="image/png", headers=_GFW_FAIL_HEADERS)
+    return Response(
+        resp.body,
+        content_type=resp.headers.get("Content-Type", "image/png"),
+        headers=tile_headers,
+    )
+
+
+def _call_with_timeout(fn, timeout_s, *args):
+    """fn(*args) on its own thread; raises concurrent.futures.TimeoutError after timeout_s while fn runs on.
+
+    Not `with ThreadPoolExecutor(...)`: leaving that block waits for fn, so the timeout never applied."""
+    from concurrent.futures import ThreadPoolExecutor
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="timed-call")
+    try:
+        return executor.submit(fn, *args).result(timeout=timeout_s)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 # ---- Pre-cache endpoint ----
@@ -598,7 +770,7 @@ def precache_endpoint():
 
     def _run_precache(dates, delay_s):
         import gc
-        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+        from concurrent.futures import TimeoutError as FuturesTimeout
 
         # Hard timeout per date — prevents ERDDAP hangs from blocking the
         # worker so long that Render's health check fails and restarts it.
@@ -622,13 +794,13 @@ def precache_endpoint():
                     # MUR only and the whole week: a crawl can wait, a reader can't
                     s = get_sst_multiday(date_val, CFG, budget_s=PER_DATE_TIMEOUT - 20,
                                          allow_fallback=False, require_full=True, concurrency=2)
+                    if geo.load_land_gdf(wait_s=60) is None:  # never save a week without the land mask
+                        raise RuntimeError("land mask unavailable")
                     dp = _precache_single_date(s, locked=False)
                     put_cache(date_val, False, dp)
                     return True
 
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(_fetch_and_cache, d)
-                    future.result(timeout=PER_DATE_TIMEOUT)
+                _call_with_timeout(_fetch_and_cache, PER_DATE_TIMEOUT, d)
 
                 _precache_status["done"] += 1
                 logger.info("Pre-cache: cached %s (%d/%d)",
@@ -764,6 +936,55 @@ def cache_wanted():
         return (json.dumps({"error": "unauthorized"}), 401, {"Content-Type": "application/json"})
     return (json.dumps({"weeks": wanted_weeks()}), 200,
             {"Content-Type": "application/json", "Cache-Control": "no-store"})
+
+
+@server.route("/api/debug/threads")
+def debug_threads():
+    """Every thread's Python stack as plain text (runbook: docs/incident-2026-10-16.md).
+
+    Same lock as /api/cache/upload (X-Upload-Token vs CACHE_UPLOAD_TOKEN; 403 when unset). It needs a free
+    request thread to answer; when every thread is stuck, use `kill -USR1 <pid>` (faulthandler, above).
+    """
+    import hmac
+    import traceback
+    token = os.environ.get("CACHE_UPLOAD_TOKEN")
+    if not token:
+        return (json.dumps({"error": "disabled (CACHE_UPLOAD_TOKEN not set)"}), 403, _JSON)
+    supplied = request.headers.get("X-Upload-Token", "")
+    if not (supplied and hmac.compare_digest(supplied, token)):
+        return json.dumps({"error": "unauthorized"}), 401, _JSON
+    frames = sys._current_frames()
+    names = {t.ident: t for t in threading.enumerate()}
+    out = [f"pid {os.getpid()}, {len(frames)} threads, "
+           f"{datetime.now(timezone.utc):%Y-%m-%dT%H:%M:%SZ}"]
+    out += _debug_state_lines()
+    for ident, frame in sorted(frames.items(), key=lambda kv: getattr(names.get(kv[0]), "name", "")):
+        t = names.get(ident)
+        out.append(f"\n--- {t.name if t else '?'} (ident {ident}{', daemon' if t and t.daemon else ''})")
+        out.extend(line.rstrip("\n") for line in traceback.format_stack(frame))
+    return Response("\n".join(out) + "\n", mimetype="text/plain", headers=_PRIVATE)
+
+
+def _debug_state_lines():
+    """A few lines of shared state for /api/debug/threads: requests running, upstreams, locks, recent failures."""
+    lines = []
+    try:
+        now = time.monotonic()
+        running = sorted(((now - t0, what) for t0, what in list(_inflight.values())), reverse=True)
+        lines.append(f"requests running: {len(running)}" + "".join(f"\n  {age:6.1f}s  {what}"
+                                                                  for age, what in running))
+        lines += [f"upstream {u}" for u in outbound.states()]
+        lines.append(f"NOAA readers waiting: {_NOAA_READERS - _noaa_readers._value} of {_NOAA_READERS}")
+        held = [k for k, lk in list(_week_locks.items()) if lk.locked()]
+        lines.append(f"week locks held: {held or 'none'}")
+        lines.append(f"gfw generate-png in flight: {list(_gfw_style_pending)}; failed in the last minute: "
+                     f"{[k for k, t in list(_gfw_style_failed.items()) if now - t < GFW_FAIL_S]}")
+        lines.append(f"weeks failed in the last minute: "
+                     f"{[k for k, (t, _) in list(_failed_recently.items()) if now - t < 60]}")
+        lines.append(f"land mask loaded: {geo.land_ready()}")
+    except Exception as e:  # noqa: BLE001 - diagnostics must never fail
+        lines.append(f"state unavailable: {type(e).__name__}: {e}")
+    return lines
 
 
 # ---- Currents page data (/currents) ----
@@ -906,6 +1127,18 @@ def _get_raw_data(data_key):
     return None
 
 
+def _render_frames(raw_days, lats, bounds, vmin, vmax):
+    """The week's PNG frames for the ImageOverlay at `bounds`, rows resampled to Web Mercator (map/overlay: drawn
+    rows evenly spaced in latitude put the SST up to 5.3 km north of true). The payload carries
+    "frame_format": FRAME_FORMAT with them, so the cache can tell these from frames drawn the old way."""
+    return [sst_to_base64_png(d["arrF"], vmin, vmax, lats=lats, bounds=bounds) for d in raw_days]
+
+
+def _frames_current(entry) -> bool:
+    """A cache entry's PNG frames can be served as they are (drawn in Web Mercator rows, map/overlay)."""
+    return bool(entry.get("frames")) and entry.get("frame_format") == FRAME_FORMAT
+
+
 # ---- Shared helper: build SST payload from raw ERDDAP result ----
 def _build_payload(sst: dict, locked: bool) -> dict:
     """Process raw ERDDAP result into the full payload.
@@ -951,20 +1184,15 @@ def _build_payload(sst: dict, locked: bool) -> dict:
         vmin, vmax = 30.0, 90.0
 
     # Pre-render each day's PNG
-    frames = []
-    dates = []
-    for pd_item in processed_days:
-        arrF_vis = upsample_visual(pd_item["arrF"], 1)
-        png_url = sst_to_base64_png(arrF_vis, vmin, vmax)
-        frames.append(png_url)
-        dates.append(pd_item["date"])
-
     bounds = grid_bounds(lats, lons)
+    frames = _render_frames(processed_days, lats, bounds, vmin, vmax)
+    dates = [pd_item["date"] for pd_item in processed_days]
     meta = sstmeta.meta_from_fetch(sst)
 
     # Store payload — goes to browser via dcc.Store (~7 MB)
     store_payload = {
         "frames": frames,
+        "frame_format": FRAME_FORMAT,
         "dates": dates,
         "bounds": bounds,
         "vmin": float(vmin),
@@ -1108,20 +1336,15 @@ def _rebuild_payload_from_raw(raw_data: dict, locked: bool) -> dict:
         else:
             vmin, vmax = 30.0, 90.0
 
-    frames = []
-    dates = []
-    for rd in raw_days:
-        arrF_vis = upsample_visual(rd["arrF"], 1)
-        png_url = sst_to_base64_png(arrF_vis, vmin, vmax)
-        frames.append(png_url)
-        dates.append(rd["date"])
-
-    res_km = abs(float(lats[1] - lats[0])) * 111.0 if len(lats) > 1 else None
     bounds = grid_bounds(lats, lons)
+    frames = _render_frames(raw_days, lats, bounds, vmin, vmax)
+    dates = [rd["date"] for rd in raw_days]
+    res_km = abs(float(lats[1] - lats[0])) * 111.0 if len(lats) > 1 else None
     meta = raw_data.get("meta") or {}
 
     return {
         "frames": frames,
+        "frame_format": FRAME_FORMAT,
         "dates": dates,
         "bounds": bounds,
         "vmin": float(vmin),
@@ -1144,6 +1367,11 @@ def _build_payload_from_disk_cache(cached: dict, raw_only: bool = False, locked_
 
     If raw_only=True, skip PNG rendering even for raw-only entries
     (used by _get_raw_data which only needs arrays for click lookups).
+
+    Frames are served as saved only when they're the current frame format (_frames_current); older ones (rows
+    evenly spaced in latitude, drawn up to 5.3 km north of true) are re-rendered here from the entry's raw arrays,
+    and _saved_week has the entry rewritten with them. The bounds always come from the grid (geo.grid_bounds,
+    the cell edges; entries from before Oct 2026 saved the first and last cell centres).
     """
     raw_days = []
     dates = []
@@ -1184,22 +1412,23 @@ def _build_payload_from_disk_cache(cached: dict, raw_only: bool = False, locked_
     else:
         vmin, vmax = cached["vmin"], cached["vmax"]
 
-    # Handle raw-only pre-cache entries (frames=None) or cross-mode rerender
+    # Raw-only entries (frames=None), frames drawn the old way, or a cross-mode rerender: render from the raw arrays
+    bounds = grid_bounds(raw_data["lats"], raw_data["lons"])
     frames = cached.get("frames")
-    if (frames is None or need_rerender) and not raw_only:
-        logger.info("Rendering PNGs on the fly (rerender=%s)", need_rerender)
-        frames = []
-        for rd in raw_days:
-            arrF_vis = upsample_visual(rd["arrF"], 1)
-            png_url = sst_to_base64_png(arrF_vis, vmin, vmax)
-            frames.append(png_url)
-    elif frames is None:
+    current = _frames_current(cached)
+    if (not current or need_rerender) and not raw_only:
+        logger.info("Rendering PNGs on the fly (rerender=%s, saved frames %s)", need_rerender,
+                    "none" if not frames else f"format {cached.get('frame_format', 1)}")
+        frames = _render_frames(raw_days, raw_data["lats"], bounds, vmin, vmax)
+        current = True
+    elif not current:
         frames = []  # raw_only mode — caller doesn't need PNGs
 
     store_payload = {
         "frames": frames,
+        "frame_format": FRAME_FORMAT if current else None,
         "dates": dates,
-        "bounds": cached["bounds"],
+        "bounds": bounds,
         "vmin": float(vmin),
         "vmax": float(vmax),
         "res_km": cached.get("res_km"),
@@ -1511,12 +1740,12 @@ def _saved_week(end_date, locked):
     """The saved week ending end_date: this color mode on disk, then memory, then the other mode
     (memory, disk). Returns {"meta", "end", "write", "make"} or None; make() builds the page
     payload and raw arrays only when the week is actually served (see _ready). "write" says what
-    to write back in the background ("upgrade": add PNGs to a raw-only entry, "cross": save this
-    color mode)."""
+    to write back in the background ("upgrade": add PNGs to a raw-only entry, or replace frames drawn the old way,
+    map/overlay.FRAME_FORMAT; "cross": save this color mode)."""
     entry = get_cached(end_date, locked)
     if entry:
         return {"meta": entry_meta(entry, end_date, locked), "end": end_date,
-                "write": "upgrade" if entry.get("frames") is None else None,
+                "write": None if _frames_current(entry) else "upgrade",
                 "make": lambda: _build_payload_from_disk_cache(entry)}
     key = _cache_key(end_date, locked)
     if key in _raw_data_cache:  # fetched moments ago; its disk write may still be running
@@ -1587,66 +1816,118 @@ def _serve(w, locked, requested_end, latest, match, queued=None):
     return w
 
 
+# Request threads that may wait on NOAA at once (fetching a week, or waiting for another visitor's fetch of it).
+# All routes share 16 threads (incident 2026-10-16): the rest get the honest answer at once, so a busy page or an
+# outage can't take them all.
+_NOAA_READERS = max(1, int(os.environ.get("SST_NOAA_READERS", "4")))
+_noaa_readers = threading.BoundedSemaphore(_NOAA_READERS)
+
+
 def _load_week(requested_end, locked, latest):
-    """Return the week to show for requested_end, or raise SSTUnavailable.
+    """Return the week to show for requested_end, or raise SSTUnavailable. Returns within one budget.
 
     Asked past the newest MUR day: the newest week. A saved copy that is final (or was retried in
     the last 30 min) is served as is. Otherwise NOAA is asked within the budget (10 s when a saved
     copy can stand in). Old weeks with no exact copy take the closest saved week within 3 days
     first; recent weeks are always fetched. If NOAA can't send it, the saved copy or the closest
-    saved week is served, and the week is queued for the seeder.
+    saved week is served, and the week is queued for the seeder. NOAA isn't asked at all (the same
+    answer, at once) when it was unreachable in the last minute, when this week failed in the last
+    minute, or when SST_NOAA_READERS other requests are already waiting on NOAA.
     """
     end = min(requested_end, latest) if latest else requested_end
     match = "newest" if end != requested_end else "exact"
     recent = ((latest or date.today()) - end).days <= _RECENT_DAYS
-    lock = _week_lock(end)
-    # Another visitor may be fetching this week: wait for it (then it's in memory), not past
-    # one budget; if that wait runs out, go ahead without the lock.
-    got_lock = lock.acquire(timeout=float(CFG.get("erddap", {}).get("budget_s", 22)) + 3)
+    args = (requested_end, end, match, recent, locked, latest)
+    saved, w = _week_without_noaa(*args)
+    if w is not None:
+        return w
+    if noaa_down(CFG):
+        e = SSTUnavailable(f"NOAA unreachable; not asked for {end}.", "network", requested_end=end)
+        logger.info("Week %s: NOAA was unreachable in the last minute, not asking", end)
+        return _noaa_failed(e, saved, *args, remember=False)
+    if not _noaa_readers.acquire(blocking=False):
+        e = SSTUnavailable(f"{_NOAA_READERS} requests already waiting on NOAA; not asked for {end}.", "busy",
+                           requested_end=end)
+        logger.warning("Week %s: %d requests already waiting on NOAA, answering at once", end, _NOAA_READERS)
+        return _noaa_failed(e, saved, *args, remember=False)
     try:
-        return _load_week_locked(requested_end, end, match, recent, locked, latest)
+        lock = _week_lock(end)
+        # Another visitor may be fetching this week: wait for it (then it's in memory), not past one budget
+        got_lock = lock.acquire(timeout=float(CFG.get("erddap", {}).get("budget_s", 22)) + 3)
+        try:
+            saved, w = _week_without_noaa(*args)  # what that visitor got (or failed to get) answers this one too
+            if w is not None:
+                return w
+            if not got_lock:   # that fetch is still running: answer now rather than start a second one
+                e = SSTUnavailable(f"Another fetch of {end} is still running.", "busy", requested_end=end)
+                return _noaa_failed(e, saved, *args, remember=False)
+            return _week_from_noaa(saved, *args)
+        finally:
+            if got_lock:
+                lock.release()
     finally:
-        if got_lock:
-            lock.release()
+        _noaa_readers.release()
 
 
-def _load_week_locked(requested_end, end, match, recent, locked, latest):
-    """_load_week with the week's lock held (or its wait timed out)."""
+def _week_without_noaa(requested_end, end, match, recent, locked, latest):
+    """(saved, served week or None): what can be answered without asking NOAA. Raises SSTUnavailable for a week
+    NOAA failed to send in the last minute (and nothing saved stands in)."""
     saved = _saved_week(end, locked)
     if saved and not sstmeta.refresh_due(saved["meta"]):
-        return _serve(saved, locked, requested_end, latest, match)
+        return saved, _serve(saved, locked, requested_end, latest, match)
     if saved is None and not recent:
         near = _saved_nearby(end, locked)
         if near:
-            return _serve(near, locked, requested_end, latest, "closest_saved")
+            return saved, _serve(near, locked, requested_end, latest, "closest_saved")
     if saved is not None:
         if time.monotonic() - _refresh_tried.get(str(end), -1e9) < _REFRESH_COOLDOWN_S:
-            return _serve(saved, locked, requested_end, latest, match)
+            return saved, _serve(saved, locked, requested_end, latest, match)
+        return saved, None
+    last_fail = _failed_recently.get(str(end))
+    if last_fail and time.monotonic() - last_fail[0] < _FAIL_REUSE_S:
+        logger.info("Week %s failed %.0fs ago; not asking NOAA again yet", end,
+                    time.monotonic() - last_fail[0])
+        old = last_fail[1]
+        e = SSTUnavailable(str(old), old.reason, requested_end=old.requested_end, errors=old.errors)
+        return saved, _noaa_failed(e, saved, requested_end, end, match, recent, locked, latest, remember=False)
+    return saved, None
+
+
+def _noaa_failed(e, saved, requested_end, end, match, recent, locked, latest, remember=True):
+    """NOAA didn't send the week: the saved copy, else the closest saved week (queued for the seeder), else raise e.
+    remember: don't ask NOAA for this week again for a minute (not for an answer given without asking)."""
+    if remember:
+        _failed_recently[str(end)] = (time.monotonic(), e)
+        if len(_failed_recently) > 256:
+            _failed_recently.clear()
+    if saved:
+        return _serve(saved, locked, requested_end, latest, "older_copy")
+    queued = _queue_for_seeder(end, e.reason)
+    near = _saved_nearby(end, locked, allow_due=True)
+    if near:
+        return _serve(near, locked, requested_end, latest, "closest_saved", queued=queued)
+    e.queued = queued
+    raise e
+
+
+def _week_from_noaa(saved, requested_end, end, match, recent, locked, latest):
+    """Ask NOAA for the week (the week's lock held, or its wait timed out); a NOAA failure goes to _noaa_failed."""
+    args = (requested_end, end, match, recent, locked, latest)
+    if saved is not None:
         _refresh_tried[str(end)] = time.monotonic()
         logger.info("Saved week %s is due a refresh (%s, built %s)", end,
                     saved["meta"].get("source"), saved["meta"].get("built_at"))
     try:
-        last_fail = _failed_recently.get(str(end))
-        if not saved and last_fail and time.monotonic() - last_fail[0] < _FAIL_REUSE_S:
-            logger.info("Week %s failed %.0fs ago; not asking NOAA again yet", end,
-                        time.monotonic() - last_fail[0])
-            raise last_fail[1]
         sst = get_sst_multiday(end, CFG, budget_s=_REFRESH_BUDGET_S if saved else None)
     except SSTUnavailable as e:
-        _failed_recently[str(end)] = (time.monotonic(), e)
-        if len(_failed_recently) > 256:
-            _failed_recently.clear()
-        if saved:
-            return _serve(saved, locked, requested_end, latest, "older_copy")
-        queued = _queue_for_seeder(end, e.reason)
-        near = _saved_nearby(end, locked, allow_due=True)
-        if near:
-            return _serve(near, locked, requested_end, latest, "closest_saved", queued=queued)
-        e.queued = queued
-        raise
+        return _noaa_failed(e, saved, *args)
     _failed_recently.pop(str(end), None)
     store, raw = _build_payload(sst, locked)
-    fresh = {"store": store, "raw": raw, "meta": raw["meta"], "end": end, "write": "fresh"}
+    # Without the land mask (still loading, or its download failed) the week is shown but not saved
+    fresh = {"store": store, "raw": raw, "meta": raw["meta"], "end": end, "write": "fresh",
+             "save": geo.land_ready()}
+    if not fresh["save"]:
+        logger.warning("Week %s built without the land mask (not loaded yet); serving it unsaved", end)
     if saved and _week_score(fresh["meta"]) < _week_score(saved["meta"]):
         return _serve(saved, locked, requested_end, latest, "older_copy")
     queued = False
@@ -1729,7 +2010,9 @@ def _failure_message(err, end_date):
         msg = f"NOAA's data server turned down the request for {span}."
     elif reason == "dead":
         msg = f"NOAA's temperature dataset for {span} isn't answering right now."
-    elif reason in ("busy", "network"):
+    elif reason == "network":
+        msg = f"We can't reach NOAA's data server right now, so {span} didn't load."
+    elif reason == "busy":
         msg = f"NOAA's data server is busy and didn't send {span} in time."
     else:
         msg = f"Something went wrong loading {span}."
@@ -1788,7 +2071,9 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, saved_clicks, end_date_str
             raise dash.exceptions.PreventUpdate
         end_date_str = str(trig.get("index") or "")
 
-    latest = latest_mur_date(CFG, max_wait=3.0)  # cached hourly; None if NOAA never answered
+    # Never waited for here (cached hourly, refreshed in the background; None until NOAA first answers): the
+    # fetch below clamps to the newest day itself, inside its budget and the NOAA reader limit
+    latest = latest_mur_date(CFG, block=False)
     end_date = None
     if end_date_str:
         try:
@@ -1824,7 +2109,7 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, saved_clicks, end_date_str
     store_payload = w["store"]
     # Click callbacks look up the raw arrays by this key
     store_payload["data_key"] = _cache_key(w["end"], locked)
-    if w["write"]:
+    if w["write"] and w.get("save", True):
         threading.Thread(target=_write_week, args=(w, locked), daemon=True).start()
     num_days = len(store_payload["frames"])
     logger.info("Served %s %s (%s, %s) in %.1fs", w["meta_out"]["source"], w["end"],
@@ -2858,6 +3143,29 @@ app.clientside_callback(
 )
 
 
+# ---- Finish Dash's setup at import, not on the first request (relaunch, Oct 16 2026) ----
+# Dash 4.0 builds the page's script and stylesheet lists (it walks assets/) in a before_request hook,
+# `Dash._setup_server`, that marks itself done *before* it starts. The listening socket (opened by gunicorn's master)
+# queues connections while the worker is still importing this module, so the first page loads after a boot are
+# served together: the ones that skipped the half-done setup got a page with no /assets at all (no sst.js, so no
+# window.SST: map taps and the fishing-activity tile retry did nothing; no labs.js, currents.js or gotone.css).
+# Reproduced: 8 of 32 cold-boot /sst loads, 4 at once. Running it here, on one thread before the worker serves
+# anything, closes that window; Dash's own hook then returns at once (tools/boot_sst_pages.mjs).
+def _finish_dash_setup():
+    setup = getattr(app, "_setup_server", None)
+    if setup is None:  # a Dash without it: nothing to do here, but say so (CLAUDE.md, Dash 4.0 Gotchas)
+        logger.warning("dash.Dash has no _setup_server: can't finish Dash's setup at import")
+        return
+    with server.app_context():
+        setup()
+    scripts = [os.path.basename(f) for f in getattr(app, "_assets_files", [])]
+    if "sst.js" not in scripts:
+        logger.warning("Dash setup at import: assets/sst.js not among the page's assets (%s)", scripts)
+
+
+_finish_dash_setup()
+
+
 # ---- Startup pre-warm: populate server-side cache from disk ----
 # Only loads from DISK cache (fast, no ERDDAP). Heavy ERDDAP fetches happen
 # on first user request. This keeps startup lightweight so Render's health
@@ -2884,7 +3192,7 @@ def _prewarm_cache():
     # from NOAA; load it now so that fetch doesn't pay for it inside its time budget.
     try:
         from data.geo import load_land_gdf
-        load_land_gdf()
+        load_land_gdf(wait_s=60)
     except Exception:
         logger.warning("Pre-warm: land mask load failed", exc_info=True)
 

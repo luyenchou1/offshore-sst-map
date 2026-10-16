@@ -18,7 +18,8 @@
 // and shows that day; a spot card; a tap inside The Dump reads that point; a tap next to a spot at
 // zoom 10 reads the water; measure (true + magnetic, survives a day change, Clear); the status strip
 // with a fake payload "meta" (source, freshness, closest week) and an OISST legend warning; and the
-// analytics events the page sends (GotOneLabs._log). Exit code 1 on any failure.
+// analytics events the page sends (GotOneLabs._log). Also window.SST set up on the map, and (laptop) the SST image
+// on its bounds with the color drawn under 10 taps matching each tap's reading. Exit code 1 on any failure.
 
 import { execSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
@@ -105,6 +106,8 @@ async function run(size) {
     await sleep(1200);
     check(size, 'week loads (overlay shown, loading hidden)', await page.evaluate(() =>
         !!document.querySelector('img.leaflet-image-layer[src^="data:"]')));
+    check(size, 'window.SST set up and hooked to the map', await page.evaluate(() => !!(window.SST && window.SST.ready &&
+        window.SST.ready() && window.SST._state.map === window.__maps[0])));
     await shot(page, size, 'first');
 
     // ---- chrome: header, strip, legend, layout ----
@@ -189,6 +192,72 @@ async function run(size) {
     const zinfo = await page.evaluate(() => { const m = window.__maps[0]; const a = m.latLngToContainerPoint([41.05, -71.08]), c = m.latLngToContainerPoint([41.05, -71.158]); return `zoom ${m.getZoom()}, ${Math.round(Math.hypot(a.x - c.x, a.y - c.y))} px from the spot; click ${JSON.stringify(window.dash_component_api.getLayout('sst-map').props.clickData.containerPoint)}`; });
     check(size, 'next to a spot at zoom 10: reads the water', /°F/.test(near) && !/Coxes/.test(near), near.split(' | ').slice(0, 1).join('') + '; ' + zinfo);
     await setView(40.4, -71.6, 7); await sleep(1000);
+
+    // ---- the colors are where the readings are (laptop only) ----
+    // At water points on MUR cell centres (2-decimal lat/lon), at zoom 9: the tap readout (raw arrays, server side)
+    // vs the color Leaflet draws under the tap, decoded through the legend's own gradient. Before the relaunch fix
+    // the image sat up to 5.3 km north of true (map/overlay.py). Also: the overlay sits exactly on its bounds.
+    if (size === 'desk') {
+        const PTS = [[40.20, -71.00], [39.80, -72.40], [40.60, -72.80], [41.30, -69.60], [41.25, -71.40],
+                     [41.20, -70.75], [42.60, -70.40], [43.00, -69.40], [39.30, -73.50], [40.90, -70.70]];
+        const placed = await page.evaluate(() => {
+            const m = window.__maps[0], img = document.querySelector('img.leaflet-image-layer');
+            const b = window.dash_component_api.getLayout('sst-store').props.data.bounds;
+            const c = m.getContainer().getBoundingClientRect(), r = img.getBoundingClientRect();
+            const nw = m.latLngToContainerPoint([b[1][0], b[0][1]]), se = m.latLngToContainerPoint([b[0][0], b[1][1]]);
+            return Math.max(Math.abs(r.left - c.x - nw.x), Math.abs(r.top - c.y - nw.y),
+                            Math.abs(r.right - c.x - se.x), Math.abs(r.bottom - c.y - se.y));
+        });
+        check(size, 'the SST image sits on its bounds (Web Mercator)', placed <= 1.01, `off by ${placed.toFixed(2)} px`);
+        const bad = [];
+        let last = '';
+        for (const [lat, lng] of PTS) {
+            await setView(lat, lng, 9); await sleep(900);
+            const box = await page.locator('#sst-map').boundingBox();
+            const prev = await tipText();
+            await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+            await waitNewTip(prev);
+            last = await tipText();
+            const t = /(-?\d+(?:\.\d)?) °F/.exec(last);
+            const got = await page.evaluate(() => {
+                const m = window.__maps[0], img = document.querySelector('img.leaflet-image-layer');
+                const d = window.dash_component_api.getLayout('sst-store').props.data;
+                const ll = window.dash_component_api.getLayout('sst-map').props.clickData.latlng;
+                const c = m.getContainer().getBoundingClientRect(), r = img.getBoundingClientRect();
+                const p = m.latLngToContainerPoint([ll.lat, ll.lng]);
+                const fx = (c.x + p.x - r.left) / r.width, fy = (c.y + p.y - r.top) / r.height;
+                const cv = document.createElement('canvas');
+                cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+                const g = cv.getContext('2d');
+                g.drawImage(img, 0, 0);
+                const px = g.getImageData(Math.floor(fx * cv.width), Math.floor(fy * cv.height), 1, 1).data;
+                // the legend's gradient, as matplotlib's 256-color table (map/overlay.array_to_rgba)
+                const bar = [...document.querySelectorAll('#legend-container *')]
+                    .map(e => getComputedStyle(e).backgroundImage).find(s => /gradient/.test(s)) || '';
+                const stops = [...bar.matchAll(/rgb\((\d+), (\d+), (\d+)\)/g)].map(x => [+x[1], +x[2], +x[3]]);
+                let best = -1, bestD = 1e9;
+                for (let i = 0; i < 256 && stops.length > 1; i++) {
+                    const x = i / 255 * (stops.length - 1), k = Math.min(stops.length - 2, Math.floor(x)), f = x - k;
+                    const col = [0, 1, 2].map(j => stops[k][j] * (1 - f) + stops[k + 1][j] * f);
+                    const dd = Math.hypot(col[0] - px[0], col[1] - px[1], col[2] - px[2]);
+                    if (dd < bestD) { bestD = dd; best = i; }
+                }
+                return { rgba: [...px], idx: best, dist: bestD, vmin: d.vmin, vmax: d.vmax, lat: ll.lat, lng: ll.lng };
+            });
+            const T = t ? +t[1] : null;
+            const v = got.vmin + (got.idx + 0.5) / 256 * (got.vmax - got.vmin);
+            const ok = T !== null && got.rgba[3] === 255 && got.dist < 6 &&
+                (Math.abs(v - T) <= 0.35 || (T <= got.vmin && got.idx <= 2) || (T >= got.vmax && got.idx >= 253));
+            if (!ok) { bad.push(`${lat},${lng}: reads ${T} °F, drawn ~${v.toFixed(1)} (${got.rgba.join(',')})`); }
+        }
+        check(size, `the colors drawn under ${PTS.length} taps match their readings`, !bad.length, bad.join('; '));
+        if (last) {                                      // a second tap on the open reading closes it
+            const box = await page.locator('#sst-map').boundingBox();
+            await sleep(800);
+            await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        }
+        await setView(40.4, -71.6, 7); await sleep(1000);
+    }
 
     // ---- measure ----
     await openDrawer();

@@ -3,7 +3,19 @@
  *
  * Dash serves every /assets/*.js on every page, so this stays inert until a
  * Leaflet map whose container id is "sst-map" is created (L.Map.addInitHook,
- * as in currents.js). This is not the client-side engine (docs/sst-review.md
+ * as in currents.js).
+ *
+ * Setup (relaunch, Oct 16 2026): window.SST is defined at once, whatever else
+ * is on the page (none of classify / status / marks / fetchError needs Leaflet
+ * to exist yet), and only once (a second copy of this file keeps the first
+ * one's state and hooks). The Leaflet hooks go in as soon as window.L exists
+ * (dash-leaflet's bundle), retried every 50 ms until it does; a map or a
+ * fishing-activity layer made before that is adopted, not missed. Page
+ * changes: react-leaflet removes the map ("unload"), the next one is hooked
+ * as it's made. (The "window.SST missing after a boot" bug was the server:
+ * Dash sent pages with no /assets at all; app._finish_dash_setup.)
+ *
+ * This is not the client-side engine (docs/sst-review.md
  * E1, sprint 2): temperatures still come from the server (app.py
  * render_selection). What runs here, called from small clientside callbacks
  * in app.py:
@@ -17,10 +29,12 @@
  *               field may be missing: old cache entries have none).
  *   the first view: the fishing grounds (phones) or the whole area, then the
  *               reader's last view (localStorage, per browser).
+ *   gfwRetry()  fishing-activity tiles the server was too busy for (503) are
+ *               asked for again after a short pause.
  */
 (function () {
     "use strict";
-    if (typeof window.L === "undefined") { return; }
+    if (window.SST && window.SST._setup) { return; }       // already set up by an earlier copy
 
     var VIEW_KEY = "gotone-sst-view-v1";
     var AREA = [[38.8, -74.6], [43.8, -68.8]];            // the whole mapped area
@@ -33,7 +47,7 @@
     var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     var DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     var DAY_MS = 86400000;
-    var S = { map: null, pointer: null, statusHtml: "", saveTimer: null };
+    var S = { map: null, pointer: null, statusHtml: "", saveTimer: null, hooked: false, waits: 0 };
 
     // The last press's pointer type: a finger gets a bigger spot target than a mouse.
     document.addEventListener("pointerdown", function (ev) { S.pointer = ev.pointerType || null; }, true);
@@ -270,7 +284,7 @@
             saved.lat > 36 && saved.lat < 46 && saved.lng > -78 && saved.lng < -65) {
             map.setView([saved.lat, saved.lng], saved.z, { animate: false });
         } else {
-            if (map.getBoundsZoom(AREA, false, L.point(8, 8)) >= GROUNDS.zoom) {
+            if (map.getBoundsZoom(AREA, false, window.L.point(8, 8)) >= GROUNDS.zoom) {
                 map.fitBounds(AREA, { animate: false, padding: [4, 4] });
             } else {
                 map.setView(GROUNDS.center, GROUNDS.zoom, { animate: false });
@@ -286,10 +300,14 @@
         });
     }
 
-    L.Map.addInitHook(function () {
-        var c = this.getContainer && this.getContainer();
-        if (!c || c.id !== "sst-map") { return; }
-        var map = this;
+    // ---------------------------------------------------- Leaflet hooks --
+    // Every Leaflet map goes through here once (as it's made, or adopted later); only "sst-map" is ours.
+    function attachMap(map) {
+        if (map._gotoneSST) { return; }
+        var c = map.getContainer && map.getContainer();
+        if (!c || !c.id) { return; }                         // no id yet: look again on its next event
+        map._gotoneSST = c.id === "sst-map" ? "sst" : "other";
+        if (map._gotoneSST !== "sst") { return; }
         S.map = map;
         map.whenReady(function () { setTimeout(function () { if (S.map === map) { firstView(map); } }, 0); });
         map.on("unload", function () { if (S.map === map) { S.map = null; S.statusHtml = ""; } });
@@ -299,7 +317,59 @@
             ro.observe(c);
             map.on("unload", function () { ro.disconnect(); });
         }
-    });
+        if (map.eachLayer) { map.eachLayer(hookTiles); }     // a fishing-activity layer made before we were
+    }
+
+    // Fishing-activity tiles the server was too busy for (HTTP 503: it serves at most a few GFW calls at once
+    // so a zoom's 30-50 tiles can't take every request thread; incident 2026-10-16) are asked for again after a
+    // short, jittered pause, up to 4 times. A GFW failure comes back as an empty 200 tile and isn't retried.
+    var GFW_RETRIES = 4;
+    function gfwRetry(e) {
+        var tile = e && e.tile;
+        if (!tile || !tile.src || tile.src.indexOf("/api/gfw/") < 0) { return; }
+        var n = (tile._gfwTries || 0) + 1;
+        if (n > GFW_RETRIES) { return; }
+        tile._gfwTries = n;
+        var base = tile.src.replace(/([?&])retry=\d+(&|$)/, function (m, a, b) { return b ? a : ""; });
+        setTimeout(function () {
+            if (!tile.isConnected) { return; }                  // panned or zoomed away meanwhile
+            tile.src = base + (base.indexOf("?") >= 0 ? "&" : "?") + "retry=" + n;
+        }, 500 * n + Math.random() * 700);
+    }
+    function hookTiles(layer) {
+        var L = window.L;
+        if (!layer || layer._gotoneGfw || !(L.TileLayer && layer instanceof L.TileLayer)) { return; }
+        if (typeof layer._url !== "string" || layer._url.indexOf("/api/gfw/") < 0) { return; }
+        layer._gotoneGfw = true;
+        layer.on("tileerror", gfwRetry);
+    }
+
+    // Once window.L (dash-leaflet's bundle) exists. Assets load after dash-leaflet and before the Dash renderer,
+    // so normally that's at once and no map exists yet. If not, a map already on the page is adopted the next time
+    // it fires an event: while it's still being set up, or at the reader's first pan, zoom or tap (Leaflet has no
+    // way to find a map from its container).
+    function install() {
+        var L = window.L;
+        if (!L || !L.Map || !L.Map.addInitHook || !L.TileLayer || !L.TileLayer.addInitHook) { return false; }
+        if (L._gotoneSST) { S.hooked = true; return true; }
+        L._gotoneSST = true;
+        L.Map.addInitHook(function () { attachMap(this); });
+        L.TileLayer.addInitHook(function () { hookTiles(this); });
+        if (S.waits > 0 || document.querySelector(".leaflet-container")) {
+            var fire = L.Map.prototype.fire;
+            L.Map.prototype.fire = function () {
+                if (!this._gotoneSST) { attachMap(this); }
+                return fire.apply(this, arguments);
+            };
+        }
+        S.hooked = true;
+        return true;
+    }
+    (function retry() {
+        if (install()) { return; }
+        S.waits++;
+        setTimeout(retry, S.waits < 600 ? 50 : 1000);    // 30 s at 50 ms, then once a second
+    })();
 
     // A failed Load week (the sidebar's red message, which phones don't see:
     // the drawer closes). The map still shows the last week, so the strip keeps
@@ -321,6 +391,8 @@
         status: status,
         marks: marks,
         fetchError: fetchError,
+        ready: function () { return S.hooked; },        // Leaflet hooks installed
+        _setup: true,
         _state: S
     };
 })();
