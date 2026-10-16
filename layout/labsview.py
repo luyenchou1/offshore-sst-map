@@ -146,8 +146,10 @@ def build_labs_page():
             ),
             html.Footer(
                 html.Div(
-                    f"© {date.today().year} GotOne Media LLC · Visits are counted anonymously: "
-                    "no cookies, nothing about you is stored.",
+                    f"© {date.today().year} GotOne Media LLC · Visits and feature use are "
+                    "counted anonymously by GotOne Labs: no cookies, nothing about you is "
+                    "stored, Do Not Track respected. Feedback notes are private and never "
+                    "published.",
                     className="labs-wrap",
                 ),
                 className="labs-foot",

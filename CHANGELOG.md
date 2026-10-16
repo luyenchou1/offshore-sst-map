@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-10-16 - Labs analytics: feature use, "Was this helpful?", one counter for every Labs tool
+
+### Added
+- **One counting service for all Labs tools**, shared with The Striper Recount (striperrecount.gotoneapp.com posts to the same endpoints cross-origin). The rules are written down in `docs/labs-analytics-contract.md`. Page ids now include `recount` and `recount/<page>`.
+- **Feature use** (`POST /api/event`): each tool reports what people actually do, at most once per page view per feature, so the numbers read as "page views that did X". SST: loading a week, playing the animation, changing the day, tapping for a temperature or a fishing spot, measuring, opening the spot list, turning on the chart / bathymetry / fishing activity layers, locking the scale, changing opacity. Currents: switching views, picking a day / strength / week, Now, picking a NOAA station or a harbor-inlet estimate, opening How it works, setting the time on the chart, play, step, speed, depth, full screen. Only real changes count, never the defaults a page starts with, and the server ignores anything not on its whitelist.
+- **"Was this helpful?"** at the bottom of the SST and Currents sidebars (and their phone drawers): thumbs up or down, then "Thanks!" and an optional private note. Votes and notes are never published; they appear only on the private stats page. Spam guards: a hidden honeypot field, at least 3 seconds on the page, 500 characters, 5 posts per visitor per tool per day and 300 a day in all; our sites only.
+- **Stats page rebuilt** (`/labs/stats`): per tool, views and daily visitors (The Striper Recount by page), where visits came from, feature use, Helpful votes; the latest notes; the by-day table per tool; 7 / 30 / 90 / 365-day periods; readable on a phone.
+- `tools/test_labstats.py`: 24 checks of the counting and feedback rules, the dashboard and the redirects.
+- `LABS_STATS_DIR` (optional) moves the stats database; tests use a temp dir.
+
+### Changed
+- Visitor hashes are still deleted after 90 days, but each day's unique counts are kept first, so long periods keep their visitor numbers. Existing counts carry over unchanged.
+- The host and home redirects now skip `/api/*`, `/_dash*`, `/assets/*` and `/labs/stats` explicitly, on every host.
+- Labs home footer: visits and feature use are counted anonymously, no cookies, nothing about you is stored, Do Not Track respected; feedback notes are private and never published.
+
 ## 2026-10-16 — The Striper Recount joins Labs; the Labs home moves to gotoneapp.com/labs
 
 ### Added

@@ -96,6 +96,38 @@
         if (dc && dc.set_props) { try { dc.set_props(id, props); } catch (e) { /* page gone */ } }
     }
 
+    // Anonymous feature use (assets/labs.js; names in data/labstats.EVENTS["currents"]).
+    // GotOneLabs sends each name at most once per page view, only on the live hosts.
+    function track(name) {
+        var L = window.GotOneLabs;
+        if (L && L.event) { L.event(name, { tool: "currents" }); }
+    }
+
+    function trackSpot(id) {
+        var inlet = (S.inletSpots || []).some(function (c) { return c.id === id; });
+        track(inlet ? "inlet" : "spot");
+    }
+
+    // A control the user changed (app.py's forwarders call this only when Dash
+    // reports a real change, not for the defaults a new page hands over).
+    function noteUse(ctrl, v) {
+        if (ctrl === "mode") {
+            track(v === "cycle" ? "view_cycle" : v === "week" ? "view_weeks" : "view_today");
+        } else if (ctrl === "station") {
+            if (v) { trackSpot(v); }
+        } else if (ctrl === "date") {
+            if (v && String(v).slice(0, 10) !== todayET()) { track("date"); }   // "Now" isn't a pick
+        } else if (ctrl === "week") {
+            track("week");
+        } else if (ctrl === "strength") {
+            track("strength");
+        } else if (ctrl === "rate") {
+            track("speed");
+        } else if (ctrl === "depth") {
+            track("depth");
+        }
+    }
+
     var _off = {};
     var _parts = new Intl.DateTimeFormat("en-US", {
         timeZone: TZ, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit",
@@ -1111,10 +1143,12 @@
             var exit = document.exitFullscreen || document.webkitExitFullscreen;
             if (exit) { exit.call(document); }
         } else if (fsEnabled()) {
+            track("fullscreen");
             var el = document.documentElement, req = el.requestFullscreen || el.webkitRequestFullscreen;
             var p = req && req.call(el);
             if (p && p.catch) { p.catch(function () { /* refused: stay windowed */ }); }
         } else if (embedded()) {
+            track("fullscreen");
             window.open(window.location.href, "_blank", "noopener");
         }
     }
@@ -1301,7 +1335,7 @@
         S.pendingStation = null;
         if (id === S.station) { return; }
         S.station = id;
-        if (fromMap) { setProps("currents-station", { value: id }); }
+        if (fromMap) { trackSpot(id); setProps("currents-station", { value: id }); }
         updateStationStyles();
         updateClock();
         buildChart();
@@ -1802,6 +1836,7 @@
         if (t === null) { return; }
         S.scrubbing = true;
         S.preview = null;
+        track("scrub");
         showReadout(ev.touches ? "touch" : "drag");
         pause();
         seek(t);
@@ -2207,6 +2242,7 @@
         },
         // "Now" button: today's date (Eastern) with the clock at this moment.
         goNow: function () {
+            track("now");
             var today = todayET();
             if (S.date !== today) {
                 S.date = today;
@@ -2234,14 +2270,16 @@
         togglePlay: function () {
             S.playing = !S.playing;
             S.wantPlay = S.playing;
-            if (S.playing) { startLoop(); }
+            if (S.playing) { startLoop(); track("play"); }
             updatePlayBar();
             return S.playing;
         },
         step: function (sec) {
+            track("step");
             pause();
             seek(S.t + (+sec || 0));
         },
+        noteUse: noteUse,                   // app.py: a control the user changed
         _state: S,                          // for poking at in the browser console
         _selftest: selftest,
         _inletSelftest: inletSelftest

@@ -110,13 +110,17 @@ def build_sidebar():
                                     "marginBottom": "0.25rem",
                                 },
                             ),
-                            dcc.Slider(
-                                id="frame-slider",
-                                min=0,
-                                max=6,
-                                step=1,
-                                value=6,
-                                marks=None,
+                            # Dragging the day slider counts as "step" (assets/labs.js)
+                            html.Div(
+                                dcc.Slider(
+                                    id="frame-slider",
+                                    min=0,
+                                    max=6,
+                                    step=1,
+                                    value=6,
+                                    marks=None,
+                                ),
+                                **{"data-labs-event": "step", "data-labs-tool": "sst"},
                             ),
                             html.Div(
                                 [
@@ -311,6 +315,8 @@ def build_sidebar():
                         ],
                         className="mt-2",
                     ),
+                    # "Was this helpful?" (filled by assets/labs.js; posts to /api/feedback)
+                    html.Div(className="labs-helpful", **{"data-tool": "sst"}),
                     html.Div(
                         "v1.0",
                         style={

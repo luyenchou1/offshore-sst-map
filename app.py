@@ -41,6 +41,7 @@ from layout.catchview import build_catch_page
 from layout.currentsview import build_currents_page
 from layout.labsview import build_labs_page
 from layout.mapview import build_map
+from layout.statsview import render_stats_page
 from layout.sidebar import build_sidebar
 from map.colorscale import build_legend_component, compute_color_bounds
 from map.measure import format_measurement
@@ -112,10 +113,18 @@ def labs_href():
 # Tools hosted elsewhere, so labs.gotoneapp.com/<name> works like the app's own pages
 EXTERNAL_TOOLS = {"/striper-recount": "https://striperrecount.gotoneapp.com/"}
 
+# Paths no host / home redirect may ever touch: the APIs (beacons, uploads, GFW tiles; a
+# redirected POST turns into a GET and loses its body), Dash's own routes, assets, the stats.
+_NEVER_REDIRECT = ("/api/", "/_dash", "/assets/", "/_favicon", "/_reload", "/labs/stats")
+
+
+def _redirectable():
+    return request.method == "GET" and not request.path.startswith(_NEVER_REDIRECT)
+
 
 @server.before_request
 def redirect_external_tools():
-    if request.method != "GET":
+    if not _redirectable():
         return None
     to = EXTERNAL_TOOLS.get(request.path.rstrip("/").lower())
     return redirect(to, code=302) if to else None
@@ -125,7 +134,7 @@ def redirect_external_tools():
 def redirect_labs_home():
     """With LABS_HOME_URL set, the app's own Labs home redirects to it (302, so it can move later).
     /labs/stats and the APIs are untouched; the old host's "/" is still the SST map."""
-    if not LABS_HOME_URL or request.method != "GET":
+    if not LABS_HOME_URL or not _redirectable():
         return None
     path = request.path.rstrip("/") or "/"
     if path == "/labs" or (path == "/" and _request_host() not in LEGACY_HOSTS):
@@ -135,11 +144,9 @@ def redirect_labs_home():
 
 @server.before_request
 def redirect_old_host():
-    if not LABS_HOST or request.method != "GET" or _request_host() not in LEGACY_HOSTS:
+    if not LABS_HOST or not _redirectable() or _request_host() not in LEGACY_HOSTS:
         return None
     path = request.path
-    if path.startswith(("/api/", "/_dash", "/assets/", "/_favicon", "/_reload")):
-        return None
     qs = request.query_string.decode()
     return redirect(f"https://{LABS_HOST}{'/sst' if path in ('', '/') else path}"
                     + (f"?{qs}" if qs else ""), code=301)
@@ -159,29 +166,80 @@ def set_iframe_headers(response):
     return response
 
 
-# ---- Anonymous page counter (data/labstats.py; posted by assets/labs.js) ----
+# ---- GotOne Labs analytics (data/labstats.py; docs/labs-analytics-contract.md) ----
+# Beacons from assets/labs.js and from The Striper Recount (striperrecount.gotoneapp.com, cross-
+# origin): a JSON string sent as text/plain by navigator.sendBeacon, so no CORS preflight. Every
+# endpoint answers 204 whatever happens; counting must never fail a page.
 _OUR_ORIGIN = __import__("re").compile(
     r"^https?://(([a-z0-9-]+\.)*gotoneapp\.com|[a-z0-9-]+\.onrender\.com|localhost|127\.0\.0\.1)(:\d+)?$")
 
 
+def _origin_ok(required=False):
+    """Hits and events: no Origin is fine, a foreign one isn't. Feedback: must be ours."""
+    origin = request.headers.get("Origin", "")
+    return bool(_OUR_ORIGIN.match(origin)) if origin else not required
+
+
+def _beacon_json(limit):
+    """The beacon body as a dict, or None (too long, not JSON, not an object)."""
+    try:
+        if (request.content_length or 0) > limit:
+            return None
+        raw = request.stream.read(limit + 1)
+        if len(raw) > limit:
+            return None
+        j = json.loads(raw.decode("utf-8", "replace") or "{}")
+    except (ValueError, OSError):
+        return None
+    return j if isinstance(j, dict) else None
+
+
+def _visitor():
+    """(ip, user agent, DNT/GPC on). Only hashed, never stored (labstats)."""
+    ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0]
+    dnt = request.headers.get("DNT") == "1" or request.headers.get("Sec-GPC") == "1"
+    return ip.strip(), request.headers.get("User-Agent", ""), dnt
+
+
 @server.route("/api/hit", methods=["POST"])
 def labs_hit():
-    """One page view: {"p": "labs"|"sst"|"currents", "r": referrer host}. Always 204."""
-    origin = request.headers.get("Origin", "")
-    if origin and not _OUR_ORIGIN.match(origin):
-        return "", 204
-    try:
-        j = json.loads(request.get_data(as_text=True)[:500] or "{}")
-    except ValueError:
-        return "", 204
-    if isinstance(j, dict):
-        ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0]
-        dnt = request.headers.get("DNT") == "1" or request.headers.get("Sec-GPC") == "1"
+    """One page view: {"p": page id (labstats.PAGES), "r": referrer host}. Always 204."""
+    j = _beacon_json(500) if _origin_ok() else None
+    if j is not None:
+        ip, ua, dnt = _visitor()
         try:
-            labstats.record(str(j.get("p", ""))[:20], str(j.get("r", ""))[:120], ip.strip(),
-                            request.headers.get("User-Agent", ""), dnt=dnt)
+            labstats.record(str(j.get("p", ""))[:20], str(j.get("r", ""))[:120], ip, ua, dnt=dnt)
         except Exception:                       # never fail a page over counting
             logger.warning("labs hit not recorded", exc_info=True)
+    return "", 204
+
+
+@server.route("/api/event", methods=["POST"])
+def labs_event():
+    """One feature use: {"t": tool, "e": event in labstats.EVENTS[tool]}. Always 204."""
+    j = _beacon_json(500) if _origin_ok() else None
+    if j is not None:
+        ip, ua, dnt = _visitor()
+        try:
+            labstats.record_event(str(j.get("t", ""))[:20], str(j.get("e", ""))[:40], ip, ua,
+                                  dnt=dnt)
+        except Exception:
+            logger.warning("labs event not recorded", exc_info=True)
+    return "", 204
+
+
+@server.route("/api/feedback", methods=["POST"])
+def labs_feedback():
+    """The Helpful vote and/or note: {"t", "v": "up"|"down"|"", "n", "w": honeypot, "d": seconds
+    on the page}. Needs our Origin; kept even with DNT/GPC (the reader chose to send it). 204."""
+    j = _beacon_json(4096) if _origin_ok(required=True) else None
+    if j is not None:
+        ip, ua, _ = _visitor()
+        try:
+            labstats.record_feedback(str(j.get("t", ""))[:20], j.get("v"), j.get("n"), j.get("w"),
+                                     j.get("d"), ip, ua)
+        except Exception:
+            logger.warning("labs feedback not recorded", exc_info=True)
     return "", 204
 
 
@@ -204,60 +262,24 @@ def _stats_days():
         return 30
 
 
+_PRIVATE = {"Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow"}
+
+
 @server.route("/api/labs/stats")
 def labs_stats_json():
     if not _stats_allowed():
         abort(404)
-    return jsonify(labstats.summary(_stats_days()))
+    resp = jsonify(labstats.summary(_stats_days()))
+    resp.headers.update(_PRIVATE)
+    return resp
 
 
 @server.route("/labs/stats")
 def labs_stats_page():
     if not _stats_allowed():
         abort(404)
-    from html import escape
-    days = _stats_days()
-    s = labstats.summary(days)
-    names = {"labs": "Labs home", "sst": "Offshore SST", "currents": "Currents"}
-    key = escape(request.args.get("key", ""))
-
-    def cells(row):
-        return "".join(f"<td>{row[p]['views']}</td><td class=v>{row[p]['visitors']}</td>"
-                       for p in labstats.PAGES)
-
-    head = "".join(f"<th colspan=2>{names[p]}</th>" for p in labstats.PAGES)
-    sub = "<th>views</th><th>visitors</th>" * len(labstats.PAGES)
-    period = {p: {"views": sum(d[p]["views"] for d in s["daily"]),
-                  "visitors": sum(d[p]["visitors"] for d in s["daily"])} for p in labstats.PAGES}
-    rows = "".join(f"<tr><td>{d['day']}</td>{cells(d)}</tr>" for d in s["daily"])
-    totals = "".join(f"<td colspan=2>{s['totals'].get(p, {}).get('views', 0)}</td>"
-                     for p in labstats.PAGES)
-    refs = "".join(f"<tr><td>{escape(r['host'])}</td><td>{names.get(r['page'], r['page'])}</td>"
-                   f"<td>{r['views']}</td></tr>" for r in s["referrers"]) or \
-        "<tr><td colspan=3>None yet</td></tr>"
-    links = " · ".join(f"<a href='?key={key}&days={n}'>{n} days</a>" for n in (7, 30, 90, 365))
-    html_out = f"""<!doctype html><html><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1"><meta name=robots content=noindex>
-<title>GotOne Labs · visits</title><style>
-body{{font:15px/1.45 "Helvetica Neue",Helvetica,Arial,sans-serif;margin:0;background:#f3f5fa;color:#0f1d3d}}
-.w{{max-width:900px;margin:0 auto;padding:20px 16px 48px}} h1{{color:#091d50;margin:0 0 4px}}
-h2{{font-size:1.05rem;margin:28px 0 8px;color:#091d50}} .m{{color:#44506a;font-size:.9rem}}
-table{{border-collapse:collapse;width:100%;background:#fff;border-radius:10px;overflow:hidden}}
-th,td{{padding:7px 10px;border-bottom:1px solid #e5e9f2;text-align:right;white-space:nowrap}}
-th:first-child,td:first-child{{text-align:left}} th{{background:#091d50;color:#fff;font-weight:600}}
-.v{{color:#44506a}} tfoot td{{font-weight:700}} .s{{overflow-x:auto}}</style></head><body><div class=w>
-<h1>GotOne Labs · visits</h1>
-<p class=m>Last {days} days (Eastern time) · {links}<br>Visitors are unique per day: someone who comes
-back on three days counts three times. No cookies; nothing about a visitor is stored.</p>
-<h2>Last {days} days</h2><div class=s><table><tr><th></th>{head}</tr><tr><th></th>{sub}</tr>
-<tr><td>Total</td>{cells(period)}</tr></table></div>
-<h2>All time (views, since {s['first_day'] or '-'})</h2><div class=s><table><tr><th></th>{head}</tr>
-<tr><td>Views</td>{totals}</tr></table></div>
-<h2>Where visits came from (first page of each visit)</h2><div class=s><table>
-<tr><th>Site</th><th>Page</th><th>Views</th></tr>{refs}</table></div>
-<h2>By day</h2><div class=s><table><tr><th>Day</th>{head}</tr><tr><th></th>{sub}</tr>{rows}
-</table></div></div></body></html>"""
-    return Response(html_out, mimetype="text/html", headers={"Cache-Control": "no-store"})
+    html_out = render_stats_page(labstats.summary(_stats_days()), request.args.get("key", ""))
+    return Response(html_out, mimetype="text/html", headers=_PRIVATE)
 
 
 # ---- Global Fishing Watch tile proxy ----
@@ -1112,6 +1134,7 @@ def build_sst_page():
                 dcc.Store(id="sst-store"),
                 dcc.Store(id="click-pos"),
                 html.Div(id="fetch-spinner-target", style={"display": "none"}),
+                html.Div(id="sst-events-sink", style={"display": "none"}),
                 # Auto-fetch SST on page load (fires once after 500ms)
                 dcc.Interval(id="auto-fetch", interval=500, max_intervals=1),
             ],
@@ -1809,7 +1832,8 @@ def handle_map_click(click_data, measure, selected_pois, sst_data, frame_idx):
                 dl.CircleMarker(
                     center=[poi_lat, poi_lon],
                     radius=6,
-                    pathOptions={"color": "#475569", "weight": 2, "fillOpacity": 0.3},
+                    pathOptions={"color": "#475569", "weight": 2, "fillOpacity": 0.3,
+                                 "className": "sst-poi-pick"},   # SST feature use: "poi"
                     children=[
                         dl.Tooltip(
                             tooltip_content,
@@ -2015,6 +2039,59 @@ def toggle_layers(active_layers):
     return (0.6 if "contours" in active else 0,
             0.5 if "gebco" in active else 0,
             0.7 if "gfw" in active else 0)
+
+
+# ---- SST feature use (anonymous; GotOneLabs.event in assets/labs.js) ----
+# One clientside callback on the controls and stores that mark real use. Dash 4 passes an
+# empty `triggered` on initial calls and prevent_initial_call skips them anyway, so building
+# the page counts nothing; GotOneLabs sends each name once per page view, on the live hosts
+# only. Names: data/labstats.EVENTS["sst"]. Dragging the day slider ("step") is counted by
+# the data-labs-event wrapper in layout/sidebar.py.
+app.clientside_callback(
+    """
+    function() {
+        var L = window.GotOneLabs;
+        var t = (window.dash_clientside.callback_context || {}).triggered || [];
+        if (!L) { return ""; }
+        function ev(name) { L.event(name, {tool: "sst"}); }
+        t.forEach(function (x) {
+            var id = x.prop_id || "", v = x.value;
+            if (id === "fetch-btn.n_clicks") { ev("load"); }
+            else if (id === "anim-interval.disabled") { if (v === false) { ev("play"); } }
+            else if (id === "step-back-btn.n_clicks" || id === "step-fwd-btn.n_clicks") { ev("step"); }
+            else if (id === "click-pos.data") { if (v) { ev("readout"); } }
+            else if (id === "click-marker.children") {
+                var m = (v || [])[0], po = m && m.props && m.props.pathOptions;
+                if (po && po.className === "sst-poi-pick") { ev("poi"); }
+            }
+            else if (id === "measure-state.data") { if (v && v.mode === "done") { ev("measure"); } }
+            else if (id === "poi-collapse.is_open") { if (v) { ev("spots"); } }
+            else if (id === "layer-toggles.value") {
+                (v || []).forEach(function (k) {
+                    var n = {contours: "chart", gebco: "bathymetry", gfw: "gfw"}[k];
+                    if (n) { ev(n); }
+                });
+            }
+            else if (id === "lock-scale.value") { if ((v || []).indexOf("lock") >= 0) { ev("lock_scale"); } }
+            else if (id === "sst-opacity.value") { ev("opacity"); }
+        });
+        return "";
+    }
+    """,
+    Output("sst-events-sink", "children"),
+    Input("fetch-btn", "n_clicks"),
+    Input("anim-interval", "disabled"),
+    Input("step-back-btn", "n_clicks"),
+    Input("step-fwd-btn", "n_clicks"),
+    Input("click-pos", "data"),
+    Input("click-marker", "children"),
+    Input("measure-state", "data"),
+    Input("poi-collapse", "is_open"),
+    Input("layer-toggles", "value"),
+    Input("lock-scale", "value"),
+    Input("sst-opacity", "value"),
+    prevent_initial_call=True,
+)
 
 
 # ---- GotOne catch map (route: /catches) ----
@@ -2299,10 +2376,16 @@ def update_sst_opacity(opacity):
 # (window.Currents). These clientside callbacks only forward control changes —
 # no server work and nothing per frame. Each writes "" to its own hidden sink.
 # Initial calls are wanted: they hand the default control values to the engine,
-# which queues them until the map is ready.
+# which queues them until the map is ready. A real change (Dash 4 passes an empty
+# `triggered` on initial calls) also goes to Currents.noteUse: anonymous feature use.
 _CURRENTS_FORWARD = """
 function(value) {
-    if (window.Currents) { window.Currents.%s(value); }
+    var C = window.Currents;
+    if (C) {
+        C.%s(value);
+        var t = (window.dash_clientside.callback_context || {}).triggered || [];
+        if (t.length && C.noteUse) { C.noteUse("%s", value); }
+    }
     return "";
 }
 """
@@ -2315,20 +2398,20 @@ for _ctrl, _method in (
     ("strength", "setStrength"),
 ):
     app.clientside_callback(
-        _CURRENTS_FORWARD % _method,
+        _CURRENTS_FORWARD % (_method, _ctrl),
         Output(f"currents-sink-{_ctrl}", "children"),
         Input(f"currents-{_ctrl}", "value"),
     )
 
 app.clientside_callback(
-    _CURRENTS_FORWARD % "setDate",
+    _CURRENTS_FORWARD % ("setDate", "date"),
     Output("currents-sink-date", "children"),
     Input("currents-date", "date"),
 )
 
 # Harbor-inlet estimates (data/inlets.json, a dcc.Store) -> extra spots.
 app.clientside_callback(
-    _CURRENTS_FORWARD % "setInlets",
+    _CURRENTS_FORWARD % ("setInlets", "inlets"),
     Output("currents-sink-inlets", "children"),
     Input("currents-inlets", "data"),
 )
@@ -2337,7 +2420,12 @@ app.clientside_callback(
 app.clientside_callback(
     """
     function(mode) {
-        if (window.Currents) { window.Currents.setMode(mode); }
+        var C = window.Currents;
+        if (C) {
+            C.setMode(mode);
+            var t = (window.dash_clientside.callback_context || {}).triggered || [];
+            if (t.length && C.noteUse) { C.noteUse("mode", mode); }
+        }
         var on = {display: "block"}, off = {display: "none"};
         return [mode === "date" ? on : off, mode === "cycle" ? on : off,
                 mode === "week" ? on : off];
@@ -2385,7 +2473,10 @@ app.clientside_callback(
     """
     function(open1, open2, close) {
         var t = ((window.dash_clientside.callback_context.triggered || [])[0] || {}).prop_id || "";
-        if (t.indexOf("currents-about-open") === 0) { return true; }
+        if (t.indexOf("currents-about-open") === 0) {
+            if (window.GotOneLabs) { window.GotOneLabs.event("how_it_works", {tool: "currents"}); }
+            return true;
+        }
         if (t.indexOf("currents-about-close") === 0) { return false; }
         var KEY = "gotone-currents-intro-v1", seen = true;
         try {

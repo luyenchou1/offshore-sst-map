@@ -255,6 +255,8 @@ def build_currents_sidebar(manifest, today, inlets=None, labs_href="/"):
                            "flood and ebb. The white line is the time on the map; red dotted is "
                            "now. Hazed water: wind and ocean currents often override the tide "
                            "there."),
+                    # "Was this helpful?" (filled by assets/labs.js; posts to /api/feedback)
+                    html.Div(className="labs-helpful", **{"data-tool": "currents"}),
                     html.Div(
                         [
                             html.Button("How it works", id="currents-about-open-2",
