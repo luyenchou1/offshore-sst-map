@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""The GotOne Labs home as a Squarespace Code Block -> squarespace/labs-code-block.html.
+
+The Labs home lives on the marketing site (gotoneapp.com/labs, with the site's own header and
+footer). Its tiles come from the same list as the app's own Labs page (layout/labsview.TOOLS), so
+the two never drift: add or edit a tool there, rerun this, and paste the new block into the
+Squarespace page (Edit -> the Code Block -> select all -> paste).
+
+  .venv/bin/python tools/build_squarespace_labs.py
+
+Also writes squarespace/preview.html: the block inside a stand-in for the Squarespace page (navy
+header, white page, 1024 px content column), to check it before pasting. Everything in the block is
+scoped to #gotone-labs and uses the site's own font, so it can't restyle the rest of the page.
+Plain HTML and CSS only (no scripts), which works in a Code Block on every Squarespace plan.
+"""
+
+import html
+import os
+import sys
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO)
+from layout.labsview import TOOLS  # noqa: E402
+
+SITE = "https://www.gotoneapp.com"
+ASSETS = "https://sst.gotoneapp.com"     # the app serves the tile images; /assets/ is never redirected
+OUT = os.path.join(REPO, "squarespace")
+E = html.escape
+
+CSS = """
+#gotone-labs{--gl-navy:#091d50;--gl-yellow:#ffe000;--gl-ink:#0f1d3d;--gl-ink-2:#44506a;--gl-line:#dfe4ee;
+  font-family:inherit;color:var(--gl-ink);-webkit-font-smoothing:antialiased;margin:0 0 8px}
+#gotone-labs *{box-sizing:border-box}
+#gotone-labs .gl-hero{background:var(--gl-navy);border-radius:18px;padding:40px 36px 76px}
+#gotone-labs .gl-hero h1{color:var(--gl-yellow);font-family:inherit;font-size:clamp(30px,4.6vw,46px);font-weight:700;
+  line-height:1.08;letter-spacing:-.015em;margin:0 0 14px;max-width:21ch;text-transform:none}
+#gotone-labs .gl-hero p{color:#fff;font-size:clamp(17px,2vw,21px);line-height:1.45;margin:0;max-width:44ch}
+#gotone-labs .gl-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:22px;
+  margin:-44px 18px 0;position:relative}
+#gotone-labs a.gl-tile{display:flex;flex-direction:column;background:#fff;border-radius:18px;overflow:hidden;
+  text-decoration:none!important;color:inherit!important;border:0;
+  box-shadow:0 1px 2px rgba(9,29,80,.08),0 10px 30px rgba(9,29,80,.12);transition:transform .15s ease,box-shadow .15s ease}
+#gotone-labs a.gl-tile:hover{transform:translateY(-3px);box-shadow:0 2px 4px rgba(9,29,80,.1),0 16px 40px rgba(9,29,80,.18)}
+#gotone-labs a.gl-tile:focus-visible{outline:3px solid var(--gl-yellow);outline-offset:3px}
+#gotone-labs .gl-shot{aspect-ratio:16/9;background:var(--gl-navy);overflow:hidden}
+#gotone-labs .gl-shot img{width:100%;height:100%;object-fit:cover;display:block;margin:0;max-width:none}
+#gotone-labs .gl-body{display:flex;flex-direction:column;gap:8px;padding:20px 22px 24px;flex:1}
+#gotone-labs .gl-kicker{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;
+  font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--gl-ink-2);line-height:1.3}
+#gotone-labs .gl-pill{background:var(--gl-yellow);color:var(--gl-navy);border-radius:100px;padding:2px 10px;
+  font-size:12px;letter-spacing:.04em}
+#gotone-labs .gl-tile h2{color:var(--gl-navy);font-family:inherit;font-size:27px;font-weight:700;letter-spacing:-.01em;
+  line-height:1.15;margin:2px 0 0;text-transform:none}
+#gotone-labs .gl-hook{color:var(--gl-ink);font-size:18px;font-weight:700;line-height:1.3;margin:0}
+#gotone-labs .gl-text{color:var(--gl-ink-2);font-size:16px;line-height:1.5;margin:0;flex:1}
+#gotone-labs .gl-btn{align-self:flex-start;margin-top:10px;background:var(--gl-yellow);color:var(--gl-navy);
+  border-radius:100px;padding:12px 22px;font-size:16px;font-weight:700;letter-spacing:.01em;line-height:1.2}
+#gotone-labs a.gl-tile:hover .gl-btn{background:#ffe94d}
+#gotone-labs .gl-more{text-align:center;color:var(--gl-ink-2);margin:28px 0 8px;font-size:15px}
+#gotone-labs .gl-about{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:28px;
+  border-top:1px solid var(--gl-line);margin:28px 18px 0;padding-top:28px}
+#gotone-labs .gl-about h3{color:var(--gl-navy);font-family:inherit;font-size:18px;font-weight:700;margin:0 0 6px;
+  line-height:1.3;text-transform:none}
+#gotone-labs .gl-about p{color:var(--gl-ink-2);font-size:16px;line-height:1.55;margin:0}
+#gotone-labs .gl-about a{color:#0b4fd6;font-weight:600}
+@media (max-width:640px){
+  #gotone-labs .gl-hero{padding:28px 22px 68px;border-radius:14px}
+  #gotone-labs .gl-grid{grid-template-columns:1fr;gap:18px;margin:-40px 10px 0}
+  #gotone-labs .gl-body{padding:18px 18px 22px}
+  #gotone-labs .gl-btn{align-self:stretch;text-align:center;padding:14px 20px}
+  #gotone-labs .gl-about{margin:24px 4px 0}
+}
+@media (prefers-reduced-motion:reduce){#gotone-labs a.gl-tile{transition:none}#gotone-labs a.gl-tile:hover{transform:none}}
+"""
+
+
+def link_for(t):
+    """Each tile opens the tool's short link on gotoneapp.com (a Squarespace URL mapping forwards it)."""
+    return SITE + "/" + t["short"]
+
+
+def tile(t):
+    pill = f'<span class="gl-pill">{E(t["pill"])}</span>' if t.get("pill") else ""
+    return (f'<a class="gl-tile" href="{E(link_for(t))}">'
+            f'<div class="gl-shot"><img src="{E(ASSETS + t["img"])}" alt="{E(t["alt"])}" loading="lazy" '
+            f'width="1280" height="720"></div>'
+            f'<div class="gl-body"><div class="gl-kicker"><span>{E(t["area"])}</span>{pill}</div>'
+            f'<h2>{E(t["title"])}</h2><p class="gl-hook">{E(t["hook"])}</p><p class="gl-text">{E(t["text"])}</p>'
+            f'<span class="gl-btn">{E(t["button"])} <span aria-hidden="true">→</span></span></div></a>')
+
+
+def block():
+    return ('<!-- GotOne Labs home: generated by tools/build_squarespace_labs.py in the offshore-sst-map repo. '
+            'Edit there and repaste; edits made here are lost on the next paste. -->\n'
+            f'<div id="gotone-labs">\n<style>{CSS}</style>\n'
+            '<section class="gl-hero"><h1>Try experimental tools from GotOne Labs</h1>'
+            '<p>Data-driven tools and explainers for saltwater anglers, built on public data. Free to use, '
+            'no sign-up required.</p></section>\n'
+            '<div class="gl-grid">' + ''.join(tile(t) for t in TOOLS) + '</div>\n'
+            '<p class="gl-more">More tools on the way.</p>\n'
+            '<div class="gl-about"><div><h3>About Labs</h3><p>These tools are experiments: estimates from public '
+            'data, great for planning a trip and learning the water, not for navigation. Each one explains its '
+            'sources and how far to trust it.</p></div>'
+            '<div><h3>Made by GotOne</h3><p>GotOne is the fishing log that records the tide, water temperature, '
+            'wind and moon with every catch, so your history shows you what works. '
+            f'<a href="{SITE}/">Get the app</a></p></div></div>\n</div>\n')
+
+
+PREVIEW = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Labs block preview</title>
+<style>body{margin:0;font-family:"Helvetica Neue",Arial,sans-serif;color:#091d50;background:#fff}
+.sq-head{background:#091d50;color:#fff;padding:22px 24px;display:flex;justify-content:space-between;font-size:16px}
+.sq-head b{font-size:22px}.sq-page{max-width:1024px;margin:0 auto;padding:48px 24px}
+/* a few Squarespace-like defaults the block must survive */
+.sq-page h1,.sq-page h2,.sq-page h3{color:#fff}.sq-page p{font-size:22px;color:#091d50}.sq-page a{color:#ed6400}
+.sq-foot{background:#091d50;color:#fff;padding:40px 24px;margin-top:40px}</style></head><body>
+<div class="sq-head"><b>GotOne</b><span>About · New Features · Press · Conservation · Labs</span></div>
+<div class="sq-page">%s</div><div class="sq-foot">Site footer</div></body></html>"""
+
+if __name__ == "__main__":
+    os.makedirs(OUT, exist_ok=True)
+    missing = [t["title"] for t in TOOLS if not t.get("short")]
+    if missing:
+        sys.exit("TOOLS entries need a 'short' link name (gotoneapp.com/<short>): " + ", ".join(missing))
+    b = block()
+    open(os.path.join(OUT, "labs-code-block.html"), "w", encoding="utf-8").write(b)
+    open(os.path.join(OUT, "preview.html"), "w", encoding="utf-8").write(PREVIEW % b)
+    print("squarespace/labs-code-block.html (%d bytes) and preview.html, %d tiles" % (len(b), len(TOOLS)))

@@ -259,7 +259,7 @@ def build_currents_sidebar(manifest, today, inlets=None, labs_href="/"):
                         [
                             html.Button("How it works", id="currents-about-open-2",
                                         className="currents-link-btn"),
-                            dcc.Link("← GotOne Labs", href=labs_href, style={
+                            dcc.Link("← GotOne Labs", href=labs_href, refresh=labs_href.startswith("http"), style={
                                 "fontSize": "0.7rem", "color": "#0183fe"}),
                         ],
                         className="d-flex justify-content-between align-items-center",
@@ -502,7 +502,7 @@ def build_currents_page(labs_href="/"):
                         [
                             html.Button("How it works", id="currents-about-open",
                                         className="header-nav-link currents-about-link"),
-                            dcc.Link("← GotOne Labs", href=labs_href,
+                            dcc.Link("← GotOne Labs", href=labs_href, refresh=labs_href.startswith("http"),
                                      className="header-nav-link currents-labs-link"),
                         ],
                         className="currents-header-links",

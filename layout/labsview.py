@@ -13,6 +13,7 @@ from dash import dcc, html
 TOOLS = [
     {
         "href": "/sst",
+        "short": "sst",           # gotoneapp.com/sst (Squarespace URL mapping)
         "img": "/assets/labs/sst.jpg",
         "alt": "Sea-surface temperature map from Long Island to the offshore canyons",
         "area": "Cape May to Portland, Maine",
@@ -25,6 +26,7 @@ TOOLS = [
     },
     {
         "href": "/currents",
+        "short": "currents",           # gotoneapp.com/currents (Squarespace URL mapping)
         "img": "/assets/labs/currents.jpg",
         "alt": "Tidal current flow through The Race, Plum Gut and Gardiners Bay",
         "area": "Eastern Long Island",
@@ -36,6 +38,20 @@ TOOLS = [
                  "Lake Montauk to Sag Harbor Cove."),
         "button": "Open Currents",
     },
+    {
+        "href": "https://luyenchou1.github.io/striper-recount/",
+        "short": "striper-recount",           # gotoneapp.com/striper-recount (Squarespace URL mapping)
+        "img": "/assets/labs/recount.jpg",
+        "alt": "The Striper Recount title card: Kit and the Striper on a sunburst",
+        "area": "Maine to Virginia",
+        "title": "The Striper Recount",
+        "pill": "New",
+        "hook": "NOAA recounted striper fishing. Here's what changed.",
+        "text": ("A 4-minute cartoon song and seven short interactives on NOAA's 2026 correction "
+                 "to recreational striped bass estimates: the miscounted trips, why fewer fish "
+                 "caught means fewer fish, and what happens next."),
+        "button": "Watch and explore",
+    },
 ]
 
 
@@ -43,7 +59,9 @@ def _tile(t):
     kicker = [html.Span(t["area"], className="labs-area")]
     if t.get("pill"):
         kicker.append(html.Span(t["pill"], className="labs-pill"))
-    return dcc.Link(
+    # tools hosted elsewhere (the Striper Recount) are plain links; the app's own pages use dcc.Link
+    link = html.A if t["href"].startswith("http") else dcc.Link
+    return link(
         [
             html.Div(html.Img(src=t["img"], alt=t["alt"]), className="labs-shot"),
             html.Div(
@@ -83,8 +101,8 @@ def build_labs_page():
                 html.Div(
                     [
                         html.H1("Try experimental tools from GotOne Labs"),
-                        html.P("Data-driven angler tools built on public data sources. Free to "
-                               "use, no sign-up required."),
+                        html.P("Data-driven tools and explainers for saltwater anglers, built on public "
+                               "data. Free to use, no sign-up required."),
                     ],
                     className="labs-wrap labs-hero-inner",
                 ),

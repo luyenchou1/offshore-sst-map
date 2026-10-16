@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-16 — The Striper Recount joins Labs; the Labs home moves to gotoneapp.com/labs
+
+### Added
+- **The Striper Recount** tile (the song + interactives on NOAA's 2026 striped bass recount, hosted at luyenchou1.github.io/striper-recount) with its own preview (`assets/labs/recount.jpg`, from the film's poster). External tools render as plain links.
+- **`tools/build_squarespace_labs.py`** writes the Labs home as a Squarespace Code Block (`squarespace/labs-code-block.html`, scoped to `#gotone-labs`, no scripts) plus a preview page, from the same `TOOLS` list.
+- **`LABS_HOME_URL`** (Render env): once set to `https://www.gotoneapp.com/labs`, the "← GotOne Labs" links go to the Squarespace page and the app's own Labs home redirects there (302). Unset, nothing changes.
+
+### Changed
+- Labs hero: "Data-driven tools and explainers for saltwater anglers, built on public data."
+
 ## 2026-10-14 — Currents: the map's time box moves under the map
 
 ### Changed

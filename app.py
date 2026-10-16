@@ -88,6 +88,11 @@ server = app.server  # for gunicorn
 # (the GitHub workflows upload to the old host; a redirected POST becomes a GET).
 LEGACY_HOSTS = ("sst.gotoneapp.com",)
 LABS_HOST = os.environ.get("LABS_HOST", "").strip().lower()
+# The Labs home can live on the marketing site instead (gotoneapp.com/labs, a Squarespace page with
+# the site's own header and footer). Set LABS_HOME_URL=https://www.gotoneapp.com/labs in Render once
+# that page is up: every "<- GotOne Labs" link goes there, and this app's own home ("/" on the labs
+# host, and /labs anywhere) redirects there. Unset = the app's own Labs home, as before.
+LABS_HOME_URL = os.environ.get("LABS_HOME_URL", "").strip()
 
 
 def _request_host():
@@ -98,8 +103,22 @@ def _request_host():
 
 
 def labs_href():
-    """Link to the Labs home: "/" (on the old host "/" is the SST map)."""
+    """Link to the Labs home: LABS_HOME_URL if set, else "/" (on the old host "/" is the SST map)."""
+    if LABS_HOME_URL:
+        return LABS_HOME_URL
     return "/labs" if _request_host() in LEGACY_HOSTS else "/"
+
+
+@server.before_request
+def redirect_labs_home():
+    """With LABS_HOME_URL set, the app's own Labs home redirects to it (302, so it can move later).
+    /labs/stats and the APIs are untouched; the old host's "/" is still the SST map."""
+    if not LABS_HOME_URL or request.method != "GET":
+        return None
+    path = request.path.rstrip("/") or "/"
+    if path == "/labs" or (path == "/" and _request_host() not in LEGACY_HOSTS):
+        return redirect(LABS_HOME_URL, code=302)
+    return None
 
 
 @server.before_request
@@ -1068,7 +1087,8 @@ def build_sst_page():
                 ),
                 # No public link to the catch map — it's reachable only by
                 # navigating to /catches directly, then entering the access key.
-                dcc.Link("← GotOne Labs", href=labs_href(), className="header-nav-link"),
+                dcc.Link("← GotOne Labs", href=labs_href(), refresh=labs_href().startswith("http"),
+                         className="header-nav-link"),
             ],
             className="gotone-header",
         ),
@@ -1128,7 +1148,7 @@ def _catch_restricted_page(attempted=False):
                             html.P("Restricted access", className="subtitle"),
                         ]
                     ),
-                    dcc.Link("← GotOne Labs", href=labs_href(), style={
+                    dcc.Link("← GotOne Labs", href=labs_href(), refresh=labs_href().startswith("http"), style={
                         "marginLeft": "auto", "alignSelf": "center",
                         "color": "#0183fe", "fontSize": "0.85rem", "paddingLeft": "1rem"}),
                 ],
