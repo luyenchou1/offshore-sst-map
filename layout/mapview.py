@@ -6,6 +6,54 @@ from dash import html
 
 MAP_HEIGHT = "calc(100vh - 72px)"
 
+# Fishing activity: one line for the legend or the How it works text (lane U displays it).
+GFW_NOTE = ("Fishing activity: where commercial fishing boats carrying AIS trackers fished on the "
+            "same days, from Global Fishing Watch. Most recreational boats don't show up, and the "
+            "last few days can be empty while GFW catches up.")
+
+AOI_TILE_BOUNDS = [[38.80, -74.96], [43.80, -68.80]]
+
+
+# The three optional layers are created only while their box is ticked (app.toggle_layers puts
+# them in the holders below), so a hidden layer downloads no tiles.
+def gebco_layer():
+    return dl.WMSTileLayer(
+        id="gebco-layer",
+        url="https://wms.gebco.net/mapserv?",
+        layers="GEBCO_LATEST",
+        format="image/png",
+        transparent=True,
+        opacity=0.5,
+        attribution='&copy; <a href="https://www.gebco.net">GEBCO</a>',
+    )
+
+
+def chart_layer():
+    return dl.WMSTileLayer(
+        id="contours-layer",
+        url="https://gis.charttools.noaa.gov/arcgis/rest/services/MCS/NOAAChartDisplay/MapServer/exts/MaritimeChartService/WMSServer",
+        layers="0,1,2,3,4,5,6,7",
+        format="image/png",
+        transparent=True,
+        opacity=0.6,
+        version="1.1.1",
+        attribution='&copy; <a href="https://www.charts.noaa.gov">NOAA</a>',
+    )
+
+
+def gfw_layer(date_range=None):
+    """Global Fishing Watch tiles through our proxy; ?dr= is the week on the map."""
+    return dl.TileLayer(
+        id="gfw-layer",
+        url=f"/api/gfw/{{z}}/{{x}}/{{y}}.png?dr={date_range or ''}",
+        opacity=0.7,
+        bounds=AOI_TILE_BOUNDS,
+        updateWhenZooming=False,  # wait for zoom to finish
+        updateWhenIdle=True,      # only load after pan/zoom stops
+        keepBuffer=4,             # keep more off-screen tiles cached
+        attribution='&copy; <a href="https://globalfishingwatch.org">Global Fishing Watch</a>',
+    )
+
 
 def build_map():
     return dbc.Col(
@@ -54,44 +102,18 @@ def build_map():
                             # features show through, and the SST opacity
                             # slider lets users fade SST to reveal more.
                             dl.Pane(
-                                dl.WMSTileLayer(
-                                    id="gebco-layer",
-                                    url="https://wms.gebco.net/mapserv?",
-                                    layers="GEBCO_LATEST",
-                                    format="image/png",
-                                    transparent=True,
-                                    opacity=0,
-                                    attribution='&copy; <a href="https://www.gebco.net">GEBCO</a>',
-                                ),
+                                dl.LayerGroup(id="gebco-holder", children=[]),
                                 name="gebco-pane",
                                 style={"zIndex": 390},
                             ),
                             dl.Pane(
-                                dl.WMSTileLayer(
-                                    id="contours-layer",
-                                    url="https://gis.charttools.noaa.gov/arcgis/rest/services/MCS/NOAAChartDisplay/MapServer/exts/MaritimeChartService/WMSServer",
-                                    layers="0,1,2,3,4,5,6,7",
-                                    format="image/png",
-                                    transparent=True,
-                                    opacity=0,
-                                    version="1.1.1",
-                                    attribution='&copy; <a href="https://www.charts.noaa.gov">NOAA</a>',
-                                ),
+                                dl.LayerGroup(id="contours-holder", children=[]),
                                 name="contours-pane",
                                 style={"zIndex": 400},
                             ),
                             # Global Fishing Watch fishing effort heatmap
                             dl.Pane(
-                                dl.TileLayer(
-                                    id="gfw-layer",
-                                    url="/api/gfw/{z}/{x}/{y}.png",
-                                    opacity=0,
-                                    bounds=[[38.80, -74.96], [43.80, -68.80]],
-                                    updateWhenZooming=False,  # wait for zoom to finish
-                                    updateWhenIdle=True,      # only load after pan/zoom stops
-                                    keepBuffer=4,             # keep more off-screen tiles cached
-                                    attribution='&copy; <a href="https://globalfishingwatch.org">Global Fishing Watch</a>',
-                                ),
+                                dl.LayerGroup(id="gfw-holder", children=[]),
                                 name="gfw-pane",
                                 style={"zIndex": 420},
                             ),
@@ -144,7 +166,7 @@ def build_map():
                                         },
                                     ),
                                     html.Div(
-                                        "This may take up to a minute",
+                                        "A week that isn't saved yet can take up to 30 seconds",
                                         style={
                                             "marginTop": "0.25rem",
                                             "color": "#64748b",

@@ -24,9 +24,12 @@ import dash
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 import numpy as np
-from dash import Input, Output, State, ctx, dcc, html
+from dash import ALL, Input, Output, State, ctx, dcc, html
 
-from data.cache import find_nearest_cached, get_cached, is_stale, put_cache
+from data.cache import (
+    entry_meta, get_cached, nearest_saved, put_cache, queue_week,
+    unqueue_week, wanted_weeks,
+)
 from data.catches import (
     build_catch_payload,
     get_all_groups,
@@ -34,13 +37,14 @@ from data.catches import (
 )
 from data import currents as currents_data
 from data import labstats
+from data import sstmeta
 from data.convert import upsample_visual
-from data.erddap import get_sst_multiday
-from data.geo import mask_aoi_rasterized, mask_land_rasterized, orient_to_leaflet
+from data.erddap import SSTUnavailable, get_sst_multiday, latest_mur_date
+from data.geo import grid_bounds, mask_aoi_rasterized, mask_land_rasterized, orient_to_leaflet
 from layout.catchview import build_catch_page
 from layout.currentsview import build_currents_page
 from layout.labsview import build_labs_page
-from layout.mapview import build_map
+from layout.mapview import build_map, chart_layer, gebco_layer, gfw_layer
 from layout.statsview import render_stats_page
 from layout.sidebar import build_sidebar
 from map.colorscale import build_legend_component, compute_color_bounds
@@ -333,10 +337,38 @@ def labs_stats_page():
 # ---- Global Fishing Watch tile proxy ----
 # GFW 4Wings API requires Bearer auth in headers, which Leaflet can't do.
 # Proxy tiles through Flask so the token stays server-side.
-_gfw_style_cache = {"url_template": None, "date_range": None}
-_gfw_date_range = None  # "YYYY-MM-DD,YYYY-MM-DD" — updated by fetch_sst_data
+# The date range comes with each tile request (?dr=START,END, set by the SST week the page shows),
+# so visitors on different weeks never share tiles. Both caches are keyed by it.
+_gfw_style_cache = {}  # dr -> url template (OrderedDict-like: oldest evicted first)
+_GFW_STYLE_CACHE_MAX = 32
+_gfw_style_lock = threading.Lock()
 _gfw_tile_cache = {}  # (z, x, y, dr) → (content_bytes, status_code)
-_GFW_TILE_CACHE_MAX = 200  # max cached tiles before eviction (~2-4 MB)
+_GFW_TILE_CACHE_MAX = 300  # max cached tiles before the oldest go (~3-6 MB)
+_GFW_DR_RE = __import__("re").compile(r"^(\d{4}-\d{2}-\d{2}),(\d{4}-\d{2}-\d{2})$")
+# 1x1 transparent PNG for empty tiles: GFW 404s ocean with no fishing, and a 404 <img> logs a
+# console error in every browser.
+_EMPTY_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNgYGBgAAAABQABeqhXUAAAAABJRU5ErkJggg==")
+
+
+def _gfw_default_range() -> str:
+    """The 7 days ending on the newest MUR day (what the page opens on)."""
+    end = latest_mur_date(CFG, block=False) or (date.today() - timedelta(days=2))
+    return f"{end - timedelta(days=6)},{end}"
+
+
+def _gfw_range_arg(raw):
+    """Validate a ?dr=YYYY-MM-DD,YYYY-MM-DD value: start <= end, at most 31 days, 2012 to now."""
+    m = _GFW_DR_RE.match(raw or "")
+    if not m:
+        return None
+    try:
+        a, b = date.fromisoformat(m.group(1)), date.fromisoformat(m.group(2))
+    except ValueError:
+        return None
+    if not (date(2012, 1, 1) <= a <= b <= date.today() + timedelta(days=1)) or (b - a).days > 31:
+        return None
+    return f"{a},{b}"
 
 
 # ---- GotOne catches: load static data once at module import ----
@@ -432,23 +464,20 @@ def _get_gfw_style(date_range: str) -> str | None:
 def gfw_tile_proxy(z, x, y):
     """Proxy GFW fishing effort tiles with auth header.
 
-    Includes server-side tile caching so repeat requests (zoom back,
-    pan back) return instantly without hitting GFW API. Both 200s and
-    404s are cached — 404s are ~half of all requests and each saves
-    a ~1s round-trip to GFW.
+    The date range is read from this request's ?dr=START,END (the SST week on the page), never
+    from shared state. Tiles are cached server-side per (z, x, y, dr); both 200s and empty
+    tiles are cached (about half the requests are empty ocean). Empty tiles come back as a
+    transparent PNG so the browser logs nothing.
     """
-    global _gfw_style_cache
     token = os.environ.get("GFW_API_TOKEN")
     if not token:
         return "", 204
 
-    # Determine date range — match SST window or default to last 7 days
-    if _gfw_date_range:
-        dr = _gfw_date_range
-    else:
-        end = date.today() - timedelta(days=4)
-        start = end - timedelta(days=6)
-        dr = f"{start},{end}"
+    raw = request.args.get("dr", "")
+    dr = _gfw_range_arg(raw) if raw else _gfw_default_range()
+    if dr is None:
+        return "", 400
+    tile_headers = {"Cache-Control": "public, max-age=86400"}
 
     # Check server-side tile cache first (instant, no GFW API call)
     tile_key = (z, x, y, dr)
@@ -456,22 +485,24 @@ def gfw_tile_proxy(z, x, y):
     if cached is not None:
         content, status = cached
         if status == 200:
-            return Response(
-                content,
-                content_type="image/png",
-                headers={"Cache-Control": "public, max-age=86400"},
-            )
-        return "", status
+            return Response(content, content_type="image/png", headers=tile_headers)
+        return Response(_EMPTY_PNG, content_type="image/png", headers=tile_headers)
 
-    # Refresh style if date range changed or not yet initialized
-    if _gfw_style_cache["url_template"] is None or _gfw_style_cache["date_range"] != dr:
-        url_tpl = _get_gfw_style(dr)
-        _gfw_style_cache = {"url_template": url_tpl, "date_range": dr}
-
-    if not _gfw_style_cache["url_template"]:
+    # One generate-png call per date range, even when a screenful of tiles arrives at once
+    url_tpl = _gfw_style_cache.get(dr)
+    if url_tpl is None:
+        with _gfw_style_lock:
+            url_tpl = _gfw_style_cache.get(dr)
+            if url_tpl is None:
+                url_tpl = _get_gfw_style(dr)
+                if url_tpl:
+                    _gfw_style_cache[dr] = url_tpl
+                    while len(_gfw_style_cache) > _GFW_STYLE_CACHE_MAX:
+                        _gfw_style_cache.pop(next(iter(_gfw_style_cache)), None)
+    if not url_tpl:
         return "", 204
 
-    tile_url = (_gfw_style_cache["url_template"]
+    tile_url = (url_tpl
                 .replace("{z}", str(z))
                 .replace("{x}", str(x))
                 .replace("{y}", str(y)))
@@ -482,20 +513,21 @@ def gfw_tile_proxy(z, x, y):
             headers={"Authorization": f"Bearer {token}"},
             timeout=10,
         )
-        # Cache both successes and failures (404s are ~half of requests)
+        # Cache both successes and empty tiles (404s are ~half of requests)
         if resp.status_code == 200:
             _gfw_tile_cache[tile_key] = (resp.content, 200)
         elif resp.status_code in (404, 204):
             _gfw_tile_cache[tile_key] = (b"", resp.status_code)
-        # Evict if cache too large (simple clear — tiles repopulate fast)
-        if len(_gfw_tile_cache) > _GFW_TILE_CACHE_MAX:
-            _gfw_tile_cache.clear()
+        while len(_gfw_tile_cache) > _GFW_TILE_CACHE_MAX:
+            _gfw_tile_cache.pop(next(iter(_gfw_tile_cache)), None)
+        if resp.status_code in (404, 204):
+            return Response(_EMPTY_PNG, content_type="image/png", headers=tile_headers)
         if resp.status_code != 200:
             return "", resp.status_code
         return Response(
             resp.content,
             content_type=resp.headers.get("Content-Type", "image/png"),
-            headers={"Cache-Control": "public, max-age=86400"},
+            headers=tile_headers,
         )
     except Exception:
         return "", 502
@@ -588,7 +620,9 @@ def precache_endpoint():
                 # Run the fetch + process in a thread with a hard timeout
                 # so a hung ERDDAP request can't block forever
                 def _fetch_and_cache(date_val):
-                    s = get_sst_multiday(date_val, CFG)
+                    # MUR only and the whole week: a crawl can wait, a reader can't
+                    s = get_sst_multiday(date_val, CFG, budget_s=PER_DATE_TIMEOUT - 20,
+                                         allow_fallback=False, require_full=True, concurrency=2)
                     dp = _precache_single_date(s, locked=False)
                     put_cache(date_val, False, dp)
                     return True
@@ -706,8 +740,31 @@ def cache_upload():
     os.replace(tmp, target)
     size_kb = target.stat().st_size / 1024
     logger.info("Cache UPLOAD: %s (%.0f KB)", fname, size_kb)
+    # A full MUR week answers a reader's queued request (see /api/cache/wanted)
+    meta = sstmeta.meta_for_entry(payload)
+    if meta["source"] == "MUR" and meta.get("complete", True):
+        unqueue_week(datetime.strptime(fname[:10], "%Y-%m-%d").date())
     return (json.dumps({"ok": True, "file": fname, "size_kb": round(size_kb, 1)}),
             200, {"Content-Type": "application/json"})
+
+
+@server.route("/api/cache/wanted")
+def cache_wanted():
+    """Weeks readers asked for that NOAA couldn't send in time; tools/sync_cache.py fetches them.
+
+    Same lock as /api/cache/upload (X-Upload-Token vs CACHE_UPLOAD_TOKEN). A week leaves the
+    list when a complete MUR week is uploaded for it.
+    """
+    import hmac
+    token = os.environ.get("CACHE_UPLOAD_TOKEN")
+    if not token:
+        return (json.dumps({"error": "disabled (CACHE_UPLOAD_TOKEN not set)"}),
+                403, {"Content-Type": "application/json"})
+    supplied = request.headers.get("X-Upload-Token", "")
+    if not (supplied and hmac.compare_digest(supplied, token)):
+        return (json.dumps({"error": "unauthorized"}), 401, {"Content-Type": "application/json"})
+    return (json.dumps({"weeks": wanted_weeks()}), 200,
+            {"Content-Type": "application/json", "Cache-Control": "no-store"})
 
 
 # ---- Currents page data (/currents) ----
@@ -903,10 +960,8 @@ def _build_payload(sst: dict, locked: bool) -> dict:
         frames.append(png_url)
         dates.append(pd_item["date"])
 
-    bounds = [
-        [float(np.min(lats)), float(np.min(lons))],
-        [float(np.max(lats)), float(np.max(lons))],
-    ]
+    bounds = grid_bounds(lats, lons)
+    meta = sstmeta.meta_from_fetch(sst)
 
     # Store payload — goes to browser via dcc.Store (~7 MB)
     store_payload = {
@@ -919,6 +974,7 @@ def _build_payload(sst: dict, locked: bool) -> dict:
         "server": sst["server"],
         "dataset_id": sst["dataset_id"],
         "dataset_title": sst["dataset_title"],
+        "meta": meta,
     }
 
     # Raw data — stays server-side for click lookups
@@ -926,6 +982,7 @@ def _build_payload(sst: dict, locked: bool) -> dict:
         "raw_days": processed_days,  # list of {"arrF": np.array, "date": str}
         "lats": lats,
         "lons": lons,
+        "meta": meta,
     }
 
     return store_payload, raw_data
@@ -966,10 +1023,7 @@ def _precache_single_date(sst: dict, locked: bool) -> dict:
     serialized_lats = _serialize_array(lats)
     serialized_lons = _serialize_array(lons)
     res_km = abs(float(lats[1] - lats[0])) * 111.0 if len(lats) > 1 else None
-    bounds = [
-        [float(np.min(lats)), float(np.min(lons))],
-        [float(np.max(lats)), float(np.max(lons))],
-    ]
+    bounds = grid_bounds(lats, lons)
 
     # Process each day individually — serialize and free before next
     serialized_days = []
@@ -1024,6 +1078,7 @@ def _precache_single_date(sst: dict, locked: bool) -> dict:
         "server": sst["server"],
         "dataset_id": sst["dataset_id"],
         "dataset_title": sst["dataset_title"],
+        "meta": sstmeta.meta_from_fetch(sst),
         "raw_days": serialized_days,
         "lats": serialized_lats,
         "lons": serialized_lons,
@@ -1063,10 +1118,8 @@ def _rebuild_payload_from_raw(raw_data: dict, locked: bool) -> dict:
         dates.append(rd["date"])
 
     res_km = abs(float(lats[1] - lats[0])) * 111.0 if len(lats) > 1 else None
-    bounds = [
-        [float(np.min(lats)), float(np.min(lons))],
-        [float(np.max(lats)), float(np.max(lons))],
-    ]
+    bounds = grid_bounds(lats, lons)
+    meta = raw_data.get("meta") or {}
 
     return {
         "frames": frames,
@@ -1075,9 +1128,10 @@ def _rebuild_payload_from_raw(raw_data: dict, locked: bool) -> dict:
         "vmin": float(vmin),
         "vmax": float(vmax),
         "res_km": res_km,
-        "server": "",
-        "dataset_id": "",
+        "server": meta.get("server", ""),
+        "dataset_id": meta.get("dataset_id", ""),
         "dataset_title": "",
+        "meta": meta or None,
     }
 
 
@@ -1109,6 +1163,7 @@ def _build_payload_from_disk_cache(cached: dict, raw_only: bool = False, locked_
         "raw_days": raw_days,
         "lats": _deserialize_array(lats_data) if isinstance(lats_data, str) else np.array(lats_data, dtype=np.float64),
         "lons": _deserialize_array(lons_data) if isinstance(lons_data, str) else np.array(lons_data, dtype=np.float64),
+        "meta": cached.get("meta") if isinstance(cached.get("meta"), dict) else None,
     }
 
     # Determine color bounds — use locked_override if provided (cross-mode reuse)
@@ -1152,6 +1207,7 @@ def _build_payload_from_disk_cache(cached: dict, raw_only: bool = False, locked_
         "server": cached.get("server", ""),
         "dataset_id": cached.get("dataset_id", ""),
         "dataset_title": cached.get("dataset_title", ""),
+        "meta": raw_data["meta"],
     }
 
     return store_payload, raw_data
@@ -1192,6 +1248,7 @@ def build_sst_page():
                 html.Div(id="sidebar-backdrop", className="sidebar-backdrop"),
                 dcc.Store(id="sst-store"),
                 dcc.Store(id="click-pos"),
+                dcc.Store(id="gfw-range"),  # "START,END" of the week on the map (fishing tiles)
                 html.Div(id="fetch-spinner-target", style={"display": "none"}),
                 html.Div(id="sst-events-sink", style={"display": "none"}),
                 # Auto-fetch SST on page load (fires once after 500ms)
@@ -1366,9 +1423,20 @@ _LOADING_OVERLAY_HIDDEN = {"display": "none"}
 # Clientside so it runs instantly in the browser — no server round-trip.
 # With 1 gunicorn worker, a server-side callback could be blocked behind
 # the slow fetch callback, leaving the user with no visual feedback.
+# Only a real trigger shows it: the "saved week" buttons (offered when a week can't be fetched)
+# may call this with n_clicks 0 when they appear or disappear.
 app.clientside_callback(
     """
-    function(n_clicks, n_intervals, lock_scale) {
+    function(n_clicks, n_intervals, lock_scale, saved) {
+        var nu = window.dash_clientside.no_update;
+        var t = (window.dash_clientside.callback_context || {}).triggered || [];
+        var real = t.some(function (x) {
+            var id = String(x.prop_id || "");
+            if (id.indexOf("saved-week") >= 0) { return !!x.value; }
+            return id === "fetch-btn.n_clicks" || id === "auto-fetch.n_intervals" ||
+                   id === "lock-scale.value";
+        });
+        if (!real) { return [nu, nu, nu]; }
         return [
             true,
             "Loading...",
@@ -1390,8 +1458,254 @@ app.clientside_callback(
     Input("fetch-btn", "n_clicks"),
     Input("auto-fetch", "n_intervals"),
     Input("lock-scale", "value"),
+    Input({"type": "saved-week", "index": ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
+
+
+# ---- Loading a week: saved copy, NOAA within the budget, or an honest failure ----
+FETCH_LABEL = "Fetch SST"   # the button's label after a load (the layout sets it first)
+_RECENT_DAYS = 10           # weeks this close to the newest day are fetched, never swapped for a nearby saved one
+_REFRESH_BUDGET_S = 10      # a saved copy exists: spend less time trying to refresh it
+_REFRESH_COOLDOWN_S = 1800  # and don't retry the same week more often than this
+_refresh_tried = {}         # end ISO -> monotonic time of the last refresh attempt
+_week_locks = {}            # end ISO -> Lock, so two visitors on one uncached week fetch it once
+_week_locks_guard = threading.Lock()
+
+
+def _week_lock(end_date):
+    k = str(end_date)
+    with _week_locks_guard:
+        lk = _week_locks.get(k)
+        if lk is None:
+            if len(_week_locks) > 256:
+                for key in [key for key, l in _week_locks.items() if not l.locked()]:
+                    del _week_locks[key]
+            lk = _week_locks[k] = threading.Lock()
+        return lk
+
+
+def _raw_meta(raw):
+    return raw.get("meta") or sstmeta.meta_for_entry({"dates": [d["date"] for d in raw["raw_days"]]})
+
+
+def _saved_week(end_date, locked):
+    """The saved week ending end_date: this color mode on disk, then memory, then the other mode
+    (memory, disk). Returns {"meta", "end", "write", "make"} or None; make() builds the page
+    payload and raw arrays only when the week is actually served (see _ready). "write" says what
+    to write back in the background ("upgrade": add PNGs to a raw-only entry, "cross": save this
+    color mode)."""
+    entry = get_cached(end_date, locked)
+    if entry:
+        return {"meta": entry_meta(entry, end_date, locked), "end": end_date,
+                "write": "upgrade" if entry.get("frames") is None else None,
+                "make": lambda: _build_payload_from_disk_cache(entry)}
+    key = _cache_key(end_date, locked)
+    if key in _raw_data_cache:  # fetched moments ago; its disk write may still be running
+        raw = _raw_data_cache[key]
+        return {"meta": _raw_meta(raw), "end": end_date, "write": None,
+                "make": lambda: (_rebuild_payload_from_raw(raw, locked), raw)}
+    alt_key = _cache_key(end_date, not locked)
+    if alt_key in _raw_data_cache:
+        raw = _raw_data_cache[alt_key]
+        logger.info("Cross-mode reuse from memory: %s -> %s", alt_key, key)
+        return {"meta": _raw_meta(raw), "end": end_date, "write": "cross",
+                "make": lambda: (_rebuild_payload_from_raw(raw, locked), raw)}
+    alt = get_cached(end_date, not locked)
+    if alt:
+        logger.info("Cross-mode reuse from disk: %s (locked=%s -> %s)", end_date, not locked, locked)
+        return {"meta": entry_meta(alt, end_date, not locked), "end": end_date, "write": "cross",
+                "make": lambda: _build_payload_from_disk_cache(alt, locked_override=locked)}
+    return None
+
+
+def _ready(w):
+    if "store" not in w:
+        w["store"], w["raw"] = w.pop("make")()
+    return w
+
+
+def _saved_nearby(end_date, locked, allow_due=False):
+    """The closest saved week within 3 days (+1, -1, +2, ...), skipping ones due a refresh."""
+    for offset in (1, -1, 2, -2, 3, -3):
+        cand = end_date + timedelta(days=offset)
+        if cand > date.today():
+            continue
+        w = _saved_week(cand, locked)
+        if w and (allow_due or not sstmeta.refresh_due(w["meta"])):
+            logger.info("Closest saved week: requested %s, serving %s", end_date, cand)
+            return w
+    return None
+
+
+def _week_score(meta):
+    return (meta.get("source") == "MUR", len(meta.get("days") or []), bool(meta.get("complete", True)))
+
+
+def _queue_for_seeder(end_date, reason):
+    """Put a week NOAA couldn't send on the seeder's list (not when the data doesn't exist)."""
+    if reason in ("no_data", "dead"):
+        return False
+    try:
+        return queue_week(end_date)
+    except Exception:
+        logger.warning("Could not queue %s", end_date, exc_info=True)
+        return False
+
+
+def _serve(w, locked, requested_end, latest, match, queued=None):
+    """Finish a week for the page: serving meta, and the raw arrays in memory for readouts."""
+    _ready(w)
+    meta = w["meta"]
+    if queued is None:
+        queued = (not meta.get("complete", True) or meta.get("source") != "MUR") and \
+            str(w["end"]) in wanted_weeks()
+    w["meta_out"] = sstmeta.for_serving(
+        meta, requested_end=requested_end, latest_available=latest,
+        from_cache=w["write"] != "fresh", week_match=match, queued=queued)
+    w["store"]["meta"] = w["meta_out"]
+    w["raw"]["meta"] = meta
+    _put_raw_cache(_cache_key(w["end"], locked), w["raw"])
+    return w
+
+
+def _load_week(requested_end, locked, latest):
+    """Return the week to show for requested_end, or raise SSTUnavailable.
+
+    Asked past the newest MUR day: the newest week. A saved copy that is final (or was retried in
+    the last 30 min) is served as is. Otherwise NOAA is asked within the budget (10 s when a saved
+    copy can stand in). Old weeks with no exact copy take the closest saved week within 3 days
+    first; recent weeks are always fetched. If NOAA can't send it, the saved copy or the closest
+    saved week is served, and the week is queued for the seeder.
+    """
+    end = min(requested_end, latest) if latest else requested_end
+    match = "newest" if end != requested_end else "exact"
+    recent = ((latest or date.today()) - end).days <= _RECENT_DAYS
+    with _week_lock(end):
+        saved = _saved_week(end, locked)
+        if saved and not sstmeta.refresh_due(saved["meta"]):
+            return _serve(saved, locked, requested_end, latest, match)
+        if saved is None and not recent:
+            near = _saved_nearby(end, locked)
+            if near:
+                return _serve(near, locked, requested_end, latest, "closest_saved")
+        if saved is not None:
+            if time.monotonic() - _refresh_tried.get(str(end), -1e9) < _REFRESH_COOLDOWN_S:
+                return _serve(saved, locked, requested_end, latest, match)
+            _refresh_tried[str(end)] = time.monotonic()
+            logger.info("Saved week %s is due a refresh (%s, built %s)", end,
+                        saved["meta"].get("source"), saved["meta"].get("built_at"))
+        try:
+            sst = get_sst_multiday(end, CFG, budget_s=_REFRESH_BUDGET_S if saved else None)
+        except SSTUnavailable as e:
+            if saved:
+                return _serve(saved, locked, requested_end, latest, "older_copy")
+            queued = _queue_for_seeder(end, e.reason)
+            near = _saved_nearby(end, locked, allow_due=True)
+            if near:
+                return _serve(near, locked, requested_end, latest, "closest_saved", queued=queued)
+            e.queued = queued
+            raise
+        store, raw = _build_payload(sst, locked)
+        fresh = {"store": store, "raw": raw, "meta": raw["meta"], "end": end, "write": "fresh"}
+        if saved and _week_score(fresh["meta"]) < _week_score(saved["meta"]):
+            return _serve(saved, locked, requested_end, latest, "older_copy")
+        queued = False
+        if not fresh["meta"]["complete"] or fresh["meta"]["source"] != "MUR":
+            queued = _queue_for_seeder(end, "busy")
+        logger.info("Fetched %s %s: %d days in %.1fs", fresh["meta"]["source"], end,
+                    len(fresh["meta"]["days"]), sst.get("fetch_seconds", 0))
+        return _serve(fresh, locked, requested_end, latest, match, queued=queued)
+
+
+def _write_week(w, locked):
+    """Background disk write for a week that was fetched, re-rendered for the other mode, or
+    loaded from a raw-only entry (now with PNGs). Uses base64 numpy arrays, never .tolist()
+    (a 3x memory spike on Render's 512 MB)."""
+    try:
+        dp = {k: v for k, v in w["store"].items() if k not in ("meta", "data_key")}
+        dp["meta"] = w["meta"]
+        dp["raw_days"] = [
+            {"arrF": _serialize_array(d["arrF"]), "date": d["date"]} for d in w["raw"]["raw_days"]
+        ]
+        dp["lats"] = _serialize_array(w["raw"]["lats"])
+        dp["lons"] = _serialize_array(w["raw"]["lons"])
+        put_cache(w["end"], locked, dp)
+        logger.info("Cache written (%s): %s locked=%s", w["write"], w["end"], locked)
+    except Exception:
+        logger.warning("Background cache write failed", exc_info=True)
+
+
+def _day_label(d):
+    return f"{d:%b} {d.day}"
+
+
+def _span(first, last):
+    if first.year == last.year:
+        return f"{_day_label(first)} to {_day_label(last)}, {last.year}"
+    return f"{_day_label(first)}, {first.year} to {_day_label(last)}, {last.year}"
+
+
+def _status_line(meta):
+    """The sidebar's one or two lines about the week served (the status strip reads meta)."""
+    days = [date.fromisoformat(d) for d in meta.get("days") or []]
+    short = "OISST 25 km" if meta.get("source") == "OISST" else "MUR 1 km"
+    first = _span(days[0], days[-1]) + " · " + short if days else short
+    notes = []
+    if meta.get("source") == "OISST":
+        notes.append("MUR wasn't available in time, so this is OISST: broad pattern only.")
+    missing = meta.get("missing_days") or []
+    if missing:
+        names = ", ".join(_day_label(date.fromisoformat(d)) for d in missing)
+        notes.append(f"{len(days)} of {len(days) + len(missing)} days (no {names}).")
+    match = meta.get("week_match")
+    req = meta.get("requested_end")
+    if match == "closest_saved" and req:
+        notes.append(f"The closest saved week to {_day_label(date.fromisoformat(req))}.")
+    elif match == "newest" and days:
+        notes.append(f"{_day_label(days[-1])} is the newest day NOAA has.")
+    elif match == "older_copy":
+        notes.append("Saved copy: NOAA didn't answer for a newer one.")
+    if meta.get("queued"):
+        notes.append("We'll have the full week ready within a day.")
+    children = [html.Div(first)]
+    if notes:
+        children.append(html.Div(" ".join(notes), className="text-warning"))
+    return html.Div(children, className="text-success",
+                    style={"fontSize": "0.75rem", "fontWeight": "500"})
+
+
+def _failure_message(err, end_date):
+    """Why the week couldn't be loaded, and the nearest saved weeks to open instead."""
+    end = min(end_date, getattr(err, "requested_end", None) or end_date)
+    span = _span(end - timedelta(days=6), end)
+    reason = getattr(err, "reason", None)
+    if reason == "no_data":
+        msg = (f"There is no satellite data for {span}. The map starts in June 2002."
+               if end < date(2002, 6, 8) else f"NOAA has no data for {span} yet.")
+    elif reason == "blocked":
+        msg = f"NOAA's data server turned down the request for {span}."
+    elif reason == "dead":
+        msg = f"NOAA's temperature dataset for {span} isn't answering right now."
+    elif reason in ("busy", "network"):
+        msg = f"NOAA's data server is busy and didn't send {span} in time."
+    else:
+        msg = f"Something went wrong loading {span}."
+    children = [html.Div(msg)]
+    if getattr(err, "queued", False):
+        children.append(html.Div("We'll have this week ready within a day."))
+    near = nearest_saved(end, n=3, exclude={end})
+    if near:
+        children.append(html.Div("Saved weeks you can open now:", className="mt-1"))
+        children.append(html.Div([
+            dbc.Button(_span(d - timedelta(days=6), d), id={"type": "saved-week", "index": d.isoformat()},
+                       n_clicks=0, size="sm", color="light", className="me-1 mt-1 saved-week-btn")
+            for d in near
+        ]))
+    else:
+        children.append(html.Div("Try again in a few minutes."))
+    return dbc.Alert(children, color="warning", className="py-2 px-3 mb-0",
+                     style={"fontSize": "0.8rem"})
 
 
 # ---- Callback 1b: Fetch 7-day SST data ----
@@ -1408,222 +1722,90 @@ app.clientside_callback(
         Output("fetch-btn", "children", allow_duplicate=True),
         Output("sidebar-col", "className", allow_duplicate=True),
         Output("sidebar-backdrop", "style", allow_duplicate=True),
-        Output("gfw-layer", "url", allow_duplicate=True),
+        Output("gfw-range", "data"),
         Output("map-loading-overlay", "style", allow_duplicate=True),
+        Output("end-date-picker", "date", allow_duplicate=True),
     ],
     inputs=[
         Input("fetch-btn", "n_clicks"),
         Input("auto-fetch", "n_intervals"),
         Input("lock-scale", "value"),
+        Input({"type": "saved-week", "index": ALL}, "n_clicks"),
     ],
     state=[
         State("end-date-picker", "date"),
     ],
     prevent_initial_call=True,
 )
-def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
+def fetch_sst_data(n_clicks, n_intervals, lock_scale, saved_clicks, end_date_str):
+    trig = ctx.triggered_id
+    if trig is None:
+        raise dash.exceptions.PreventUpdate
+    if isinstance(trig, dict):  # a "saved week" button from a failed load
+        if not (ctx.triggered and ctx.triggered[0].get("value")):
+            raise dash.exceptions.PreventUpdate
+        end_date_str = str(trig.get("index") or "")
 
-    # Parse the date string from the date picker
+    latest = latest_mur_date(CFG, max_wait=3.0)  # cached hourly; None if NOAA never answered
+    end_date = None
     if end_date_str:
-        end_date = datetime.strptime(end_date_str[:10], "%Y-%m-%d").date()
-    else:
-        end_date = date.today() - timedelta(days=4)
-
+        try:
+            end_date = datetime.strptime(end_date_str[:10], "%Y-%m-%d").date()
+        except ValueError:
+            end_date = None
+    if end_date is None:
+        end_date = latest or (date.today() - timedelta(days=2))
     locked = "lock" in (lock_scale or [])
-    data_key = _cache_key(end_date, locked)
 
+    t0 = time.monotonic()
     try:
-        # Check disk cache first — exact match, then nearby dates (±3 days)
-        cached_hit = False
-        cross_mode_hit = False
-        actual_end_date = end_date
-        cached, actual_end_date_found = find_nearest_cached(end_date, locked)
-        if cached:
-            actual_end_date = actual_end_date_found
-            logger.info("Serving from cache: %s (requested %s)", actual_end_date, end_date)
-            store_payload, raw_data = _build_payload_from_disk_cache(cached)
-            cached_hit = True
-            # Update data_key to match actual cached date
-            data_key = _cache_key(actual_end_date, locked)
-        # Cross-mode fallback: raw data is identical between adaptive/locked,
-        # only vmin/vmax and PNG rendering differ
-        if not cached_hit:
-            alt_locked = not locked
-            alt_key = _cache_key(end_date, alt_locked)
-
-            # Check memory for alt mode — try exact date and ±3 fuzzy
-            alt_mem_key = None
-            for offset in range(4):
-                for sign in ([0] if offset == 0 else [1, -1]):
-                    candidate = end_date + timedelta(days=offset * sign)
-                    ck = _cache_key(candidate, alt_locked)
-                    if ck in _raw_data_cache:
-                        alt_mem_key = ck
-                        if offset != 0:
-                            actual_end_date = candidate
-                            data_key = _cache_key(candidate, locked)
-                        break
-                if alt_mem_key:
-                    break
-
-            if alt_mem_key:
-                logger.info("Cross-mode reuse from memory: %s → %s", alt_mem_key, data_key)
-                raw_data = _raw_data_cache[alt_mem_key]
-                store_payload = _rebuild_payload_from_raw(raw_data, locked)
-                cached_hit = True
-                cross_mode_hit = True
-            else:
-                alt_cached, alt_end_date = find_nearest_cached(end_date, alt_locked)
-                if alt_cached:
-                    logger.info("Cross-mode reuse from disk: %s (locked=%s → %s)",
-                                alt_end_date, alt_locked, locked)
-                    store_payload, raw_data = _build_payload_from_disk_cache(
-                        alt_cached, locked_override=locked)
-                    actual_end_date = alt_end_date
-                    cached_hit = True
-                    cross_mode_hit = True
-                    data_key = _cache_key(actual_end_date, locked)
-
-        if not cached_hit:
-            # Cache miss — fetch from ERDDAP
-            logger.info("Cache miss, fetching from ERDDAP: %s", end_date)
-            sst = get_sst_multiday(end_date, CFG)
-            store_payload, raw_data = _build_payload(sst, locked)
-
-        # Store raw data server-side FIRST — must happen before disk write
-        # so click callbacks work even if the disk write crashes or OOMs
-        _put_raw_cache(data_key, raw_data)
-
-        # Update GFW date range to match the SST window
-        # Skip if cross-mode toggle — dates haven't changed, tiles are still valid
-        global _gfw_date_range, _gfw_style_cache
-        sst_dates = store_payload.get("dates", [])
-        if sst_dates and not cross_mode_hit:
-            _gfw_date_range = f"{sst_dates[0]},{sst_dates[-1]}"
-            _gfw_style_cache = {"url_template": None, "date_range": None}
-            _gfw_tile_cache.clear()  # new date range → tiles change
-
-        if cross_mode_hit:
-            # Cross-mode reuse — write the re-rendered payload to disk
-            # under the new mode's key so future loads are instant
-            def _write_cross_mode_cache(sp, rd, ed, lk):
-                try:
-                    dp = dict(sp)
-                    dp["raw_days"] = [
-                        {"arrF": _serialize_array(d["arrF"]), "date": d["date"]}
-                        for d in rd["raw_days"]
-                    ]
-                    dp["lats"] = _serialize_array(rd["lats"])
-                    dp["lons"] = _serialize_array(rd["lons"])
-                    put_cache(ed, lk, dp)
-                    logger.info("Cross-mode cache written: %s locked=%s", ed, lk)
-                except Exception:
-                    logger.warning("Cross-mode cache write failed", exc_info=True)
-
-            threading.Thread(
-                target=_write_cross_mode_cache,
-                args=(store_payload, raw_data, actual_end_date, locked),
-                daemon=True,
-            ).start()
-        elif cached_hit and cached.get("frames") is None:
-            # Raw-only pre-cache entry — upgrade with rendered PNGs in
-            # background so subsequent loads are instant
-            def _upgrade_cache(sp, rd, ed, lk):
-                try:
-                    dp = dict(sp)
-                    dp["raw_days"] = [
-                        {"arrF": _serialize_array(d["arrF"]), "date": d["date"]}
-                        for d in rd["raw_days"]
-                    ]
-                    dp["lats"] = _serialize_array(rd["lats"])
-                    dp["lons"] = _serialize_array(rd["lons"])
-                    put_cache(ed, lk, dp)
-                    logger.info("Cache upgraded with PNGs: %s", ed)
-                except Exception:
-                    logger.warning("Cache upgrade failed", exc_info=True)
-
-            threading.Thread(
-                target=_upgrade_cache,
-                args=(store_payload, raw_data, actual_end_date, locked),
-                daemon=True,
-            ).start()
-        elif not cached_hit:
-            # Write to disk cache in background thread to avoid blocking
-            # the callback response. Uses base64-encoded numpy arrays
-            # instead of .tolist() to avoid 3x memory spike from Python
-            # float objects (critical on Render's 512MB RAM).
-            def _write_disk_cache(sp, rd, ed, lk):
-                try:
-                    disk_payload = dict(sp)
-                    disk_payload["raw_days"] = [
-                        {"arrF": _serialize_array(day["arrF"]), "date": day["date"]}
-                        for day in rd["raw_days"]
-                    ]
-                    disk_payload["lats"] = _serialize_array(rd["lats"])
-                    disk_payload["lons"] = _serialize_array(rd["lons"])
-                    put_cache(ed, lk, disk_payload)
-                except Exception:
-                    logger.warning("Background cache write failed", exc_info=True)
-
-            threading.Thread(
-                target=_write_disk_cache,
-                args=(store_payload, raw_data, end_date, locked),
-                daemon=True,
-            ).start()
-
-        # Add data_key to store payload so click callbacks can look up raw data
-        store_payload["data_key"] = data_key
-
-        num_days = len(store_payload["frames"])
-
-        # Build slider marks — just day-of-month
-        marks = {}
-        for i, d_str in enumerate(store_payload["dates"]):
-            d = datetime.strptime(d_str, "%Y-%m-%d")
-            marks[i] = str(d.day)
-
-        status_text = f"MUR 1km \u2022 {num_days} days loaded"
-        if cached_hit and actual_end_date != end_date:
-            offset = (actual_end_date - end_date).days
-            status_text += f" (nearest cache: {offset:+d}d)"
-        status = html.Div(
-            status_text,
-            className="text-success",
-            style={"fontSize": "0.75rem", "fontWeight": "500"},
-        )
-
-        anim_visible = {"display": "block"}
-
-        # Cache-bust GFW tile URL so browser re-fetches for new date range
-        gfw_url = f"/api/gfw/{{z}}/{{x}}/{{y}}.png?dr={_gfw_date_range or ''}"
-
-        return (
-            store_payload, status,
-            marks, num_days - 1, num_days - 1,
-            anim_visible, "",
-            False, "Fetch SST",
-            "gotone-sidebar", {"display": "none"},
-            gfw_url,
-            {"display": "none"},
-        )
-
+        w = _load_week(end_date, locked, latest)
     except Exception as e:
-        logger.exception("SST fetch failed")
+        if isinstance(e, SSTUnavailable):
+            logger.warning("SST week %s unavailable after %.1fs: %s", end_date, time.monotonic() - t0, e)
+        else:
+            logger.exception("SST fetch failed")
+        # Keep (or open) the drawer so a phone reader sees why and the saved weeks offered
         return (
-            dash.no_update,
-            dbc.Alert(
-                f"Error: {e}",
-                color="danger",
-                className="py-2 px-3 mb-0",
-                style={"fontSize": "0.8rem"},
-            ),
+            dash.no_update, _failure_message(e, end_date),
             dash.no_update, dash.no_update, dash.no_update,
             dash.no_update, "",
-            False, "Fetch SST",
-            "gotone-sidebar", {"display": "none"},
+            False, FETCH_LABEL,
+            "gotone-sidebar drawer-open", {"display": "block"},
             dash.no_update,
             {"display": "none"},
+            dash.no_update,
         )
+
+    store_payload = w["store"]
+    # Click callbacks look up the raw arrays by this key
+    store_payload["data_key"] = _cache_key(w["end"], locked)
+    if w["write"]:
+        threading.Thread(target=_write_week, args=(w, locked), daemon=True).start()
+    num_days = len(store_payload["frames"])
+    logger.info("Served %s %s (%s, %s) in %.1fs", w["meta_out"]["source"], w["end"],
+                w["meta_out"]["week_match"], "cache" if w["meta_out"]["from_cache"] else "NOAA",
+                time.monotonic() - t0)
+
+    # Build slider marks — just day-of-month
+    marks = {}
+    for i, d_str in enumerate(store_payload["dates"]):
+        d = datetime.strptime(d_str, "%Y-%m-%d")
+        marks[i] = str(d.day)
+
+    # The fishing-activity tiles follow the days on the map (?dr= on each tile request)
+    gfw_range = f"{store_payload['dates'][0]},{store_payload['dates'][-1]}"
+
+    return (
+        store_payload, _status_line(w["meta_out"]),
+        marks, num_days - 1, num_days - 1,
+        {"display": "block"}, "",
+        False, FETCH_LABEL,
+        "gotone-sidebar", {"display": "none"},
+        gfw_range,
+        {"display": "none"},
+        w["end"].isoformat(),
+    )
 
 
 # ---- Callback 2: Render static layers (POIs, legend, AOI, initial overlay) ----
@@ -2087,17 +2269,26 @@ def poi_select_deselect(select_clicks, deselect_clicks):
 
 
 @app.callback(
-    Output("contours-layer", "opacity"),
-    Output("gebco-layer", "opacity"),
-    Output("gfw-layer", "opacity"),
+    Output("contours-holder", "children"),
+    Output("gebco-holder", "children"),
+    Output("gfw-holder", "children"),
     Input("layer-toggles", "value"),
+    Input("gfw-range", "data"),
 )
-def toggle_layers(active_layers):
-    """Show/hide nautical chart, bathymetry, and fishing activity layers."""
+def toggle_layers(active_layers, gfw_range):
+    """Add or remove the nautical chart, bathymetry and fishing activity layers.
+
+    A layer exists on the map only while its box is ticked, so hidden layers download nothing
+    (they used to sit at opacity 0 and fetch every tile). A new week only re-renders the fishing
+    layer, with the week's dates in its tile URL.
+    """
     active = active_layers or []
-    return (0.6 if "contours" in active else 0,
-            0.5 if "gebco" in active else 0,
-            0.7 if "gfw" in active else 0)
+    if ctx.triggered_id == "gfw-range":
+        return (dash.no_update, dash.no_update,
+                [gfw_layer(gfw_range)] if "gfw" in active else dash.no_update)
+    return ([chart_layer()] if "contours" in active else [],
+            [gebco_layer()] if "gebco" in active else [],
+            [gfw_layer(gfw_range)] if "gfw" in active else [])
 
 
 # ---- SST feature use (anonymous; GotOneLabs.event in assets/labs.js) ----
@@ -2620,13 +2811,14 @@ app.clientside_callback(
 # check passes quickly.
 def _prewarm_cache():
     time.sleep(15)  # Let gunicorn fully start and pass health check
-    end_date = date.today() - timedelta(days=4)
+    # The page opens on the newest MUR day (one small ERDDAP request, then cached for an hour)
+    end_date = latest_mur_date(CFG, max_wait=8.0) or (date.today() - timedelta(days=2))
     for locked in [False, True]:
         data_key = _cache_key(end_date, locked)
         if data_key in _raw_data_cache:
             continue
         cached = get_cached(end_date, locked)
-        if cached and not is_stale(end_date):
+        if cached:
             try:
                 _, raw_data = _build_payload_from_disk_cache(cached, raw_only=True)
                 _put_raw_cache(data_key, raw_data)
@@ -2635,6 +2827,13 @@ def _prewarm_cache():
                 logger.warning("Pre-warm: disk cache parse failed for %s", end_date, exc_info=True)
         else:
             logger.info("Pre-warm: no disk cache for %s (locked=%s), will fetch on first request", end_date, locked)
+    # The land mask (Natural Earth 10m, downloaded once per process) is needed by the first fetch
+    # from NOAA; load it now so that fetch doesn't pay for it inside its time budget.
+    try:
+        from data.geo import load_land_gdf
+        load_land_gdf()
+    except Exception:
+        logger.warning("Pre-warm: land mask load failed", exc_info=True)
 
 
 if not os.environ.get("_SST_PREWARM_STARTED"):

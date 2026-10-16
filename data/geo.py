@@ -72,6 +72,31 @@ def orient_to_leaflet(
     return arrF, lats, lons
 
 
+# --------------- Grid edges ---------------
+
+
+def _half_step(vals: np.ndarray) -> float:
+    return abs(float(vals[1] - vals[0])) / 2 if len(vals) > 1 else 0.0
+
+
+def grid_edges(lats: np.ndarray, lons: np.ndarray) -> Tuple[float, float, float, float]:
+    """(minlon, minlat, maxlon, maxlat) of the grid's outer cell edges.
+
+    lats/lons are cell centres; the image and the rasterized masks must span the edges, half a
+    cell beyond the first and last centres. At MUR's 0.01 degree that is 500 m; at OISST's
+    0.25 degree it is 14 km, enough to misplace the whole map without it.
+    """
+    hy, hx = _half_step(lats), _half_step(lons)
+    return (float(np.min(lons)) - hx, float(np.min(lats)) - hy,
+            float(np.max(lons)) + hx, float(np.max(lats)) + hy)
+
+
+def grid_bounds(lats: np.ndarray, lons: np.ndarray):
+    """Leaflet ImageOverlay bounds [[south, west], [north, east]] of the grid's outer edges."""
+    minlon, minlat, maxlon, maxlat = grid_edges(lats, lons)
+    return [[minlat, minlon], [maxlat, maxlon]]
+
+
 # --------------- AOI mask (rasterized — fast) ---------------
 
 
@@ -89,8 +114,7 @@ def mask_aoi_rasterized(
         aoi_coords = [tuple(pt) for pt in config["aoi_polygon_lonlat"]]
         aoi_poly = Polygon(aoi_coords)
 
-        minlon, maxlon = float(np.min(lons)), float(np.max(lons))
-        minlat, maxlat = float(np.min(lats)), float(np.max(lats))
+        minlon, minlat, maxlon, maxlat = grid_edges(lats, lons)
         height, width = arrF.shape
         transform = from_bounds(minlon, minlat, maxlon, maxlat, width, height)
 
@@ -145,8 +169,7 @@ def mask_land_rasterized(
         if land is None or land.empty:
             return arrF
 
-        minlon, maxlon = float(np.min(lons)), float(np.max(lons))
-        minlat, maxlat = float(np.min(lats)), float(np.max(lats))
+        minlon, minlat, maxlon, maxlat = grid_edges(lats, lons)
         bbox_geom = gpd.GeoDataFrame(
             geometry=[box(minlon, minlat, maxlon, maxlat)], crs="EPSG:4326"
         )
@@ -154,9 +177,13 @@ def mask_land_rasterized(
         if land_clip.empty:
             return arrF
 
-        # Slight inward buffer to sharpen coastline edge
+        # Slight inward buffer to sharpen coastline edge (in degrees on purpose: geopandas'
+        # "geographic CRS" warning, once per day fetched, is noise here)
         try:
-            land_clip["geometry"] = land_clip.buffer(-0.0007)  # ~75 m
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                land_clip["geometry"] = land_clip.buffer(-0.0007)  # ~75 m
         except Exception:
             pass
 
