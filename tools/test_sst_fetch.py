@@ -37,6 +37,7 @@ import xarray as xr  # noqa: E402
 
 from data import cache as cachemod  # noqa: E402
 from data import erddap  # noqa: E402
+from data import outbound  # noqa: E402
 from data import sstmeta  # noqa: E402
 
 CFG = json.load(open(ROOT / "config.json"))
@@ -158,6 +159,7 @@ class FakeErddap:
 def install(fake):
     erddap.requests.get = fake
     erddap._reset_latest_cache()
+    outbound.reset_all()  # close every circuit breaker a previous test opened
     return fake
 
 
@@ -174,6 +176,7 @@ def fresh():
     import app as appmod
     appmod._raw_data_cache.clear()
     appmod._refresh_tried.clear()
+    appmod._failed_recently.clear()
     return d
 
 
@@ -535,29 +538,26 @@ def test_gfw_proxy_reads_range_per_request():
     os.environ["GFW_API_TOKEN"] = "test"
     seen = []
 
-    class R:
+    class R:  # the proxy reads .status_code, .headers and the body (.content here) through data/outbound
         def __init__(self, status, content=b"", js=None):
-            self.status_code, self.content, self._js = status, content, js
+            self.status_code = status
+            self.content = json.dumps(js).encode() if js is not None else content
             self.headers = {"Content-Type": "image/png"}
 
-        def json(self):
-            return self._js
-
-        def raise_for_status(self):
-            pass
-
-    def post(url, params=None, headers=None, timeout=None):
+    def post(url, params=None, headers=None, timeout=None, **kw):
         seen.append(("style", params["date-range"]))
         return R(200, js={"url": "https://gateway.api.globalfishingwatch.org/t/{z}/{x}/{y}?dr=" + params["date-range"]})
 
-    def get(url, headers=None, timeout=None):
+    def get(url, headers=None, timeout=None, **kw):
         seen.append(("tile", url))
         return R(404) if url.endswith("2026-10-01,2026-10-07") else R(200, b"PNGDATA")
 
     real_post, real_get = appmod.http_requests.post, appmod.http_requests.get
     appmod.http_requests.post, appmod.http_requests.get = post, get
     appmod._gfw_style_cache.clear()
+    appmod._gfw_style_failed.clear()
     appmod._gfw_tile_cache.clear()
+    outbound.reset_all()
     try:
         c = appmod.server.test_client()
         a = c.get("/api/gfw/7/37/48.png?dr=2026-10-09,2026-10-15")

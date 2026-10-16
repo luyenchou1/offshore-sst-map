@@ -15,24 +15,41 @@ logger = logging.getLogger(__name__)
 
 _LAND_GDF = None  # module-level cache
 _LAND_FAILED_AT = None  # monotonic time of the last failed load: don't retry for 10 minutes
-_LAND_LOCK = __import__("threading").Lock()
+_LAND_LOCK = __import__("threading").Lock()  # guards the three names here; never held during the download
+_LAND_LOADING = None  # threading.Event while a load runs (in its own thread)
+_LAND_SLOW = False    # a default-wait caller already waited LAND_WAIT_S for the load in progress: later ones don't
+LAND_DOWNLOAD_S = 40.0  # the whole download (~10 MB from S3, normally a few seconds)
+LAND_WAIT_S = 60.0      # how long load_land_gdf() waits for a load in progress; app.py sets a short wait so a
+                        # reader's fetch never waits long (the week is then served without the land mask, unsaved)
 
 
 def _download_ne10m_land_zip() -> bytes:
-    import requests
+    from data import outbound
 
     url = "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_land.zip"
-    r = requests.get(url, timeout=(5, 20))
-    r.raise_for_status()
-    return r.content
+    rep = outbound.for_url(url).request("GET", url, outbound.Deadline(LAND_DOWNLOAD_S), connect_s=5.0,
+                                        read_s=20.0, max_bytes=64 * 1024 * 1024)
+    if rep.status != 200:
+        raise RuntimeError(f"Natural Earth download: HTTP {rep.status}")
+    return rep.body
 
 
-def load_land_gdf():
-    """Load and cache the Natural Earth 10m land GeoDataFrame (once per process; the startup
-    pre-warm loads it). A failure is remembered for 10 minutes so a fetch from NOAA never waits
-    on the download again within its time budget (the week is then served unmasked)."""
-    global _LAND_GDF, _LAND_FAILED_AT
+def land_ready() -> bool:
+    """True once the land mask data is loaded (a fetch then masks land)."""
+    return _LAND_GDF is not None
+
+
+def load_land_gdf(wait_s=None):
+    """The Natural Earth 10m land GeoDataFrame (downloaded once per process; the startup pre-warm loads it), or None.
+
+    The download runs in its own thread with a 40 s limit and no lock held, and callers wait at most wait_s
+    (default LAND_WAIT_S) for it: a caller that runs out of time gets None and the week is served unmasked. Once a
+    default-wait caller has waited its LAND_WAIT_S for a load, later default-wait callers don't wait for that load
+    (a week asks once per day: 7 waits otherwise). A failed load is remembered for 10 minutes so a fetch from NOAA
+    never waits on the download again within its budget."""
+    import threading
     import time as _time
+    global _LAND_LOADING, _LAND_SLOW
     if _LAND_GDF is not None:
         return _LAND_GDF
     if _LAND_FAILED_AT is not None and _time.monotonic() - _LAND_FAILED_AT < 600:
@@ -40,10 +57,32 @@ def load_land_gdf():
     with _LAND_LOCK:
         if _LAND_GDF is not None:
             return _LAND_GDF
+        ev = _LAND_LOADING
+        if ev is None:
+            ev = _LAND_LOADING = threading.Event()
+            _LAND_SLOW = False
+            threading.Thread(target=_land_loader, args=(ev,), daemon=True, name="land-mask-load").start()
+        elif wait_s is None and _LAND_SLOW:
+            return None
+    if not ev.wait(LAND_WAIT_S if wait_s is None else max(0.0, float(wait_s))) and wait_s is None:
+        with _LAND_LOCK:
+            if _LAND_LOADING is ev:
+                _LAND_SLOW = True
+    return _LAND_GDF
+
+
+def _land_loader(ev):
+    global _LAND_FAILED_AT, _LAND_LOADING
+    import time as _time
+    gdf = None
+    try:
         gdf = _load_land_gdf()
-        if gdf is None:
-            _LAND_FAILED_AT = _time.monotonic()
-        return gdf
+    finally:
+        with _LAND_LOCK:
+            if gdf is None:
+                _LAND_FAILED_AT = _time.monotonic()
+            _LAND_LOADING = None
+        ev.set()
 
 
 def _load_land_gdf():
@@ -52,14 +91,19 @@ def _load_land_gdf():
         import geopandas as gpd
 
         data = _download_ne10m_land_zip()
+        import shutil
         tmp = tempfile.mkdtemp()
-        zip_path = os.path.join(tmp, "ne10m_land.zip")
-        with open(zip_path, "wb") as f:
-            f.write(data)
-        gdf = gpd.read_file(f"zip://{zip_path}").to_crs("EPSG:4326")
+        try:
+            zip_path = os.path.join(tmp, "ne10m_land.zip")
+            with open(zip_path, "wb") as f:
+                f.write(data)
+            gdf = gpd.read_file(f"zip://{zip_path}").to_crs("EPSG:4326")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
         _LAND_GDF = gdf
         return gdf
-    except Exception:
+    except Exception as e:
+        logger.warning("Natural Earth land mask load failed: %s: %s", type(e).__name__, e)
         try:
             import geopandas as gpd
 

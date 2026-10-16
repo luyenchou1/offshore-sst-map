@@ -17,6 +17,8 @@
  *               field may be missing: old cache entries have none).
  *   the first view: the fishing grounds (phones) or the whole area, then the
  *               reader's last view (localStorage, per browser).
+ *   gfwRetry()  fishing-activity tiles the server was too busy for (503) are
+ *               asked for again after a short pause.
  */
 (function () {
     "use strict";
@@ -300,6 +302,28 @@
             map.on("unload", function () { ro.disconnect(); });
         }
     });
+
+    // Fishing-activity tiles the server was too busy for (HTTP 503: it serves at most a few GFW calls at once
+    // so a zoom's 30-50 tiles can't take every request thread; incident 2026-10-16) are asked for again after a
+    // short, jittered pause, up to 4 times. A GFW failure comes back as an empty 200 tile and isn't retried.
+    var GFW_RETRIES = 4;
+    function gfwRetry(e) {
+        var tile = e && e.tile;
+        if (!tile || !tile.src) { return; }
+        var n = (tile._gfwTries || 0) + 1;
+        if (n > GFW_RETRIES) { return; }
+        tile._gfwTries = n;
+        var base = tile.src.replace(/([?&])retry=\d+(&|$)/, function (m, a, b) { return b ? a : ""; });
+        setTimeout(function () {
+            if (!tile.isConnected) { return; }                  // panned or zoomed away meanwhile
+            tile.src = base + (base.indexOf("?") >= 0 ? "&" : "?") + "retry=" + n;
+        }, 500 * n + Math.random() * 700);
+    }
+    if (L.TileLayer && L.TileLayer.addInitHook) {
+        L.TileLayer.addInitHook(function () {
+            if (typeof this._url === "string" && this._url.indexOf("/api/gfw/") >= 0) { this.on("tileerror", gfwRetry); }
+        });
+    }
 
     // A failed Load week (the sidebar's red message, which phones don't see:
     // the drawer closes). The map still shows the last week, so the strip keeps

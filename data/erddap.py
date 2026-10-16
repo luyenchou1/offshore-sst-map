@@ -9,6 +9,11 @@ budget: the days it got (a partial week says which days are missing), or an SSTU
 that says why. Per-request connect/read timeouts are capped by the time left, 429/5xx are
 retried after a short backoff while there is time, and days are fetched a few at a time
 (newest first) so an overloaded server isn't hit with a whole week at once.
+
+Requests go through data/outbound (incident 2026-10-16): the deadline also holds while a body
+arrives slowly, at most NOAA_MAX_CALLS requests are in flight, and after a connect failure
+(unreachable, refused, no DNS, connect timeout) NOAA isn't asked again for a minute: every
+fetch in that minute fails at once with kind "unreachable" (reason "network").
 """
 
 import io
@@ -23,10 +28,12 @@ from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-import requests
+import requests  # noqa: F401 - tests replace requests.get (data/outbound looks it up per call)
 import xarray as xr
 
+from data import outbound
 from data.convert import to_fahrenheit_whole
+from data.outbound import Deadline  # noqa: F401 - re-exported: erddap.Deadline
 
 logger = logging.getLogger(__name__)
 
@@ -57,22 +64,25 @@ TITLES = {
     "OISST": "NOAA Daily Optimum Interpolation SST (OISST) v2.1, NCEI (25 km)",
 }
 
-CONNECT_TIMEOUT = 4.0   # s; connection set-up, capped by the time left
+CONNECT_TIMEOUT = 3.0   # s; connection set-up, capped by the time left (from GitHub/home it takes < 0.2 s)
 READ_TIMEOUT = 8.0      # s; longest wait for the next bytes of a response
 RETRY_BACKOFF = (1.0, 2.5)  # s before the 2nd and 3rd try of a 429/5xx/network error
 OISST_RESERVE_S = 5.0   # s of the budget kept back for the OISST fallback
 LATEST_TTL_S = 3600     # the newest-day lookup is cached for an hour...
 LATEST_FAIL_TTL_S = 300  # ...and a failed lookup isn't retried for 5 minutes
 
-# The kinds of failure a request can end in (FetchError.kind).
-BUSY, TIMEOUT, NETWORK, BLOCKED, DEAD, MISSING, BAD = (
-    "busy", "timeout", "network", "blocked", "dead", "missing", "bad")
+# The kinds of failure a request can end in (FetchError.kind). unreachable: no connection could be made, or NOAA
+# failed that way in the last minute and wasn't asked (outbound's breaker); never retried within a fetch.
+BUSY, TIMEOUT, NETWORK, BLOCKED, DEAD, MISSING, BAD, UNREACHABLE = (
+    "busy", "timeout", "network", "blocked", "dead", "missing", "bad", "unreachable")
 _RETRYABLE = (BUSY, NETWORK, TIMEOUT)
+_OUTBOUND_KIND = {outbound.DOWN: UNREACHABLE, outbound.UNREACHABLE: UNREACHABLE, outbound.BUSY: BUSY,
+                  outbound.TIMEOUT: TIMEOUT, outbound.NETWORK: NETWORK, outbound.TOO_BIG: BAD}
 
 
 class FetchError(Exception):
-    """One request failed. kind: busy (429/5xx), timeout, network, blocked (403),
-    dead (unknown dataset id), missing (the date isn't in the dataset), bad (unreadable)."""
+    """One request failed. kind: busy (429/5xx, or no free connection), timeout, network, unreachable (no
+    connection), blocked (403), dead (unknown dataset id), missing (the date isn't in the dataset), bad."""
 
     def __init__(self, kind: str, detail: str = "", status: Optional[int] = None):
         super().__init__(f"{kind}: {detail}" if detail else kind)
@@ -95,23 +105,6 @@ class SSTUnavailable(RuntimeError):
         self.requested_end = requested_end
         self.errors = errors or {}
         self.elapsed_s = elapsed_s
-
-
-class Deadline:
-    """A point in time all requests of one fetch must finish by."""
-
-    def __init__(self, seconds: float, end: Optional[float] = None):
-        self.end = end if end is not None else time.monotonic() + seconds
-
-    def left(self) -> float:
-        return self.end - time.monotonic()
-
-    def expired(self) -> bool:
-        return self.left() <= 0
-
-    def minus(self, seconds: float) -> "Deadline":
-        """A deadline `seconds` earlier than this one."""
-        return Deadline(0, end=self.end - seconds)
 
 
 def sources(config: Optional[Dict]) -> Dict:
@@ -145,34 +138,33 @@ def _classify(status: int, body: str) -> FetchError:
     return FetchError(NETWORK, f"HTTP {status}", status)
 
 
-def http_get(url: str, deadline: Deadline, read_timeout: float = READ_TIMEOUT) -> bytes:
-    """GET url and return the (decoded) body, or raise FetchError.
+def noaa(url_or_server: str) -> outbound.Upstream:
+    """The outbound Upstream (threads, breaker) for a NOAA ERDDAP server or URL."""
+    return outbound.for_url(url_or_server, "noaa")
 
-    Timeouts are capped by the time left, and the body is read in chunks with a deadline
-    check between them, so a slow drip can't run past the deadline by more than one read.
+
+def noaa_down(config: Optional[Dict] = None) -> bool:
+    """True while the MUR server failed to connect in the last minute (requests to it fail at once)."""
+    return noaa(sources(config)["mur"][0]["server"]).is_down()
+
+
+def http_get(url: str, deadline: Deadline, read_timeout: float = READ_TIMEOUT) -> bytes:
+    """GET url and return the (decoded) body, or raise FetchError. Returns by the deadline.
+
+    The call runs on the NOAA upstream's threads (data/outbound): the caller waits only until the
+    deadline, the body is read in pieces against it (a server that drips bytes can't hold anything
+    past it), and a server that couldn't be reached in the last minute isn't asked (UNREACHABLE).
     """
-    left = deadline.left()
-    if left < 0.3:
+    if deadline.left() < 0.3:
         raise FetchError(TIMEOUT, "no time left")
-    timeout = (min(CONNECT_TIMEOUT, left), min(read_timeout, left))
     try:
-        with requests.get(url, headers=_HEADERS, timeout=timeout, stream=True) as r:
-            if r.status_code != 200:
-                raise _classify(r.status_code, r.text[:2000])
-            buf = io.BytesIO()
-            for chunk in r.iter_content(64 * 1024):
-                buf.write(chunk)
-                if deadline.expired():
-                    raise FetchError(TIMEOUT, "budget ran out during the download")
-            return buf.getvalue()
-    except FetchError:
-        raise
-    except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout) as e:
-        raise FetchError(TIMEOUT, type(e).__name__) from None
-    except requests.exceptions.Timeout as e:
-        raise FetchError(TIMEOUT, type(e).__name__) from None
-    except requests.RequestException as e:
-        raise FetchError(NETWORK, f"{type(e).__name__}: {e}") from None
+        rep = noaa(url).request("GET", url, deadline, connect_s=CONNECT_TIMEOUT, read_s=read_timeout,
+                                headers=_HEADERS)
+    except outbound.OutboundError as e:
+        raise FetchError(_OUTBOUND_KIND.get(e.kind, NETWORK), e.detail) from None
+    if rep.status != 200:
+        raise _classify(rep.status, rep.text(2000))
+    return rep.body
 
 
 def with_retry(call, deadline: Deadline, label: str = ""):
@@ -195,7 +187,7 @@ def with_retry(call, deadline: Deadline, label: str = ""):
 
 _latest = {}  # (server, dataset_id) -> {"checked": monotonic, "date": date|None, "good": date|None}
 _latest_lock = threading.Lock()
-_latest_refreshing = set()
+_latest_pending = {}  # key -> threading.Event of the lookup in flight (one lookup per dataset at a time)
 
 
 def _lookup_latest(src: Dict, deadline: Deadline) -> date:
@@ -208,33 +200,58 @@ def _lookup_latest(src: Dict, deadline: Deadline) -> date:
         raise FetchError(BAD, f"unexpected time[last] answer: {body[:80]!r}") from None
 
 
+def _known(key):
+    with _latest_lock:
+        hit = _latest.get(key)
+    return (hit["date"] or hit["good"]) if hit else None
+
+
 def latest_time(src: Dict, deadline: Optional[Deadline] = None, max_wait: float = 4.0,
                 block: bool = True) -> Optional[date]:
     """Newest day a dataset has (its ERDDAP time axis), cached for an hour.
 
     A failed lookup returns the last good answer (if any) and isn't retried for 5 minutes.
     block=False never waits: it returns what is known and refreshes in a background thread.
+    One lookup per dataset is in flight at a time: other callers wait for it (at most max_wait /
+    the deadline) instead of asking NOAA again.
     """
     key = (src["server"], src["dataset_id"])
     now = time.monotonic()
     with _latest_lock:
         hit = _latest.get(key)
-    if hit:
-        ttl = LATEST_TTL_S if hit["date"] else LATEST_FAIL_TTL_S
-        if now - hit["checked"] < ttl:
-            return hit["date"] or hit["good"]
+        if hit:
+            ttl = LATEST_TTL_S if hit["date"] else LATEST_FAIL_TTL_S
+            if now - hit["checked"] < ttl:
+                return hit["date"] or hit["good"]
+        ev = _latest_pending.get(key)
+        mine = ev is None
+        if mine:
+            ev = _latest_pending[key] = threading.Event()
+    wait_s = max_wait if deadline is None else max(0.0, min(max_wait, deadline.left()))
+    if not mine:  # someone is already asking: wait for that answer (or not at all)
+        if block:
+            ev.wait(wait_s)
+        return _known(key)
     if not block:
-        with _latest_lock:
-            if key not in _latest_refreshing:
-                _latest_refreshing.add(key)
-                threading.Thread(target=_refresh_latest, args=(src, key), daemon=True).start()
+        try:  # started outside the lock (Thread.start waits for the new thread)
+            threading.Thread(target=_refresh_latest, args=(src, key, ev, 4.0), daemon=True,
+                             name="erddap-latest").start()
+        except RuntimeError:
+            _finish_latest(key, ev)
         return hit["good"] if hit else None
-    return _refresh_latest(src, key, deadline, max_wait)
+    return _refresh_latest(src, key, ev, wait_s)
 
 
-def _refresh_latest(src, key, deadline=None, max_wait=4.0):
+def _finish_latest(key, ev):
+    with _latest_lock:
+        if _latest_pending.get(key) is ev:
+            _latest_pending.pop(key, None)
+    ev.set()
+
+
+def _refresh_latest(src, key, ev, wait_s=4.0):
+    """Look up time[last] once, within wait_s. Never raises; always releases the waiters (ev)."""
     try:
-        wait_s = max_wait if deadline is None else max(0.0, min(max_wait, deadline.left()))
         good_before = (_latest.get(key) or {}).get("good")
         try:
             dl = Deadline(wait_s)
@@ -248,8 +265,7 @@ def _refresh_latest(src, key, deadline=None, max_wait=4.0):
             _latest[key] = {"checked": time.monotonic(), "date": d, "good": d}
         return d
     finally:
-        with _latest_lock:
-            _latest_refreshing.discard(key)
+        _finish_latest(key, ev)
 
 
 def latest_mur_date(config: Optional[Dict] = None, block: bool = True,
@@ -263,7 +279,7 @@ def _reset_latest_cache():
     """Tests only."""
     with _latest_lock:
         _latest.clear()
-        _latest_refreshing.clear()
+        _latest_pending.clear()
 
 
 # ---------------- Grids ----------------
@@ -367,7 +383,7 @@ def fetch_days(src, dates: List[date], bbox, deadline: Deadline, concurrency: in
             return with_retry(lambda: _fetch_mur_day(src, d, bbox, deadline), deadline,
                               label=f"{src['dataset_id']} {d}")
         except FetchError as e:
-            if e.kind in (BLOCKED, DEAD):
+            if e.kind in (BLOCKED, DEAD, UNREACHABLE):
                 stop.setdefault("kind", e.kind)
             raise
 
@@ -376,16 +392,23 @@ def fetch_days(src, dates: List[date], bbox, deadline: Deadline, concurrency: in
     try:
         futs = {pool.submit(one, d): d for d in order}
         done, not_done = wait(futs, timeout=max(0.0, deadline.left()))
+        unreachable = []
         for f in done:
             d = futs[f]
             try:
                 results[d] = f.result()
             except FetchError as e:
                 errors[d] = e.kind
-                logger.warning("ERDDAP %s %s: %s", src["dataset_id"], d, e)
+                if e.kind == UNREACHABLE:
+                    unreachable.append((d, e))
+                else:
+                    logger.warning("ERDDAP %s %s: %s", src["dataset_id"], d, e)
             except Exception as e:  # noqa: BLE001 - a parse bug must not sink the week
                 errors[d] = BAD
                 logger.warning("ERDDAP %s %s: %s: %s", src["dataset_id"], d, type(e).__name__, e)
+        if unreachable:  # one line, not one per day
+            logger.warning("ERDDAP %s: %d days not fetched, NOAA unreachable: %s", src["dataset_id"],
+                           len(unreachable), min(unreachable)[1])
         for f in not_done:
             errors[futs[f]] = TIMEOUT
             f.cancel()
@@ -446,6 +469,8 @@ def _reason(errors: Dict) -> str:
         return "no_data"
     if kinds <= {MISSING}:
         return "no_data"
+    if UNREACHABLE in kinds:
+        return "network"
     for k in (BUSY, TIMEOUT):
         if k in kinds:
             return "busy"
@@ -556,7 +581,11 @@ def get_sst_multiday(end_date, config: Dict, num_days: int = 7, budget_s: Option
     if require_full or not allow_fallback:
         raise _unavailable(errors, prefix="No MUR")
 
-    if deadline.left() >= 1.0:
+    if errors and set(errors.values()) <= {UNREACHABLE} and \
+            all(noaa(s["server"]).is_down() for s in src_cfg.get("oisst") or []):
+        logger.warning("MUR unavailable for %s..%s: NOAA unreachable, not trying OISST (same server)",
+                       dates[0], dates[-1])
+    elif deadline.left() >= 1.0:
         logger.warning("MUR unavailable for %s..%s (%s), trying OISST", dates[0], dates[-1],
                        _reason(errors))
         oi, oerr, used = fetch_oisst(src_cfg, dates, bbox, deadline)

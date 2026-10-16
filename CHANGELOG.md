@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-16 - The server no longer stops answering when NOAA or Global Fishing Watch is down or slow
+
+### Fixed
+- **A NOAA or fishing-activity outage could stop the whole site** (all pages, Currents too) until a restart, with nothing in the log. All pages share 16 request threads, and requests waiting on an outside server held them: fishing-activity tiles queued behind one call to Global Fishing Watch at a time, and a slow answer from NOAA or GFW could hold a thread for hours. Every outside call now has a hard time limit, no lock is held while one runs, a busy or failing server is answered at once instead of waited on, and at most a few requests wait on NOAA or GFW at any moment. Details: `docs/incident-2026-10-16.md`.
+- **When NOAA can't be reached, a week answers at once** with "We can't reach NOAA's data server right now", the nearest saved weeks, and "We'll have this week ready within a day" (it goes to the seeder). After a failed connection NOAA isn't asked again for a minute; it used to cost every reader 22 seconds.
+- **Fishing activity**: when GFW fails, tiles come back empty at once and aren't cached for a day; when the server is busy, the page asks for the tile again a moment later. GFW failures are now logged.
+- A week that couldn't be sent wasn't asked for again for a minute after the *last* request, so a popular week could stay unfetched for as long as people kept asking. Now the minute counts from the failure.
+- `/api/precache`'s 120-second limit per week never applied (it waited for the fetch anyway); it does now, and precache never saves a week without the land mask.
+
+### Added
+- **Diagnostics for a stuck server**: `kill -USR1 <pid>` in the Render shell writes every thread's stack to the log; `GET /api/debug/threads` (X-Upload-Token) lists what's running, each outside server's state and every stack; any request running over 60 seconds is logged with its stack. Runbook in CLAUDE.md (Incident 2026-10-16).
+- `tools/test_sst_hang.py` (18 outage tests with real sockets) and `tools/load_sst_outage.py` (gunicorn as on Render, NOAA and GFW failing three ways, 2 x 50 concurrent requests, every answer within 30 s); `tools/netsim/` simulates the failures.
+- Settings (optional): `SST_NOAA_READERS`, `NOAA_MAX_CALLS`, `GFW_MAX_CALLS`, `SLOW_REQUEST_S`, `REQUEST_THREADS`.
+
+### Changed
+- The fetch no longer waits for NOAA's newest-day lookup (one lookup at a time, in the background); the connect timeout to NOAA is 3 s (was 4).
+- A week fetched before the land mask finished downloading is shown but not saved.
+
 ## 2026-10-16 - Offshore SST: explained, dated, and readable on phones and tablets
 
 ### Added
