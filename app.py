@@ -42,13 +42,13 @@ from layout.currentsview import build_currents_page
 from layout.labsview import build_labs_page
 from layout.mapview import build_map
 from layout.statsview import render_stats_page
-from layout.sidebar import build_sidebar, day_marks, LOAD_LABEL
-from layout.sstabout import build_about_modal
+from layout.sidebar import build_sidebar
 from map.colorscale import build_legend_component, compute_color_bounds
 from map.measure import format_measurement
 from map.overlay import sst_to_base64_png
 from map.pois import build_poi_markers, get_all_poi_names, pois_payload
-from map.readout import fmt_day, measure_panel, point_label, selection_tip, week_status_text, week_temps
+from layout.sstabout import build_about_modal
+from map.readout import fmt_day, measure_panel, selection_tip, week_temps
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1197,14 +1197,14 @@ def build_sst_page():
                 # Backdrop overlay for mobile drawer (hidden on desktop via CSS)
                 html.Div(id="sidebar-backdrop", className="sidebar-backdrop"),
                 dcc.Store(id="sst-store"),
-                # Small copy of the week's keys (no frames) for server callbacks, so a
-                # tap or a day change doesn't upload the week's images to the server.
-                dcc.Store(id="sst-key"),
-                dcc.Store(id="sst-pois", data=pois_payload()),
-                # The selection: {kind: reading | poi | dump, lat, lng, name?} (assets/sst.js)
                 dcc.Store(id="click-pos"),
                 html.Div(id="fetch-spinner-target", style={"display": "none"}),
                 html.Div(id="sst-events-sink", style={"display": "none"}),
+                # click-pos holds the selection: {kind: reading | poi | dump, lat, lng, name?}.
+                # sst-key is the week without its frames, for server callbacks (a tap or a
+                # day change doesn't upload the week's images); sst-pois feeds the tap hit test.
+                dcc.Store(id="sst-key"),
+                dcc.Store(id="sst-pois", data=pois_payload()),
                 html.Div(id="sst-status-sink", style={"display": "none"}),
                 html.Div(id="sst-fetch-sink", style={"display": "none"}),
                 build_about_modal(),
@@ -1592,12 +1592,16 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
 
         num_days = len(store_payload["frames"])
 
-        # Slider marks: weekday + day of month (layout/sidebar.day_marks)
-        marks = day_marks(store_payload["dates"])
+        # Build slider marks — just day-of-month
+        marks = {}
+        for i, d_str in enumerate(store_payload["dates"]):
+            d = datetime.strptime(d_str, "%Y-%m-%d")
+            marks[i] = str(d.day)
 
-        # In words, e.g. "Oct 6 to 12 loaded, the closest week to Oct 9" (map/readout.py);
-        # source and freshness are in the strip under the map.
-        status_text = week_status_text(store_payload, requested_end=end_date)
+        status_text = f"MUR 1km \u2022 {num_days} days loaded"
+        if cached_hit and actual_end_date != end_date:
+            offset = (actual_end_date - end_date).days
+            status_text += f" (nearest cache: {offset:+d}d)"
         status = html.Div(
             status_text,
             className="text-success",
@@ -1613,7 +1617,7 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
             store_payload, status,
             marks, num_days - 1, num_days - 1,
             anim_visible, "",
-            False, LOAD_LABEL,
+            False, "Fetch SST",
             "gotone-sidebar", {"display": "none"},
             gfw_url,
             {"display": "none"},
@@ -1631,7 +1635,7 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, end_date_str):
             ),
             dash.no_update, dash.no_update, dash.no_update,
             dash.no_update, "",
-            False, LOAD_LABEL,
+            False, "Fetch SST",
             "gotone-sidebar", {"display": "none"},
             dash.no_update,
             {"display": "none"},
@@ -1801,6 +1805,21 @@ app.clientside_callback(
 )
 
 
+# ---- Clientside: day-slider marks, weekday over day of the month ("Tu" / "6") ----
+# The load callback writes plain day-of-month marks; these replace them as the week arrives.
+app.clientside_callback(
+    """
+    function(key) {
+        if (!key || !key.dates || !window.SST) { return window.dash_clientside.no_update; }
+        return window.SST.marks(key.dates);
+    }
+    """,
+    Output("frame-slider", "marks", allow_duplicate=True),
+    Input("sst-key", "data"),
+    prevent_initial_call=True,
+)
+
+
 # ---- Clientside: status strip under the map + the playbar's date (assets/sst.js) ----
 app.clientside_callback(
     """
@@ -1828,7 +1847,13 @@ app.clientside_callback(
         var c = Array.isArray(children) ? children[0] : children;
         var p = (c && c.props) || {};
         var bad = c && (c.type === "Alert" || p.color === "danger");
-        var text = bad ? (typeof p.children === "string" ? p.children : "see the menu for details") : null;
+        function firstText(x) {                  // the message, not the saved-week buttons
+            if (typeof x === "string") { return x; }
+            if (Array.isArray(x)) { for (var i = 0; i < x.length; i++) { var t = firstText(x[i]); if (t) { return t; } } }
+            if (x && x.props && x.type !== "Button") { return firstText(x.props.children); }
+            return "";
+        }
+        var text = bad ? (firstText(p.children) || "open the menu for details") : null;
         window.SST.fetchError(text);
         return "";
     }
@@ -1836,6 +1861,18 @@ app.clientside_callback(
     Output("sst-fetch-sink", "children"),
     Input("fetch-status", "children"),
     prevent_initial_call=True,
+)
+
+
+# The fishing-activity note sits under the legend while that layer is ticked (review L4).
+app.clientside_callback(
+    """
+    function(layers) {
+        return ((layers || []).indexOf("gfw") >= 0) ? {} : {display: "none"};
+    }
+    """,
+    Output("sst-gfw-note", "style"),
+    Input("layer-toggles", "value"),
 )
 
 

@@ -4,8 +4,7 @@ import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 from dash import html
 
-# The map fills the page's flex column (.sst-page in assets/sst.css); the
-# status strip sits under it. (Was calc(100vh - 72px): the header is 80 px.)
+MAP_HEIGHT = "calc(100vh - 72px)"
 
 
 def build_map():
@@ -121,7 +120,19 @@ def build_map():
                             ),
                         ],
                     ),
-                    html.Div(id="legend-container", className="sst-legend-box"),
+                    # Legend (render_static_layers) + the fishing-activity note, shown while
+                    # that layer is ticked (GFW_NOTE: lane D's text when merged).
+                    html.Div(
+                        [html.Div(id="legend-container"),
+                         html.Div(globals().get("GFW_NOTE") or (
+                                      "Fishing activity: where commercial fishing boats carrying AIS "
+                                      "trackers fished on the same days, from Global Fishing Watch. "
+                                      "Most recreational boats don't show up, and the last few days "
+                                      "can be empty while GFW catches up."),
+                                  id="sst-gfw-note", className="sst-gfw-note",
+                                  style={"display": "none"})],
+                        className="sst-legend-box",
+                    ),
                     # Measure instructions on the map (the sidebar is a drawer on phones)
                     html.Div(
                         [html.Span(id="sst-map-hint-text"),
@@ -195,6 +206,8 @@ def build_map():
                     ),
                 ],
                 className="map-wrapper",
+                # Height: the page's flex column (.sst-page in assets/sst.css), with the
+                # status strip under the map. MAP_HEIGHT (72 px; the header is 80) is unused.
                 style={
                     "position": "relative",
                     "overflow": "hidden",

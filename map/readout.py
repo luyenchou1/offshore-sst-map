@@ -123,33 +123,3 @@ def measure_panel(measure, m, temp_a, temp_b, day_label):
                  "at A (WMM-2025).", className="mr-note"),
     ])
 
-
-def _short_range(first, last):
-    try:
-        a = datetime.strptime(first[:10], "%Y-%m-%d")
-        b = datetime.strptime(last[:10], "%Y-%m-%d")
-    except (TypeError, ValueError):
-        return ""
-    if (a.year, a.month) == (b.year, b.month):
-        return f"{a.strftime('%b')} {a.day} to {b.day}"
-    return f"{a.strftime('%b')} {a.day} to {b.strftime('%b')} {b.day}"
-
-
-def week_status_text(payload, requested_end=None):
-    """The sidebar's line after a week loads, in words: 'Oct 6 to 12 loaded', plus
-    ', the closest week to Oct 9' when a nearby saved week was served. Reads the
-    payload's meta (requested_end / served_end) when it has one; the source and
-    freshness are in the strip under the map (assets/sst.js)."""
-    dates = payload.get("dates") or []
-    meta = payload.get("meta") or {}
-    if not dates:
-        return "No days loaded"
-    txt = f"{_short_range(dates[0], dates[-1])} loaded"
-    req = meta.get("requested_end") or (requested_end.isoformat() if requested_end else None)
-    served = meta.get("served_end") or dates[-1]
-    if req and served and str(req)[:10] != str(served)[:10]:
-        d = datetime.strptime(str(req)[:10], "%Y-%m-%d")
-        txt += f", the closest week to {d.strftime('%b')} {d.day}"
-    if len(dates) < 7:
-        txt += f" ({len(dates)} of 7 days)"
-    return txt

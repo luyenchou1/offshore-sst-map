@@ -223,12 +223,15 @@ async function run(size) {
             dataset_id: 'ncdcOisst21NrtAgg_LonPM180', server: 'https://coastwatch.pfeg.noaa.gov/erddap',
             days: days, requested_end: '2099-01-01', served_end: last, latest_available: '2099-01-02',
             built_at: new Date(Date.now() - 3 * 3600 * 1000).toISOString(), from_cache: true,
+            missing_days: ['2099-01-03'], complete: false, preliminary_days: days.slice(-2),
+            week_match: 'closest_saved', queued: true,
         } }) });
     });
     await sleep(2500);
     const fake = await page.evaluate(() => [document.getElementById('sst-status-line').innerText, document.getElementById('legend-container').innerText]);
     check(size, 'strip with meta: source, freshness, closest week, newest',
-        /OISST/.test(fake[0]) && /updated 3 (hours|h) ago/.test(fake[0]) && /closest week to Jan 1/.test(fake[0]) && /newest (available )?Jan 2/.test(fake[0]),
+        /OISST/.test(fake[0]) && /updated 3 (hours|h) ago/.test(fake[0]) && /closest (saved )?week to Jan 1/.test(fake[0]) &&
+        /newest (available )?Jan 2/.test(fake[0]) && /no data for Jan 3 yet/.test(fake[0]),
         fake[0].replace(/\n/g, ' / '));
     // (phones: the legend carries the warning, the strip keeps the short source name)
     check(size, 'OISST week: legend (and the strip, if wide) say broad pattern only',

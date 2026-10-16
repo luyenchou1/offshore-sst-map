@@ -66,7 +66,17 @@
 
 /* ---- Legend (map/colorscale.py): dark translucent card like Currents' ---- */
 .sst-legend-box { position: absolute; right: 10px; bottom: 26px; z-index: 999; pointer-events: none; }
-.sst-legend-box:empty { display: none; }
+.sst-gfw-note {
+    width: 236px;
+    margin-top: 4px;
+    padding: 0.35rem 0.6rem;
+    background: rgba(10, 22, 40, 0.86);
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    color: #cbd5e1;
+    font-size: 0.7rem;
+    line-height: 1.35;
+}
 .sst-legend {
     width: 236px;
     padding: 0.45rem 0.65rem 0.4rem;
@@ -298,6 +308,7 @@
     .sst-page .sst-legend-box { top: 10px; bottom: auto; left: 50%; right: auto; transform: translateX(-50%); }
     .sst-page .sst-legend { width: 196px; padding: 0.3rem 0.5rem 0.25rem; }
     .sst-page .sst-legend-note { display: none; }
+    .sst-page .sst-gfw-note { width: 196px; font-size: 0.66rem; padding: 0.25rem 0.5rem; }
     .sst-page .sst-map-hint { top: 74px; max-width: calc(100% - 20px); font-size: 0.8rem; }
     .sst-page .currents-header-links .header-nav-link { font-size: 0.78rem; padding-left: 0.5rem; }
     .sst-page .leaflet-control-attribution { font-size: 9px; max-width: 70vw; }

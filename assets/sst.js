@@ -24,9 +24,10 @@
 
     var VIEW_KEY = "gotone-sst-view-v1";
     var AREA = [[38.8, -74.6], [43.8, -68.8]];            // the whole mapped area
-    // Phones: the NY Bight to the canyons (about 39.0 to 41.4 N, 74.2 to 69.0 W).
-    // A set view, not fitBounds: whole zoom levels only (fractional zooms showed
-    // seams between the basemap tiles), and zoom 6 would fit but is too far out.
+    // Small maps (phones, landscape phones, short windows), where the whole
+    // area only fits at zoom 6 or less: the NY Bight to the canyons (about 39.0
+    // to 41.4 N, 74.2 to 69.0 W) at zoom 7. Whole zoom levels only: fractional
+    // zooms showed seams between the basemap tiles.
     var GROUNDS = { center: [40.15, -71.6], zoom: 7 };
     var HIT_TOUCH = 16, HIT_MOUSE = 9;                     // spot hit radius, px
     var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -126,20 +127,34 @@
 
         var l1 = ['<b class="sst-st-date">' + esc(fmtLong(day)) + "</b>",
                   '<span class="sst-st-sub">day ' + (i + 1) + " of " + dates.length + "</span>"];
-        // Missing days inside the served range (normally none)
+        // Missing days: meta.missing_days (lane D: the asked-for days NOAA didn't send), else
+        // gaps inside the served range (normally none)
         var first = parseDay(dates[0]), last = parseDay(dates[dates.length - 1]);
-        if (first && last) {
-            var have = {}, gaps = [];
+        var gaps = [];
+        if (Array.isArray(meta.missing_days)) {
+            meta.missing_days.forEach(function (s) { var d = parseDay(s); if (d) { gaps.push(fmtShort(d)); } });
+        } else if (first && last) {
+            var have = {};
             dates.forEach(function (s) { var d = parseDay(s); if (d) { have[dayNum(d)] = 1; } });
             for (var n = dayNum(first); n <= dayNum(last); n++) {
                 if (!have[n]) { gaps.push(fmtShort(fromNum(n))); }
             }
-            if (gaps.length) { l1.push('<span class="sst-st-warn">no data for ' + esc(gaps.join(", ")) + "</span>"); }
         }
-        // Preliminary: MUR's final version comes about 4 days after the day itself.
-        var built = parseStamp(meta.built_at);
-        var ref = built ? etDay(built) : etDay(new Date());
-        if (ref && dayNum(ref) - dayNum(day) < 4) {
+        if (gaps.length) {
+            l1.push('<span class="sst-st-warn">no data for ' + esc(gaps.join(", ")) +
+                    (meta.complete === false ? " yet" : "") + "</span>");
+        }
+        // Preliminary (D4): MUR's final version comes about 4 days after the day itself.
+        // meta.preliminary_days lists the days that were that new when fetched; without it,
+        // count from built_at (or today).
+        var built = parseStamp(meta.built_at), prelim;
+        if (Array.isArray(meta.preliminary_days)) {
+            prelim = meta.preliminary_days.indexOf(dates[i]) >= 0;
+        } else {
+            var ref = built ? etDay(built) : etDay(new Date());
+            prelim = !!ref && dayNum(ref) - dayNum(day) < 4;
+        }
+        if (prelim) {
             l1.push('<span class="sst-st-prelim" title="MUR revises its newest days for about four days">preliminary</span>');
         }
 
@@ -158,12 +173,17 @@
             l2.push(dual("newest available " + fmtShort(latest), "newest " + fmtShort(latest),
                          newer ? "sst-st-new" : ""));
         }
-        if (req && served && dayNum(req) !== dayNum(served)) {
+        // Which week this is (lane D's meta.week_match; without it, requested vs served end)
+        var match = meta.week_match || (req && served && dayNum(req) !== dayNum(served) ? "closest_saved" : "exact");
+        if (match === "closest_saved" && req && served && first) {
             var sameMonth = first.getMonth() === served.getMonth();
             var range = fmtShort(first) + " to " + (sameMonth ? served.getDate() : fmtShort(served));
-            l2.push(dual(range + ", the closest week to " + fmtShort(req),
+            l2.push(dual(range + ", the closest saved week to " + fmtShort(req),
                          "closest week to " + fmtShort(req), "sst-st-warn"));
+        } else if (match === "older_copy") {
+            l2.push(dual("saved copy: NOAA didn't send a newer one", "saved copy", "sst-st-warn"));
         }
+        if (meta.queued) { l2.push(dual("full week due within a day", "full week due", "")); }
 
         if (S.error) {                                   // the last Load week failed
             l2.unshift('<span class="sst-st-warn">Couldn\'t load that week: ' + esc(S.error) + "</span>");
@@ -177,6 +197,17 @@
             el.innerHTML = html;
         }
         if (pb) { pb.textContent = DAYS[day.getDay()] + ", " + fmtShort(day); }
+    }
+
+    // Day-slider marks: weekday over day of the month ("Tu" / "6"; assets/sst.css
+    // shows the two lines). Fewer than 7 days is fine.
+    function marks(dates) {
+        var out = {}, wd = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+        (dates || []).forEach(function (s, k) {
+            var d = parseDay(s);
+            out[k] = d ? wd[d.getDay()] + "\n" + d.getDate() : String(k + 1);
+        });
+        return out;
     }
 
     // ------------------------------------------------------- tap -> what --
@@ -239,10 +270,10 @@
             saved.lat > 36 && saved.lat < 46 && saved.lng > -78 && saved.lng < -65) {
             map.setView([saved.lat, saved.lng], saved.z, { animate: false });
         } else {
-            if (map.getSize().x < 600) {
-                map.setView(GROUNDS.center, GROUNDS.zoom, { animate: false });
-            } else {
+            if (map.getBoundsZoom(AREA, false, L.point(8, 8)) >= GROUNDS.zoom) {
                 map.fitBounds(AREA, { animate: false, padding: [4, 4] });
+            } else {
+                map.setView(GROUNDS.center, GROUNDS.zoom, { animate: false });
             }
         }
         map.on("moveend", function () {
@@ -288,6 +319,7 @@
     window.SST = {
         classify: classify,
         status: status,
+        marks: marks,
         fetchError: fetchError,
         _state: S
     };

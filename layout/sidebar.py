@@ -7,18 +7,9 @@ from dash import dcc, html
 
 from map.pois import get_all_poi_names, get_poi_options
 
-LOAD_LABEL = "Load week"     # the date box's button (fetch_sst_data resets it after a load)
-_WD = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
-
-
-def day_marks(dates):
-    """Day-slider marks: weekday over day of the month ("Tu" / "6"), from the
-    week's ISO dates (assets/sst.css shows the two lines)."""
-    marks = {}
-    for i, d_str in enumerate(dates or []):
-        d = date.fromisoformat(d_str[:10])
-        marks[i] = f"{_WD[d.weekday()]}\n{d.day}"
-    return marks
+# The date box's button. The load callback in app.py restores its label after each load
+# (FETCH_LABEL on lane D's branch): keep the two the same.
+LOAD_LABEL = "Load week"
 
 
 def _section_label(text, first=False):

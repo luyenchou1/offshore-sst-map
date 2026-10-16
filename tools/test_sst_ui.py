@@ -15,12 +15,10 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from layout.sidebar import day_marks                                    # noqa: E402
 from map.colorscale import build_legend_component, legend_ticks          # noqa: E402
 from map.measure import format_measurement, magnetic_variation           # noqa: E402
 from map.pois import ALL_POIS, pois_payload                              # noqa: E402
-from map.readout import (fmt_temp, measure_panel, selection_tip,         # noqa: E402
-                         week_status_text, week_temps)
+from map.readout import fmt_temp, measure_panel, selection_tip, week_temps  # noqa: E402
 
 
 def text_of(c):
@@ -51,21 +49,6 @@ def test_measurement_true_and_magnetic():
     assert "true" in m["label"] and "magnetic" in m["label"]
     m = format_measurement(41.0, -71.0, 41.5, -71.0)      # due north: 000 true
     assert m["true_text"] == "000°"
-
-
-def test_week_status_text_without_and_with_meta():
-    days = [f"2026-10-{d:02d}" for d in range(6, 13)]
-    assert week_status_text({"dates": days}) == "Oct 6 to 12 loaded"
-    # today's payloads: no meta, the requested end date comes from the callback
-    assert week_status_text({"dates": days}, date(2026, 10, 14)) == \
-        "Oct 6 to 12 loaded, the closest week to Oct 14"
-    # lane D's meta (fake): a nearby week served, a day missing
-    meta = {"source": "MUR", "requested_end": "2026-10-13", "served_end": "2026-10-12",
-            "days": days[:6] + days[7:], "latest_available": "2026-10-15"}
-    t = week_status_text({"dates": days[:5] + days[6:], "meta": meta})
-    assert t == "Oct 6 to 12 loaded, the closest week to Oct 13 (6 of 7 days)", t
-    assert week_status_text({"dates": ["2026-09-30", "2026-10-06"]}).startswith("Sep 30 to Oct 6")
-    assert week_status_text({}) == "No days loaded"
 
 
 def test_legend_says_scale_and_has_round_ticks():
@@ -107,8 +90,7 @@ def test_measure_panel_states():
     assert measure_panel({"mode": "off"}, None, None, None, "") == ""
 
 
-def test_day_marks_and_pois():
-    assert day_marks(["2026-10-06", "2026-10-12"]) == {0: "Tu\n6", 1: "Mo\n12"}
+def test_pois_payload():
     p = pois_payload()
     assert len(p["points"]) == len(ALL_POIS) == 32
     assert p["dump"]["s"] < p["dump"]["n"] and p["dump"]["w"] < p["dump"]["e"]
