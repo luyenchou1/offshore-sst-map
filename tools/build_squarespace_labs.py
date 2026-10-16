@@ -122,7 +122,8 @@ if __name__ == "__main__":
     missing = [t["title"] for t in TOOLS if not t.get("short")]
     if missing:
         sys.exit("TOOLS entries need a 'short' link name (gotoneapp.com/<short>): " + ", ".join(missing))
-    b = block()
+    # ASCII only (the arrows as character references), so no copy/paste path can garble them
+    b = block().encode("ascii", "xmlcharrefreplace").decode("ascii")
     open(os.path.join(OUT, "labs-code-block.html"), "w", encoding="utf-8").write(b)
     open(os.path.join(OUT, "preview.html"), "w", encoding="utf-8").write(PREVIEW % b)
     print("squarespace/labs-code-block.html (%d bytes) and preview.html, %d tiles" % (len(b), len(TOOLS)))
