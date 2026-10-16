@@ -5,7 +5,6 @@ from datetime import date, timedelta
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
-from data.erddap import latest_mur_date
 from map.pois import get_all_poi_names, get_poi_options
 
 
@@ -40,11 +39,7 @@ def _divider():
 
 def build_sidebar():
     today = date.today()
-    # Open on, and allow, the newest MUR day NOAA has (looked up hourly, never waited for here);
-    # until it is known: two days back, and allow yesterday (the fetch clamps to the newest day).
-    latest = latest_mur_date(block=False)
-    default_end = latest or today - timedelta(days=2)
-    max_end = latest or today - timedelta(days=1)
+    default_end = today - timedelta(days=4)  # MUR has ~2-day latency
 
     return dbc.Col(
         [
@@ -76,7 +71,7 @@ def build_sidebar():
                         id="end-date-picker",
                         date=default_end,
                         min_date_allowed=date(2002, 6, 8),
-                        max_date_allowed=max_end,
+                        max_date_allowed=today - timedelta(days=2),
                         display_format="MMM D, YYYY",
                         style={"width": "100%"},
                     ),

@@ -5,14 +5,13 @@ name: Seed SST cache
 # /api/cache/upload endpoint. Keeps recent dates served from cache.
 on:
   schedule:
-    - cron: '0 11 * * *'   # daily ~07:00 ET
-    - cron: '0 21 * * *'   # and ~17:00 ET, in case MUR's newest day came out after the morning run
+    - cron: '0 11 * * *'   # daily ~07:00 ET (after MUR's ~2-day-latency update)
   workflow_dispatch:        # allow manual runs
 
 jobs:
   seed:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,9 +20,7 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: pip install -r requirements.txt
-      # The 10 weeks ending on MUR's newest day (ERDDAP time[last]), plus up to 15 weeks readers
-      # asked for that NOAA couldn't send in time (/api/cache/wanted).
       - name: Build and upload recent SST windows
         env:
           CACHE_UPLOAD_TOKEN: ${{ secrets.CACHE_UPLOAD_TOKEN }}
-        run: python tools/sync_cache.py --base-url https://sst.gotoneapp.com --count 10 --max-wanted 15
+        run: python tools/sync_cache.py --base-url https://sst.gotoneapp.com --start-back 2 --count 10

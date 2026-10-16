@@ -7,18 +7,14 @@ on a cache miss. This script runs somewhere ERDDAP IS reachable (a residential
 IP or a CI runner that isn't blocked), builds the same raw-only cache files the
 app's pre-cache writes, and POSTs them to /api/cache/upload.
 
-Seeds the --count end dates ending on the newest MUR day (ERDDAP time[last]; today -
---start-back if that lookup fails), so the page's default week is ready, plus the weeks
-readers asked for that NOAA couldn't send in time (GET /api/cache/wanted, at most
---max-wanted per run). Only complete MUR weeks are uploaded (never OISST, never a week
-with a day missing because NOAA was busy); each file carries the week's "meta".
+Seed finalized end-dates (today-4 and older never go "stale"); together with the
+app's ±3-day fuzzy cache lookup, that covers every selectable recent date.
 
 Usage (from repo root, with the project venv):
   CACHE_UPLOAD_TOKEN=secret \
   python tools/sync_cache.py --base-url https://sst.gotoneapp.com
 
   python tools/sync_cache.py --dry-run            # build only, no upload
-  python tools/sync_cache.py --dates 2014-08-20   # just these end dates
 """
 from __future__ import annotations
 
@@ -41,14 +37,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Clean imports only — deliberately NOT importing app.py (it starts a
 # pre-warm thread at import and, in some branches, loads extra data).
-from data import sstmeta  # noqa: E402
 from data.cache import cache_key  # noqa: E402
-from data.erddap import get_sst_multiday, latest_mur_date  # noqa: E402
-from data.geo import (  # noqa: E402
-    grid_bounds, mask_aoi_rasterized, mask_land_rasterized, orient_to_leaflet,
-)
-
-WEEK_BUDGET_S = 150  # a seed run can wait for NOAA; readers get ~22 s
+from data.erddap import get_sst_multiday  # noqa: E402
+from data.geo import mask_aoi_rasterized, mask_land_rasterized, orient_to_leaflet  # noqa: E402
 
 
 def _serialize_array(arr: np.ndarray) -> str:
@@ -73,7 +64,10 @@ def build_raw_payload(sst: dict, cfg: dict, locked: bool = False) -> dict:
     serialized_lats = _serialize_array(lats)
     serialized_lons = _serialize_array(lons)
     res_km = abs(float(lats[1] - lats[0])) * 111.0 if len(lats) > 1 else None
-    bounds = grid_bounds(lats, lons)
+    bounds = [
+        [float(np.min(lats)), float(np.min(lons))],
+        [float(np.max(lats)), float(np.max(lons))],
+    ]
 
     serialized_days = []
     dates = []
@@ -114,7 +108,6 @@ def build_raw_payload(sst: dict, cfg: dict, locked: bool = False) -> dict:
         "server": sst["server"],
         "dataset_id": sst["dataset_id"],
         "dataset_title": sst["dataset_title"],
-        "meta": sstmeta.meta_from_fetch(sst),
         "raw_days": serialized_days,
         "lats": serialized_lats,
         "lons": serialized_lons,
@@ -157,26 +150,6 @@ def upload_cache_file(base_url, token, fname, blob, attempts=5):
     return False, "exhausted retries"
 
 
-def fetch_wanted(base_url, token):
-    """Weeks readers asked for that NOAA couldn't send (the app's /api/cache/wanted)."""
-    try:
-        r = requests.get(f"{base_url.rstrip('/')}/api/cache/wanted",
-                         headers={"X-Upload-Token": token}, timeout=30)
-        if r.status_code != 200:
-            print(f"wanted list: HTTP {r.status_code} (skipped)", flush=True)
-            return []
-        out = []
-        for w in r.json().get("weeks", []):
-            try:
-                out.append(date.fromisoformat(str(w)))
-            except ValueError:
-                pass
-        return out
-    except (requests.RequestException, ValueError) as e:
-        print(f"wanted list: {type(e).__name__} (skipped)", flush=True)
-        return []
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -186,18 +159,13 @@ def main() -> int:
     )
     ap.add_argument("--token", default=os.environ.get("CACHE_UPLOAD_TOKEN"))
     ap.add_argument(
-        "--start-back", type=int, default=1,
-        help="If NOAA's newest day can't be looked up: most recent end-date = today - start_back "
-             "(default 1)",
+        "--start-back", type=int, default=2,
+        help="Most recent end-date to seed = today - start_back (default 2)",
     )
     ap.add_argument(
-        "--count", type=int, default=10,
-        help="Number of consecutive end-dates to seed, ending on the newest day (default 10)",
+        "--count", type=int, default=9,
+        help="Number of consecutive end-dates to seed (default 9)",
     )
-    ap.add_argument("--max-wanted", type=int, default=15,
-                    help="At most this many reader-requested weeks per run (default 15)")
-    ap.add_argument("--no-wanted", action="store_true", help="Skip the reader-requested weeks")
-    ap.add_argument("--dates", default="", help="Comma-separated end dates to seed instead")
     ap.add_argument("--config", default="config.json")
     ap.add_argument("--dry-run", action="store_true", help="Build but do not upload")
     ap.add_argument(
@@ -214,34 +182,21 @@ def main() -> int:
     with open(args.config) as f:
         cfg = json.load(f)
 
-    if args.dates:
-        end_dates = [date.fromisoformat(d.strip()) for d in args.dates.split(",") if d.strip()]
-        newest = max(end_dates)
-    else:
-        latest = latest_mur_date(cfg, max_wait=20.0)
-        newest = latest or (date.today() - timedelta(days=args.start_back))
-        print(f"newest MUR day: {latest or 'unknown'}; seeding from {newest}", flush=True)
-        end_dates = [newest - timedelta(days=i) for i in range(args.count)]
-        if args.token and not args.no_wanted:
-            wanted = [w for w in fetch_wanted(args.base_url, args.token)
-                      if w not in end_dates and w <= newest][: args.max_wanted]
-            if wanted:
-                print(f"reader-requested weeks: {', '.join(str(w) for w in wanted)}", flush=True)
-            end_dates += wanted
-    print(f"seeding {len(end_dates)} dates -> {args.base_url}", flush=True)
+    today = date.today()
+    end_dates = [today - timedelta(days=args.start_back + i) for i in range(args.count)]
+    print(f"seeding {len(end_dates)} dates: {end_dates[0]} .. {end_dates[-1]} "
+          f"-> {args.base_url}")
 
     ok = fail = 0
     for ed in end_dates:
         fname = cache_key(ed, False) + ".json.gz"
         try:
             t = time.monotonic()
-            sst = get_sst_multiday(ed, cfg, budget_s=WEEK_BUDGET_S, allow_fallback=False,
-                                   require_full=True, concurrency=2)
+            sst = get_sst_multiday(ed, cfg)
             payload = build_raw_payload(sst, cfg, locked=False)
             blob = gzip.compress(json.dumps(payload).encode("utf-8"))
-            days = payload["meta"]["days"]
-            print(f"built {fname}  {len(blob) / 1024:.0f} KB  {days[0]}..{days[-1]} "
-                  f"({len(days)} days) in {time.monotonic() - t:.1f}s", flush=True)
+            print(f"built {fname}  {len(blob) / 1024:.0f} KB  in "
+                  f"{time.monotonic() - t:.1f}s", flush=True)
             if args.dry_run:
                 ok += 1
                 continue

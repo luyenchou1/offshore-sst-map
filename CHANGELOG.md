@@ -1,27 +1,5 @@
 # Changelog
 
-## 2026-10-16 - Offshore SST: every week loads, the newest day, and the page knows what it served
-
-### Fixed
-- **Weeks that weren't saved now load in seconds or fail honestly.** The app no longer searches NOAA for datasets on every load (those pages refuse cloud servers); it asks the MUR dataset directly, a few days at a time, newest first, retries NOAA's frequent "busy" answers after a second or two, and gives up at 22 seconds. Uncached weeks from 2005 to 2018 took 5 to 7 seconds in testing; before, they hung for over three minutes and showed "may not be available yet".
-- **The newest day can be opened, and the page opens on it.** The request for a day ran to 23:59 and NOAA rejects any time past its newest data, so yesterday's map could never load. Days are now asked for at their exact time, the newest day comes from NOAA itself (checked hourly), and the date box opens on it and allows it.
-- **The OISST backup works.** It pointed at a dataset that ended in 2020. It now uses OISST v2.1 (the final series where it reaches, the near-real-time one for the last two weeks), only when MUR sends nothing in time, and the page says it is the 25 km broad-pattern map.
-- **Fishing activity shows the week you're looking at.** The tiles used a date range shared by every visitor (set by whoever loaded last); each tile request now carries its own week. Empty tiles no longer log errors.
-- **Hidden layers download nothing.** The chart, bathymetry and fishing activity layers are added to the map only while their box is ticked (they used to load every tile at zero opacity).
-
-### Added
-- **What was served, in the data.** Every week the page receives carries a `meta` record: MUR or OISST, its resolution, the days actually served, the week asked for and the week served, NOAA's newest day, when it was fetched and whether it came from the saved copy. Old saved weeks get one filled in. The date box now shows the week served.
-- **When NOAA can't send a week**, the sidebar says why in plain words and offers the three nearest saved weeks as buttons; on a phone the drawer opens so the message is seen. A week that came back partial, as OISST, or not at all goes on a list the daily seeder fetches ("We'll have this week ready within a day").
-- **Partial weeks** are shown with the days NOAA sent, and the sidebar names the missing days.
-- **Saved weeks stay fresh**: a week fetched while its newest days were still preliminary is refetched after 12 hours (24 inside MUR's 7-day revision window), an OISST or partial week tries MUR again after 6; if NOAA doesn't answer, the saved copy is shown.
-- `tools/test_sst_fetch.py`: 26 checks of the data path against a fake NOAA (busy then fine, refused, a dead dataset, timeouts, gap days, the newest day, partial weeks, the honest failure, two visitors on one week, fishing tiles, layers, the seeder's list).
-
-### Changed
-- The seeder starts from NOAA's newest day and runs twice a day (07:00 and 17:00 ET); it also fetches the weeks readers asked for. It uploads only complete MUR weeks.
-- `config.json` lists the datasets (MUR, OISST final and near-real-time) instead of three servers and search words; the two servers that only redirected or had no MUR are gone.
-- The land mask is computed once per grid instead of once per day, and the Natural Earth download can no longer stall a load.
-- Deploying this changes the SST callbacks: open pages need a reload ("Callback function not found" otherwise).
-
 ## 2026-10-16 - Labs analytics: feature use, "Was this helpful?", one counter for every Labs tool
 
 ### Added
