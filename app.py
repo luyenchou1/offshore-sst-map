@@ -82,6 +82,54 @@ app = dash.Dash(
 server = app.server  # for gunicorn
 
 
+# ---- Each tool page carries its own link preview ----
+# Link-preview crawlers never run the page's scripts, so the card has to be in the HTML the server sends for
+# each address. /sst and /currents get their own title, description and card (assets/labs/og-<tool>.jpg, from
+# tools/build_labs_previews.py); everything else keeps the Labs card above. ?v= busts preview caches on a new card.
+def _tool_previews():
+    import hashlib
+    import html as _html
+    from layout.labsview import TOOLS
+    out = {}
+    for t in TOOLS:
+        key = t["href"].strip("/")
+        img = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "labs", f"og-{key}.jpg")
+        if t["href"].startswith("http") or not os.path.exists(img):
+            continue
+        v = hashlib.md5(open(img, "rb").read()).hexdigest()[:8]
+        out["/" + key] = {"title": f"{t['title']} · GotOne Labs", "desc": t["text"],
+                          "image": f"https://labs.gotoneapp.com/assets/labs/og-{key}.jpg?v={v}",
+                          "url": f"https://labs.gotoneapp.com/{key}", "esc": _html.escape}
+    return out
+
+
+_TOOL_PREVIEWS = _tool_previews()
+_dash_interpolate_index = app.interpolate_index
+
+
+def _interpolate_index(**kw):
+    try:
+        path = (request.path.rstrip("/") or "/").lower()
+    except RuntimeError:
+        path = ""
+    pv = _TOOL_PREVIEWS.get(path)
+    if pv:
+        import re as _re
+        e = pv["esc"]
+        swap = {"og:title": pv["title"], "og:description": pv["desc"], "og:image": pv["image"],
+                "og:url": pv["url"], "description": pv["desc"]}
+        metas = kw.get("metas", "")
+        for k, val in swap.items():
+            metas = _re.sub(r'((?:name|property)="%s" content=")[^"]*(")' % _re.escape(k),
+                            lambda m: m.group(1) + e(val, quote=True) + m.group(2), metas)
+        kw["metas"] = metas
+        kw["title"] = e(pv["title"])
+    return _dash_interpolate_index(**kw)
+
+
+app.interpolate_index = _interpolate_index
+
+
 # ---- Hosts: labs.gotoneapp.com is home; sst.gotoneapp.com is the old address ----
 # On the old host "/" still opens the SST map (the Squarespace embed points there).
 # Set LABS_HOST=labs.gotoneapp.com in Render once that domain works: page loads

@@ -8,6 +8,7 @@ Drawn from the apps' own data so the tiles show what each tool looks like:
                 to the canyons, land from Natural Earth (data/geo.py)
   currents.jpg  the tide-stage atlas at average strength, mid-flood: streamlines
                 coloured by speed with the Currents page's colour ramp
+  og-sst.jpg, og-currents.jpg  1200 x 630 cards for the tool pages themselves (tool_cards)
   og.jpg        1200 x 630 social-share card (link previews in Facebook groups,
                 texts, forums) built from the two and gotone-wordmark.png (the
                 brand's horizontal white logotype from GotOne/Graphics, trimmed
@@ -204,10 +205,54 @@ def og_card():
     card.save(os.path.join(OUT, "og.jpg"), quality=85, optimize=True)
 
 
+TOOL_CARDS = (   # one link-preview card per tool page (app.py serves each page's own og:image)
+    ("sst", "Offshore SST", "Find the temperature breaks, Cape May to Portland, Maine.", 0.5),
+    ("currents", "Currents", "The current doesn't follow the tide table. See when it turns.", 0.82),
+)
+
+
+def tool_cards():
+    """assets/labs/og-<tool>.jpg: 1200 x 630 cards for /sst and /currents: the GotOne Labs mark, the tool's
+    name and one line over a band of the tool's own preview."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    def font(size, bold=True):
+        for path in ("/System/Library/Fonts/HelveticaNeue.ttc", "/System/Library/Fonts/Helvetica.ttc"):
+            try:
+                return ImageFont.truetype(path, size, index=1 if bold else 0)
+            except OSError:
+                continue
+        return ImageFont.load_default()
+
+    logo = Image.open(os.path.join(OUT, "gotone-wordmark.png")).convert("RGBA")
+    logo = logo.resize((int(logo.width * 50 / logo.height), 50), Image.LANCZOS)
+    for key, title, line, at in TOOL_CARDS:   # at: where the 380 px band sits in the preview, 0 top .. 1 bottom
+        card = Image.new("RGB", (1200, 630), NAVY)
+        shot = Image.open(os.path.join(OUT, key + ".jpg")).convert("RGB")
+        shot = shot.resize((1200, round(shot.height * 1200 / shot.width)), Image.LANCZOS)
+        top = round((shot.height - 380) * at)
+        card.paste(shot.crop((0, top, 1200, top + 380)), (0, 250))
+        d = ImageDraw.Draw(card)
+        card.paste(logo, (40, 34), logo)
+        x = 40 + logo.width + 18
+        d.line([(x, 39), (x, 80)], fill=(255, 255, 255), width=2)
+        d.text((x + 16, 42), "Labs", fill=YELLOW, font=font(34))
+        d.text((40, 106), title, fill=YELLOW, font=font(60))
+        d.text((40, 186), line, fill="#ffffff", font=font(27, bold=False))
+        card.save(os.path.join(OUT, f"og-{key}.jpg"), quality=85, optimize=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--sst", help="SST cache file (default: the newest Jun-Oct week cached)")
+    ap.add_argument("--cards-only", action="store_true",
+                    help="only rebuild the per-tool link-preview cards from the existing previews")
     a = ap.parse_args()
+    if a.cards_only:
+        tool_cards()
+        for key, *_ in TOOL_CARDS:
+            print(f"assets/labs/og-{key}.jpg: {os.path.getsize(os.path.join(OUT, f'og-{key}.jpg')) / 1024:.0f} KB")
+        return
     path = a.sst
     if not path:
         cands = [p for p in sorted(glob.glob(os.path.join(REPO, "cache", "sst", "*_adaptive.json.gz")))
@@ -219,7 +264,8 @@ def main():
     currents_preview()
     wordmark()
     og_card()
-    for n in ("sst.jpg", "currents.jpg", "og.jpg"):
+    tool_cards()
+    for n in ("sst.jpg", "currents.jpg", "og.jpg", "og-sst.jpg", "og-currents.jpg"):
         print(f"assets/labs/{n}: {os.path.getsize(os.path.join(OUT, n)) / 1024:.0f} KB")
     print(f"SST day: {day} ({os.path.basename(path)})")
 
