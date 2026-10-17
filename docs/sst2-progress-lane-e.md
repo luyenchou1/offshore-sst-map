@@ -22,7 +22,7 @@ Branch `sst2-lane-e`, worktree `/Users/lchou/Code/sst-sprint2/lane-e`, dev port 
 - Lead's additions (mid-task): one cache entry per week (the color scale is a browser choice now), a disk-based cap
   sized from the real disk with least-recently-viewed eviction, old two-variant entries still load, and plain retention
   rules in CLAUDE.md.
-- NOTE: pyflakes 4.0.3 got installed into the shared venv at 22:09 by a lint fallback; uninstall before finishing.
+- pyflakes 4.0.3 got installed into the shared venv at 22:09 by a lint fallback; uninstalled at the end.
 - Haze dropped (Luyen, via the lead): no analysis_error fetch, no error grid in GOSST1 (header bytes 40 to 63
   reserved), `setOptions` ignores "haze", `valueAt().estimate` is always null.
 - Built: data/sstgrid.py (GOSST1, weekly entry, Auto range, old-entry conversion, store payload), weekly cache in
@@ -46,3 +46,12 @@ Branch `sst2-lane-e`, worktree `/Users/lchou/Code/sst-sprint2/lane-e`, dev port 
 - Suites: test_sst_ui 9/9, test_sst_fetch 27/27, test_sst_hang 18/18, test_sst_grid 12/12, test_labstats 24/24,
   load_sst_outage (3 scenarios ok), test_sstengine.mjs 20/20, smoke_sst.mjs all checks at 3 sizes (legend skipped
   on this branch alone), boot_sst_pages.mjs all checks (24/24 pages + init paths).
+- Trial merge with sst2-lane-v in a throwaway clone (neither worktree touched): conflicts only in app.py (one import
+  line: keep `from map.depth import ...`, drop the colorscale import), layout/sidebar.py (the slider comment: take lane
+  V's), CHANGELOG.md (keep both entries) and tools/smoke_sst.mjs (take lane V's `tile` line and legend + dark basemap
+  checks; in the range block keep lane V's "lock-scale steps aside" check followed by lane E's engine range check; lane
+  V's old reload branch can't run with the real engine). On the merge: test_sst_look 11/11, test_sst_ui 9/9, smoke at
+  three sizes all checks (real engine, lane V's panel/legend/contours/labels included), test_sstengine 20/20,
+  boot_sst_pages all checks.
+- Final perf (laptop 1440x900, no throttle): decode 20 ms, a recolor 1.2 ms, crossfades at 60 fps with and without
+  isotherms. Phone profile as above.
