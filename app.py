@@ -49,6 +49,7 @@ from layout.mapview import build_map, chart_layer, gebco_layer, gfw_layer
 from layout.statsview import render_stats_page
 from layout.sidebar import build_sidebar
 from map.colorscale import build_legend_component, compute_color_bounds
+from map.depth import ROUTE as DEPTH_ROUTE, contours_gz
 from map.measure import format_measurement
 from map.overlay import FRAME_FORMAT, sst_to_base64_png
 from map.pois import build_poi_markers, get_all_poi_names, pois_payload
@@ -985,6 +986,21 @@ def _debug_state_lines():
     except Exception as e:  # noqa: BLE001 - diagnostics must never fail
         lines.append(f"state unavailable: {type(e).__name__}: {e}")
     return lines
+
+
+# ---- SST depth contours (sprint 2, lane V) ----
+# A committed static asset (tools/build_contours.py -> assets/sst/contours.json.gz, ~60 KB) read once into
+# memory and sent as is with Content-Encoding: gzip, like the Currents frames. The page asks for it with
+# ?v=<its hash> (layout/mapview.py), so browsers keep it for a week. No outside call, no lock.
+@server.route(DEPTH_ROUTE)
+def sst_depth_contours():
+    body, etag = contours_gz()
+    if body is None:
+        return "not found", 404
+    headers = {"ETag": f'"{etag}"', "Cache-Control": "public, max-age=604800", "Vary": "Accept-Encoding"}
+    if request.headers.get("If-None-Match") == f'"{etag}"':
+        return Response(status=304, headers=headers)
+    return Response(body, mimetype="application/json", headers={**headers, "Content-Encoding": "gzip"})
 
 
 # ---- Currents page data (/currents) ----

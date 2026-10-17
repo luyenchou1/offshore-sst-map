@@ -1,8 +1,13 @@
 """Dash Leaflet map component."""
 
+import json
+
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 from dash import html
+
+from map.depth import contours_url
+from map.pois import ALL_POIS
 
 MAP_HEIGHT = "calc(100vh - 72px)"
 
@@ -12,6 +17,16 @@ GFW_NOTE = ("Fishing activity: where commercial fishing boats carrying AIS track
             "last few days can be empty while GFW catches up.")
 
 AOI_TILE_BOUNDS = [[38.80, -74.96], [43.80, -68.80]]
+
+# Dark basemap for /sst only (sprint 2): Esri's Dark Gray Canvas, keyless raster tiles ({z}/{y}/{x}), as on
+# /currents. Land is dark gray (#414143) and the opaque SST colors are the brightest thing on the map. The place
+# names are a separate layer drawn above the SST and the depth lines (pane sst-labels-pane, z 440). The catch
+# map keeps the light basemap. Attribution: the services' own copyrightText plus "Powered by Esri".
+_ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas"
+DARK_BASE = f"{_ESRI}/World_Dark_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}"
+DARK_LABELS = f"{_ESRI}/World_Dark_Gray_Reference/MapServer/tile/{{z}}/{{y}}/{{x}}"
+ESRI_DARK_ATTRIBUTION = ('Powered by <a href="https://www.esri.com/">Esri</a> &mdash; Esri, HERE, Garmin, '
+                         '&copy; OpenStreetMap contributors, and the GIS user community')
 
 
 # The three optional layers are created only while their box is ticked (app.toggle_layers puts
@@ -80,14 +95,9 @@ def build_map():
                             "cursor": "crosshair",
                         },
                         children=[
-                            # Esri World Light Gray Canvas — keyless light-grey
-                            # basemap. Replaced CARTO Positron, which began
-                            # requiring an API key (tiles showed "API KEY
-                            # REQUIRED" watermarks). Esri tile scheme is {z}/{y}/{x}.
-                            dl.TileLayer(
-                                url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
-                                attribution='Tiles &copy; <a href="https://www.esri.com/">Esri</a> &mdash; Esri, HERE, Garmin, FAO, NOAA, USGS',
-                            ),
+                            # Esri Dark Gray Canvas (keyless; was World Light Gray, which
+                            # replaced CARTO Positron when that began wanting an API key).
+                            dl.TileLayer(url=DARK_BASE, attribution=ESRI_DARK_ATTRIBUTION),
                             # (The dashed area outline is gone: it ran over land from New
                             # York Harbor to Maine; the colors show the mapped area.)
                             # Chart layers render BELOW the SST overlay.
@@ -122,9 +132,17 @@ def build_map():
                                 name="sst-pane",
                                 style={"zIndex": 410},
                             ),
+                            # Place names above the SST (410), fishing activity (420) and the
+                            # depth lines (430, drawn by assets/sstlook.js), below the spots.
+                            dl.Pane(
+                                dl.TileLayer(url=DARK_LABELS, opacity=0.9),
+                                name="sst-labels-pane",
+                                style={"zIndex": 440, "pointerEvents": "none"},
+                            ),
                             # Custom panes: above chart layers but below
                             # Leaflet's tooltipPane (650) so tooltips render
                             # on top of the markers, not behind them.
+                            # (Spot names: pane sst-spotlabel-pane, z 455, assets/sstlook.js.)
                             dl.Pane(
                                 dl.LayerGroup(id="poi-layer"),
                                 name="poi-pane",
@@ -144,8 +162,11 @@ def build_map():
                     ),
                     # Legend (render_static_layers) + the fishing-activity note, shown while
                     # that layer is ticked (GFW_NOTE: lane D's text when merged).
+                    # #sst-legend-live: the legend drawn by assets/sstlook.js from the SST
+                    # engine's range (shown once the engine is on; the server legend then hides).
                     html.Div(
                         [html.Div(id="legend-container"),
+                         html.Div(id="sst-legend-live"),
                          html.Div(globals().get("GFW_NOTE") or (
                                       "Fishing activity: where commercial fishing boats carrying AIS "
                                       "trackers fished on the same days, from Global Fishing Watch. "
@@ -155,6 +176,12 @@ def build_map():
                                   style={"display": "none"})],
                         className="sst-legend-box",
                     ),
+                    # What assets/sstlook.js needs from the server: the depth contours' URL
+                    # (versioned) and the spots' names and positions (for their labels).
+                    html.Div(id="sst-look-data", style={"display": "none"}, **{
+                        "data-contours": contours_url(),
+                        "data-spots": json.dumps([[n, la, lo] for n, la, lo in ALL_POIS]),
+                    }),
                     # Measure instructions on the map (the sidebar is a drawer on phones)
                     html.Div(
                         [html.Span(id="sst-map-hint-text"),
