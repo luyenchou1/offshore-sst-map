@@ -339,6 +339,18 @@
         return { cells: new Int32Array(cells), start: start, nb: new Int32Array(nb), rings: N, ring: ring };
     }
     function fillSig() { return S.fillOn && S.plan ? S.planGen : 0; }
+    // The coast fill is drawn faded (Luyen, Oct 17): washed out toward gray and a little see-through, so water the
+    // satellite has no reading for (narrow bays, the last km to the shore) reads as an estimate, not a measurement.
+    var FILL_FADE = 0.62, FILL_ALPHA = 0.78;
+    // How faded a fill cell is: graded by its ring (1 = next to a reading, lightly; the last ring fully), so the
+    // fade blends into the measured water instead of stepping at the cell edges.
+    function fillW(i) { var P = S.plan, r = P ? P.ring[i] : 0; return S.fillOn && P && r > 0 && r <= P.rings ? (r + 1) / (P.rings + 1) : 0; }
+    function fade(col, f) {                              // f: 0 (as measured) .. 1 (all fill)
+        if (!f) { return col; }
+        var p = unpack(col), L = 0.3 * p[0] + 0.59 * p[1] + 0.11 * p[2], m = FILL_FADE * f;
+        return pack((p[0] + (L - p[0]) * m) | 0, (p[1] + (L - p[1]) * m) | 0, (p[2] + (L - p[2]) * m) | 0,
+                    (p[3] * (1 - (1 - FILL_ALPHA) * f)) | 0);
+    }
     // The day's codes as drawn: water as measured, plus the fill under the coast while the coastline is on.
     function dispCodes(d) {
         var w = S.week;
@@ -413,8 +425,10 @@
             S.imgBuf = new Uint32Array(S.imgData.data.buffer);
         }
         var out = S.imgBuf, codes = dispCodes(d), lut = S.lut, i;
+        var faded = fillSig() !== 0;
         if (!br) {
             for (i = 0; i < n; i++) { out[i] = lut[codes[i]]; }
+            if (faded) { for (var t = 0, fc = S.plan.cells; t < fc.length; t++) { var j = fc[t]; if (out[j]) { out[j] = fade(out[j], fillW(j)); } } }
         } else {
             for (i = 0; i < n; i++) {
                 var code = codes[i], a = br[i];
@@ -424,6 +438,7 @@
                 out[i] = pack((p[0] + (255 - p[0]) * a / 255) | 0, (p[1] + (255 - p[1]) * a / 255) | 0,
                               (p[2] + (255 - p[2]) * a / 255) | 0, 255);
             }
+            if (faded) { for (var t2 = 0, fc2 = S.plan.cells; t2 < fc2.length; t2++) { var j2 = fc2[t2]; if (out[j2]) { out[j2] = fade(out[j2], fillW(j2)); } } }
         }
         g.putImageData(S.imgData, 0, 0);
         S.img[d] = { canvas: cv, sig: sig };
@@ -503,6 +518,7 @@
         }
         var codes = dispCodes(d), n = wo * ho;
         var vals = new Uint16Array(n), alpha = new Uint8Array(n), brk = br ? new Uint8Array(n) : null;
+        var fadeOn = fillSig() !== 0, fadeW = fadeOn ? new Uint8Array(n) : null;
         vals.fill(IV_NONE);
         var aaK = h.dlon * k / 360 / sx;                     // output pixels per cell, for the edge's antialiasing
         // Stepped: the bands come from the field smoothed as the isotherms are (analysisWorker), over the cells in
@@ -548,13 +564,17 @@
                     brk[o + ox] = ((a !== NODATA ? wa * br[ia] : 0) + (b !== NODATA ? wb * br[ib] : 0) +
                                    (c !== NODATA ? wc * br[ic] : 0) + (e !== NODATA ? we * br[id] : 0)) / sw;
                 }
+                if (fadeW) {
+                    fadeW[o + ox] = 255 * ((a !== NODATA ? wa * fillW(ia) : 0) + (b !== NODATA ? wb * fillW(ib) : 0) +
+                                          (c !== NODATA ? wc * fillW(ic) : 0) + (e !== NODATA ? we * fillW(id) : 0)) / sw;
+                }
             }
         }
         var ms = now() - t0;
         S.nsPerPx = clamp(0.7 * S.nsPerPx + 0.3 * (ms * 1e6 / (wo * ho)), 3, 400);
         stat(S.stats.interpMs, ms);
         S.stats.interpPx = [wo, ho];
-        var res = { vals: vals, alpha: alpha, brk: brk, wo: wo, ho: ho, x: X0, y: Y0, w: W, h: H, br: br };
+        var res = { vals: vals, alpha: alpha, brk: brk, fade: fadeW, wo: wo, ho: ho, x: X0, y: Y0, w: W, h: H, br: br };
         S.ival.days[d] = res;
         S.ival.order.push(d);
         while (S.ival.order.length > 3) { delete S.ival.days[S.ival.order.shift()]; }
@@ -583,6 +603,7 @@
                            (p[2] + (255 - p[2]) * ba / 255) | 0, 255);
             }
             if (al < 255) { var q = unpack(col); col = pack(q[0], q[1], q[2], al); }
+            if (iv.fade && iv.fade[i]) { col = fade(col, iv.fade[i] / 255); }
             out[i] = col;
         }
         g.putImageData(img, 0, 0);

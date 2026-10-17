@@ -396,7 +396,7 @@ check('coastline: level 0 loads with the page (versioned URL) and the fill under
       JSON.stringify({ st: coast.st, cells: coast.cells, l0: coast.l0 }));
 check(`fill never reaches a reading: valueAt / weekValuesAt null at all ${coast.cells} filled cells; histogram unchanged`,
       coast.nLeaks === 0 && coast.hist === F.water, JSON.stringify({ leaks: coast.leaks, n: coast.nLeaks, hist: coast.hist }));
-// drawn: filled cells under Long Island Sound show their color; filled cells on land are cleared (zoom 9, no rim)
+// drawn: filled cells under Long Island Sound show their color faded; filled cells on land are cleared (zoom 9, no rim)
 const filled = await page.evaluate(async C => {
     const E = window.SSTEngine;
     await window.__go(41.03, -72.9, 9);
@@ -409,7 +409,9 @@ const filled = await page.evaluate(async C => {
     await window.__go(41.03, -72.9, 9);
     const water = pick(C.waterFill, 12).map(p => {
         const px = window.__px(p.lat, p.lon), c = E.colorFor(p.f);
-        return { p: [p.lat, p.lon], px, ok: px[3] === 255 && window.__near(px, c, 30) };
+        // drawn, but faded (Oct 17): see-through and grayer than the full color, never a measured look
+        const sat = q => Math.max(q[0], q[1], q[2]) - Math.min(q[0], q[1], q[2]);
+        return { p: [p.lat, p.lon], px, c, ok: px[3] > 140 && px[3] < 255 && sat(px) < sat(c) };
     });
     const shore = { water: water.map(d => E.nearShore(d.p[0], d.p[1])), land: land.map(d => E.nearShore(d.p[0], d.p[1])),
                     sea: E.nearShore(39.5, -71.0), inland: E.nearShore(41.6, -73.6) };
@@ -418,7 +420,7 @@ const filled = await page.evaluate(async C => {
 check('nearShore: true in filled water (the tap card says no satellite reading this close to shore), false at sea and on land',
       filled.shore.water.every(Boolean) && !filled.shore.land.some(Boolean) && !filled.shore.sea && !filled.shore.inland,
       JSON.stringify(filled.shore));
-check('filled cells under the Sound are drawn (their fill color), filled cells on the coastline\'s land are cleared',
+check('filled cells under the Sound are drawn faded (see-through, grayer than the full color), filled cells on the coastline\'s land are cleared',
       filled.water.length >= 6 && filled.water.every(d => d.ok) && filled.land.length >= 6 && filled.land.every(d => d.ok),
       JSON.stringify({ water: filled.water.filter(d => !d.ok), land: filled.land.filter(d => !d.ok), n: [filled.water.length, filled.land.length] }).slice(0, 400));
 

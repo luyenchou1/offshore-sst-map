@@ -48,7 +48,7 @@ _RELIABILITY = [
     ("Within a mile or two of the beach, inlets, bays, Long Island Sound", "Moderate",
      "conf-moderate",
      "Each 1 km square can mix land and water. Where MUR stops short of the shore, the color "
-     "is carried from the nearest water, up to about 3 km, and a tap there gives no reading. A "
+     "is carried from the nearest water, up to about 3 km, and shown faded; a tap there gives no reading. A "
      "nearby buoy or your own reading is better."),
     ("A calm, sunny afternoon", "Check on the water", "conf-moderate",
      "The map shows the nighttime temperature below the surface film. The top few feet can "
@@ -191,8 +191,10 @@ def about_body():
             _p("Near the coast.",
                "MUR's 1 km grid stops short of the shoreline along beaches and in bays. So that the "
                "colors meet the coastline, the map carries the color of the nearest water up to "
-               "about 3 km toward shore, and a tap there says there is no satellite reading for that "
-               "spot. The coastline is OpenStreetMap's. Zoomed in, the colors blend smoothly between "
+               "about 3 km toward shore and shows it faded, grayer and lighter, because it is an "
+               "estimate: narrow bays like Shinnecock and Moriches can run warmer or colder than "
+               "the ocean. A tap there says there is no satellite reading for that spot. The "
+               "coastline is OpenStreetMap's. Zoomed in, the colors blend smoothly between "
                "MUR's grid points instead of showing 1 km squares."),
             _p("The mapped area.",
                "37.8 to 44.0 degrees north and 76.0 to 64.8 degrees west: Cape May to Portland, east "
