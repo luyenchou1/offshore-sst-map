@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-10-17 - Labs previews show the new SST look
+
+### Changed
+- The Offshore SST tile (Labs home, here and on gotoneapp.com/labs), its link-preview card and the Labs card are now pictures of the live map: the spectrum colors with the auto range, depth lines and canyon names, dark land, New Jersey to Nantucket with the canyons and the Gulf Stream (Oct 15, 2026). The SST card's band moved up to include Long Island.
+- The Labs card's link (`og:image`) carries a content hash like the tool cards, so link previews fetch a rebuilt card instead of a cached one.
+
+### Added
+- `tools/shoot_sst_preview.mjs`: one load of the SST page in headless Chrome, basemap tiles blocked (the dark basemap's land color fills in), controls, legend and spot dots hidden, the map saved at 2x to `build/sst-shot.png`; `tools/build_labs_previews.py` crops it to the 16:9 tile (`--sst-shot`). The old matplotlib SST preview (classic colors) is gone.
+
 ## 2026-10-17 - SST: smooth coastlines and smooth water when zoomed in
 
 ### Changed

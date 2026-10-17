@@ -9,6 +9,7 @@ step or auto-play through the week's SST evolution.
 """
 
 import base64
+import hashlib
 import io
 import os
 import json
@@ -83,6 +84,18 @@ LABS_DESCRIPTION = ("Free tools for saltwater anglers from GotOne: offshore sea-
                     "temperature, and when the current really turns around Montauk, The Race "
                     "and Plum Gut.")
 
+
+def _og_image(name):
+    """Share-card URL with a content hash, so Facebook, iMessage and the rest fetch a rebuilt card
+    (they cache images by URL)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "labs", name)
+    try:
+        v = "?v=" + hashlib.md5(open(path, "rb").read()).hexdigest()[:8]
+    except OSError:
+        v = ""
+    return f"https://labs.gotoneapp.com/assets/labs/{name}{v}"
+
+
 app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.FLATLY],
@@ -95,7 +108,7 @@ app = dash.Dash(
         {"name": "description", "content": LABS_DESCRIPTION},
         {"property": "og:title", "content": "GotOne Labs · Free tools for saltwater anglers"},
         {"property": "og:description", "content": LABS_DESCRIPTION},
-        {"property": "og:image", "content": "https://labs.gotoneapp.com/assets/labs/og.jpg"},
+        {"property": "og:image", "content": _og_image("og.jpg")},
         {"property": "og:url", "content": "https://labs.gotoneapp.com/"},
         {"property": "og:type", "content": "website"},
         {"name": "twitter:card", "content": "summary_large_image"},
@@ -174,7 +187,6 @@ if not os.environ.get("_SST_WATCHDOG_STARTED"):
 # each address. /sst and /currents get their own title, description and card (assets/labs/og-<tool>.jpg, from
 # tools/build_labs_previews.py); everything else keeps the Labs card above. ?v= busts preview caches on a new card.
 def _tool_previews():
-    import hashlib
     import html as _html
     from layout.labsview import TOOLS
     out = {}
@@ -183,9 +195,8 @@ def _tool_previews():
         img = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "labs", f"og-{key}.jpg")
         if t["href"].startswith("http") or not os.path.exists(img):
             continue
-        v = hashlib.md5(open(img, "rb").read()).hexdigest()[:8]
         out["/" + key] = {"title": f"{t['title']} · GotOne Labs", "desc": t["text"],
-                          "image": f"https://labs.gotoneapp.com/assets/labs/og-{key}.jpg?v={v}",
+                          "image": _og_image(f"og-{key}.jpg"),
                           "url": f"https://labs.gotoneapp.com/{key}", "esc": _html.escape}
     return out
 

@@ -3,9 +3,9 @@
 
 Drawn from the apps' own data so the tiles show what each tool looks like:
 
-  sst.jpg       a week's last day of MUR SST from the local disk cache, in the
-                SST map's own colours (map/overlay.array_to_rgba), Long Island
-                to the canyons, land from Natural Earth (data/geo.py)
+  sst.jpg       the live SST map itself (tools/shoot_sst_preview.mjs screenshots it:
+                spectrum colours, depth lines, canyon names, dark land), New Jersey
+                to Nantucket, the canyons and the Gulf Stream
   currents.jpg  the tide-stage atlas at average strength, mid-flood: streamlines
                 coloured by speed with the Currents page's colour ramp
   og-sst.jpg, og-currents.jpg  1200 x 630 cards for the tool pages themselves (tool_cards)
@@ -17,15 +17,12 @@ Drawn from the apps' own data so the tiles show what each tool looks like:
 No map tiles are baked in (Esri's terms want attribution on every use), only
 our own data. Rerun after a redesign or to refresh the SST week:
 
-  .venv/bin/python tools/build_labs_previews.py [--sst cache/sst/weeks/<date>_week.json.gz]
-  (an entry saved before sprint 2, cache/sst/<date>_adaptive.json.gz, works too)
+  node tools/shoot_sst_preview.mjs            # -> build/sst-shot.png (one load of the live page)
+  .venv/bin/python tools/build_labs_previews.py [--sst-shot build/sst-shot.png]
 """
 
 import argparse
-import base64
-import glob
 import gzip
-import io
 import json
 import math
 import os
@@ -42,52 +39,21 @@ YELLOW = "#ffe000"
 W, H = 1280, 720          # 16:9 tiles
 
 
-def _npy(s):
-    return np.load(io.BytesIO(base64.b64decode(s)), allow_pickle=False)
+def sst_preview(shot):
+    """assets/labs/sst.jpg from a screenshot of the live SST map (tools/shoot_sst_preview.mjs): the
+    middle 16:9 of it at 1280 x 720. The map draws itself, so the tile has the map's own look."""
+    from PIL import Image
 
-
-def sst_preview(path):
-    """Last day of a cached SST week, cropped Long Island -> the canyons."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from data.geo import load_land_gdf
-    from map.overlay import array_to_rgba
-
-    from data import sstgrid
-    d = json.load(gzip.open(path))
-    if sstgrid.is_grid_entry(d):                   # one file per week since sprint 2 (data/sstgrid)
-        week = sstgrid.week_arrays(sstgrid.entry_blob(d), d["dates"])
-        sst = week["raw_days"][-1]["arrF"].astype(float)
-        lats, lons = week["lats"], week["lons"]
+    im = Image.open(shot).convert("RGB")
+    w, h = im.size
+    if w / h > W / H:                              # crop to 16:9 around the centre
+        cw = round(h * W / H)
+        im = im.crop(((w - cw) // 2, 0, (w - cw) // 2 + cw, h))
     else:
-        a = d["raw_days"][-1]["arrF"]              # v2 cache: base64 .npy; v1: nested list
-        sst = _npy(a) if isinstance(a, str) else np.array(a, float)
-        lats = _npy(d["lats"]) if isinstance(d["lats"], str) else np.array(d["lats"], float)
-        lons = _npy(d["lons"]) if isinstance(d["lons"], str) else np.array(d["lons"], float)
-    if lats[0] < lats[-1]:                      # north-up rows for imshow
-        lats, sst = lats[::-1], sst[::-1]
-    rgba = array_to_rgba(sst, d["vmin"], d["vmax"])
-    ext = [lons.min(), lons.max(), lats.min(), lats.max()]
-
-    lat0, lat1 = 39.55, 41.5                    # Long Island + the shelf-edge canyons
-    lon_span = (lat1 - lat0) * (W / H) / math.cos(math.radians((lat0 + lat1) / 2))
-    lon1 = -69.75
-    lon0 = lon1 - lon_span
-    fig = plt.figure(figsize=(W / 100, H / 100), dpi=100)
-    ax = fig.add_axes([0, 0, 1, 1])
-    ax.set_facecolor("#c9d3df")                 # no data (outside the map's corridor)
-    ax.imshow(rgba, extent=ext, origin="upper", interpolation="bilinear", zorder=1)
-    land = load_land_gdf()
-    land.plot(ax=ax, color="#e7e9ec", edgecolor="#9aa5b4", linewidth=0.6, zorder=2)
-    ax.set_xlim(lon0, lon1)
-    ax.set_ylim(lat0, lat1)
-    ax.set_aspect(1 / math.cos(math.radians((lat0 + lat1) / 2)))
-    ax.axis("off")
+        ch = round(w * H / W)
+        im = im.crop((0, (h - ch) // 2, w, (h - ch) // 2 + ch))
     os.makedirs(OUT, exist_ok=True)
-    fig.savefig(os.path.join(OUT, "sst.jpg"), dpi=100, pil_kwargs={"quality": 82, "optimize": True})
-    plt.close(fig)
-    return d["dates"][-1]
+    im.resize((W, H), Image.LANCZOS).save(os.path.join(OUT, "sst.jpg"), quality=85, optimize=True)
 
 
 def currents_preview():
@@ -213,7 +179,7 @@ def og_card():
 
 
 TOOL_CARDS = (   # one link-preview card per tool page (app.py serves each page's own og:image)
-    ("sst", "Offshore SST", "Find the temperature breaks, Cape May to Portland, Maine.", 0.5),
+    ("sst", "Offshore SST", "Find the temperature breaks, Cape May to Portland, Maine.", 0.25),
     ("currents", "Currents", "The current doesn't follow the tide table. See when it turns.", 0.82),
 )
 
@@ -251,7 +217,8 @@ def tool_cards():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--sst", help="SST cache file (default: the newest Jun-Oct week cached)")
+    ap.add_argument("--sst-shot", default=os.path.join(REPO, "build", "sst-shot.png"),
+                    help="screenshot of the SST map from tools/shoot_sst_preview.mjs")
     ap.add_argument("--cards-only", action="store_true",
                     help="only rebuild the per-tool link-preview cards from the existing previews")
     a = ap.parse_args()
@@ -260,23 +227,15 @@ def main():
         for key, *_ in TOOL_CARDS:
             print(f"assets/labs/og-{key}.jpg: {os.path.getsize(os.path.join(OUT, f'og-{key}.jpg')) / 1024:.0f} KB")
         return
-    path = a.sst
-    if not path:
-        cands = [p for p in sorted(glob.glob(os.path.join(REPO, "cache", "sst", "*_adaptive.json.gz")) +
-                                   glob.glob(os.path.join(REPO, "cache", "sst", "weeks", "*_week.json.gz")),
-                                   key=os.path.basename)
-                 if os.path.basename(p)[5:7] in ("06", "07", "08", "09", "10")]
-        if not cands:
-            sys.exit("no cached summer/fall SST week in cache/sst; pass --sst")
-        path = cands[-1]
-    day = sst_preview(path)
+    if not os.path.exists(a.sst_shot):
+        sys.exit(f"{a.sst_shot} is missing: run node tools/shoot_sst_preview.mjs first")
+    sst_preview(a.sst_shot)
     currents_preview()
     wordmark()
     og_card()
     tool_cards()
     for n in ("sst.jpg", "currents.jpg", "og.jpg", "og-sst.jpg", "og-currents.jpg"):
         print(f"assets/labs/{n}: {os.path.getsize(os.path.join(OUT, n)) / 1024:.0f} KB")
-    print(f"SST day: {day} ({os.path.basename(path)})")
 
 
 if __name__ == "__main__":
