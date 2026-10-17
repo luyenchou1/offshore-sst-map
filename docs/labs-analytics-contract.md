@@ -50,7 +50,11 @@ for counting; bots ignored; only our origins accepted.
      `spots` (opened the spot list), `chart` (turned on the nautical chart), `bathymetry` (turned on bathymetry),
      `gfw` (turned on fishing activity), `lock_scale` (turned on "Same colors every week"), `opacity` (changed
      Color strength, the SST opacity), `how_it_works` (opened the How it works panel from the header or the
-     sidebar; the automatic first-visit opening isn't counted)
+     sidebar; the automatic first-visit opening isn't counted); from the Colors panel (assets/sstlook.js, sent
+     only when the reader changes something, never for the defaults or a choice remembered from an earlier
+     visit): `preset_auto`, `preset_tuna`, `preset_marlin`, `preset_gulfstream`, `preset_custom` (picked that
+     color range), `custom_range` (changed an end of the Custom range), `fit_view` (pressed Fit to view),
+     `stepped`, `breaks`, `contours` (switched Stepped colors, Breaks or the depth lines, either way)
 
 3. `POST https://labs.gotoneapp.com/api/feedback` (new) body
    `{"t": TOOL, "v": "up"|"down"|"", "n": NOTE, "w": HONEYPOT, "d": SECONDS_ON_PAGE}`

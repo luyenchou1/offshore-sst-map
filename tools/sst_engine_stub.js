@@ -6,11 +6,11 @@
  *
  * It implements the API agreed in the sprint 2 brief, roughly:
  *   attach(map), setWeek(payload), setDay(i), setPalette(name), setRange({mode, min, max}), fitToView(),
- *   setOptions({stepped, isotherms, breaks, haze, opacity}), valueAt(lat, lon), weekValuesAt(lat, lon),
+ *   setOptions({stepped, isotherms, breaks, opacity}), valueAt(lat, lon), weekValuesAt(lat, lon),
  *   histogram(), on("ready" | "change" | "day", fn)
  * but its temperatures come from decoding today's server PNG frames back through the old 11-color palette
- * (whole degrees, the overlay's own range), not from lane E's 0.1 F grid; the "haze" is a made-up patch
- * (there is no analysis_error yet); breaks are a plain gradient threshold and isotherms are pixel edges. It
+ * (whole degrees, the overlay's own range), not from lane E's 0.1 F grid; breaks are a plain gradient
+ * threshold and isotherms are pixel edges. (The cloud haze was dropped on Oct 16, 2026.) It
  * has no getRange(): the resolved range goes out in the "change" / "ready" events ({range}), which tests the
  * panel's fallback path. It watches the sst-store and the day slider itself (the real engine is fed by
  * lane E's callbacks).
@@ -35,8 +35,8 @@
 
     var E = { __stub: true }, H = {}, S = {
         map: null, week: null, days: [], w: 0, h: 0, bounds: null, day: 0, range: { mode: "auto" }, resolved: null,
-        opts: { stepped: false, isotherms: false, breaks: false, haze: false, opacity: 1 }, layer: null, canvas: null,
-        grad: {}, hazeMask: null, hist: null, key: null
+        opts: { stepped: false, isotherms: false, breaks: false, opacity: 1 }, layer: null, canvas: null,
+        grad: {}, hist: null, key: null
     };
     function emit(name, arg) { (H[name] || []).forEach(function (fn) { try { fn(arg); } catch (e) { console.warn(e); } }); }
     function mercY(lat) { var s = Math.sin(lat * Math.PI / 180); return Math.log((1 + s) / (1 - s)) / 2; }
@@ -130,25 +130,12 @@
         }
         return (S.grad[i] = g);
     }
-    function hazeMask() {
-        if (S.hazeMask) { return S.hazeMask; }
-        var w = S.w, h = S.h, m = new Uint8Array(w * h);
-        for (var y = 0; y < h; y++) {
-            for (var x = 0; x < w; x++) {
-                var u = x / w, v = y / h;
-                var f = Math.sin(u * 9.0 + 1.3) * Math.cos(v * 7.0 - 0.4) + 0.5 * Math.sin(u * 23 + v * 17);
-                m[y * w + x] = f > 0.85 ? 1 : 0;
-            }
-        }
-        return (S.hazeMask = m);
-    }
-
     function draw() {
         if (!S.days.length || !S.canvas) { return; }
         var t0 = performance.now(), r = resolve(), span = Math.max(r.max - r.min, 0.1);
         var g = S.canvas.getContext("2d"), img = g.createImageData(S.w, S.h), d = img.data;
         var T = S.days[S.day], w = S.w, n = S.w * S.h, o = S.opts;
-        var grad = o.breaks ? gradient(S.day) : null, haze = o.haze ? hazeMask() : null;
+        var grad = o.breaks ? gradient(S.day) : null;
         var lut = [];
         for (var k = 0; k <= 1000; k++) {                 // 28 F + 0.1 F steps
             var f = 28 + k / 10;
@@ -170,7 +157,6 @@
                 var aa = Math.min(1, (grad[i] - 0.27) / 0.27) * 0.62;
                 R += (255 - R) * aa; G += (255 - G) * aa; B += (255 - B) * aa;
             }
-            if (haze && haze[i]) { R += (255 - R) * 0.35; G += (255 - G) * 0.35; B += (255 - B) * 0.35; }
             d[4 * i] = R; d[4 * i + 1] = G; d[4 * i + 2] = B; d[4 * i + 3] = 255;
         }
         g.putImageData(img, 0, 0);
@@ -195,7 +181,7 @@
             fr = fr.filter(Boolean);
             if (!fr.length) { return; }
             S.w = fr[0].w; S.h = fr[0].h; S.days = fr.map(function (x) { return x.t; });
-            S.bounds = payload.bounds; S.grad = {}; S.hazeMask = null;
+            S.bounds = payload.bounds; S.grad = {};
             var lo = 1e9, hi = -1e9;
             S.days.forEach(function (t) { for (var i = 0; i < t.length; i++) { var v = t[i]; if (v === v) { if (v < lo) { lo = v; } if (v > hi) { hi = v; } } } });
             lo = Math.floor(lo); hi = Math.ceil(hi) + 0.5;
@@ -243,7 +229,7 @@
         var i = cell(lat, lon);
         if (i < 0 || !S.days.length) { return null; }
         var v = S.days[S.day][i];
-        return v === v ? { f: v, day: S.day, estimate: !!(S.hazeMask && S.hazeMask[i]) } : null;
+        return v === v ? { f: v, day: S.day, estimate: false } : null;
     };
     E.weekValuesAt = function (lat, lon) {
         var i = cell(lat, lon);

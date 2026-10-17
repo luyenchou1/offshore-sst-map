@@ -93,15 +93,6 @@ html.sst-engine-on .sst-page #lock-scale { display: none !important; }
 /* ---- The live legend on the map (#sst-legend-live) ---- */
 .sstl .sstl-bar { margin-top: 0.3rem; }
 .sstl .sstc-num { color: #cbd5e1; }
-.sstl-haze { display: flex; align-items: center; gap: 6px; margin-top: 0.2rem; color: #cbd5e1; font-size: 0.7rem; }
-.sstl-haze-sw {
-    flex: none;
-    width: 22px;
-    height: 10px;
-    border-radius: 2px;
-    background: linear-gradient(rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.42)),
-                linear-gradient(to right, #1bd0d5, #b4f836, #fcb136);
-}
 
 /* ---- Map: the dark basemap's place names, depth lines, spot labels ---- */
 /* Leaflet 1.9 draws tiles with mix-blend-mode: plus-lighter; on a translucent label layer that lights up every
@@ -125,5 +116,4 @@ html.sst-engine-on .sst-page #lock-scale { display: none !important; }
     /* the longer attribution (dark basemap + depth source) in two lines under the play bar, not three beside it */
     .sst-page .leaflet-control-attribution { max-width: calc(100vw - 8px); }
     .sstl .sstc-ticks { height: 16px; }
-    .sstl-haze { font-size: 0.66rem; }
 }

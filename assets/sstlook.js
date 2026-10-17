@@ -6,8 +6,8 @@
  *
  *   The color panel (sidebar on laptops, inside the drawer on phones and
  *   tablets): range chips Auto / Tuna / Marlin / Gulf Stream / Custom (with a
- *   min/max editor), Fit to view, and the toggles Stepped, Breaks, Haze and
- *   Depth lines; the numbered color bar with the week's histogram. It is built
+ *   min/max editor), Fit to view, and the toggles Stepped, Breaks and Depth
+ *   lines; the numbered color bar with the week's histogram. It is built
  *   into the empty Dash div #sst-color-panel (layout/sidebar.py; Dash never
  *   renders children there, as with labs.js's Helpful div).
  *   The map legend: #sst-legend-live (layout/mapview.py), a compact color bar
@@ -23,7 +23,7 @@
  * The colors themselves are drawn by the SST engine (window.SSTEngine, lane E,
  * assets/sstengine.js), through the API agreed in the sprint brief:
  *   setRange({mode: "auto"|"fixed", min, max}), fitToView() -> {min, max},
- *   setOptions({stepped, isotherms, breaks, haze}), histogram() -> {min, max,
+ *   setOptions({stepped, isotherms, breaks}), histogram() -> {min, max,
  *   bins}, valueAt(lat, lon) -> {f, day, estimate} | null, on("ready"|"change"|"day", fn).
  * Optional extras used when present: getRange() -> {mode, min, max} (else the
  * range in a "change" event, else the panel's own rule from the histogram) and
@@ -56,11 +56,12 @@
     var GULF_SPAN = 18, GULF_FALLBACK = { min: 64, max: 84 };
     var AUTO_MIN_SPAN = 8;
     var DEFAULTS = { preset: "auto", custom: null, view: null,
-                     stepped: false, breaks: false, haze: true, contours: true };
+                     stepped: false, breaks: false, contours: true };
+    // (No cloud haze: MUR's analysis_error barely varies, 0.36 to 0.40 C everywhere, so it can't show where
+    // clouds were filled in. Luyen, Oct 16 2026.)
     var TOGGLES = [
         { id: "stepped", label: "Stepped", hint: "1 °F color bands", engine: true },
         { id: "breaks", label: "Breaks", hint: "lines every degree, bright where it changes fast", engine: true },
-        { id: "haze", label: "Haze", hint: "where clouds hid the water", engine: true },
         { id: "contours", label: "Depth lines", hint: "30, 40, 100 fathoms; 500, 1000, 2000 m", engine: false }
     ];
     var LABEL_FONT = "600 12px \"Helvetica Neue\", Helvetica, Arial, sans-serif";
@@ -119,7 +120,7 @@
         var out = {};
         Object.keys(DEFAULTS).forEach(function (k) { out[k] = DEFAULTS[k]; });
         if (["auto", "tuna", "marlin", "gulfstream", "custom", "view"].indexOf(p.preset) >= 0) { out.preset = p.preset; }
-        ["stepped", "breaks", "haze", "contours"].forEach(function (k) { if (typeof p[k] === "boolean") { out[k] = p[k]; } });
+        ["stepped", "breaks", "contours"].forEach(function (k) { if (typeof p[k] === "boolean") { out[k] = p[k]; } });
         out.custom = okRange(p.custom, true);
         out.view = okRange(p.view, false);
         if (out.preset === "view" && !out.view) { out.preset = "auto"; }
@@ -226,7 +227,7 @@
     function sendOptions() {
         var E = S.engine, p = S.prefs;
         if (!E || typeof E.setOptions !== "function") { return; }
-        try { E.setOptions({ stepped: p.stepped, isotherms: p.breaks, breaks: p.breaks, haze: p.haze }); } catch (e) { /* ignore */ }
+        try { E.setOptions({ stepped: p.stepped, isotherms: p.breaks, breaks: p.breaks }); } catch (e) { /* ignore */ }
     }
     function onEngine(ev) {
         if (ev && typeof ev === "object") {
@@ -544,9 +545,6 @@
             notes += '<div class="sst-legend-note">Colder than ' + fmt(r.min) + " or warmer than " + fmt(r.max) +
                      " °F shows in the end colors.</div>";
         }
-        if (S.prefs.haze) {
-            notes += '<div class="sstl-haze"><span class="sstl-haze-sw"></span>haze: filled in under cloud</div>';
-        }
         if (coarseWeek()) { notes += '<div class="sst-legend-warn">25 km grid: broad pattern only</div>'; }
         var html = '<div class="sst-legend sstl">' +
             '<div class="sst-legend-head"><span class="sst-legend-title">Water °F</span>' +
@@ -663,6 +661,7 @@
         if (m && m !== S.map && m.getContainer && document.body.contains(m.getContainer())) {
             try { attachMap(m); } catch (e) { S.debug.attachError = String(e); }
         }
+        if (S.ready) { renderLegend(); }             // the week's meta (an OISST week) can change without an engine event
         setTimeout(pollMap, S.map ? 1000 : 200);
     })();
 
@@ -976,7 +975,10 @@
                 ctx.fillText(label, 0, 0.5);
                 ctx.restore();
                 placedAll.push(label);
-                S.debug.depthLabels.push({ level: id, label: label, x: q[0], y: q[1], deg: q[2] * 180 / Math.PI });
+                var hx2 = Math.abs(lw / 2 * Math.cos(q[2])) + Math.abs(fh / 2 * Math.sin(q[2]));
+                var hy2 = Math.abs(lw / 2 * Math.sin(q[2])) + Math.abs(fh / 2 * Math.cos(q[2]));
+                S.debug.depthLabels.push({ level: id, label: label, x: q[0], y: q[1], deg: q[2] * 180 / Math.PI,
+                                           box: [q[0] - hx2, q[1] - hy2, q[0] + hx2, q[1] + hy2], dark: !!(col && dark) });
             });
         });
     }
