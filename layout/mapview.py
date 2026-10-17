@@ -7,6 +7,7 @@ import dash_leaflet as dl
 from dash import html
 
 from map.depth import contours_url
+from map.land import land_url
 from map.pois import ALL_POIS
 
 MAP_HEIGHT = "calc(100vh - 72px)"
@@ -173,9 +174,11 @@ def build_map():
                         className="sst-legend-box",
                     ),
                     # What assets/sstlook.js needs from the server: the depth contours' URL
-                    # (versioned) and the spots' names and positions (for their labels).
+                    # (versioned) and the spots' names and positions (for their labels); and
+                    # assets/sstland.js the coastline's (OpenStreetMap, versioned).
                     html.Div(id="sst-look-data", style={"display": "none"}, **{
                         "data-contours": contours_url(),
+                        "data-land": land_url(),
                         "data-spots": json.dumps([[n, la, lo] for n, la, lo in ALL_POIS]),
                     }),
                     # Measure instructions on the map (the sidebar is a drawer on phones)

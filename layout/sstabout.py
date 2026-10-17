@@ -11,8 +11,9 @@ Chin et al. (2017), the magnetic variation range from WMM-2025 (map/declination.
 Global Fishing Watch's ~3-day delay from its data-availability page. Sprint 2 (Oct 2026)
 added the colors (spectrum, presets, Stepped, Breaks), the depth lines, the spot names
 and the wider area; their numbers come from the designer's notes (sst-sprint2/design) and
-tools/build_contours.py. Update the text if the data source, the color scale or the measure
-tool changes.
+tools/build_contours.py. The coastline (Oct 17, 2026: OpenStreetMap, the fill under it, the
+interpolation zoomed in) is described in docs/coast-progress.md and tools/build_land.py. Update
+the text if the data source, the color scale or the measure tool changes.
 """
 
 import dash_bootstrap_components as dbc
@@ -46,8 +47,9 @@ _RELIABILITY = [
      "the pattern, not the exact line."),
     ("Within a mile or two of the beach, inlets, bays, Long Island Sound", "Moderate",
      "conf-moderate",
-     "Each 1 km square can mix land and water, and the land mask trims the edge. A nearby "
-     "buoy or your own reading is better."),
+     "Each 1 km square can mix land and water. Where MUR stops short of the shore, the color "
+     "is carried from the nearest water, up to about 3 km, and a tap there gives no reading. A "
+     "nearby buoy or your own reading is better."),
     ("A calm, sunny afternoon", "Check on the water", "conf-moderate",
      "The map shows the nighttime temperature below the surface film. The top few feet can "
      "read a few degrees warmer by afternoon."),
@@ -186,6 +188,12 @@ def about_body():
                 "Temperatures are to a tenth of a degree Fahrenheit. Weeks saved before October 2026 "
                 "may still be in whole degrees until they are refreshed. Areas without color are land "
                 "or outside the mapped area."),
+            _p("Near the coast.",
+               "MUR's 1 km grid stops short of the shoreline along beaches and in bays. So that the "
+               "colors meet the coastline, the map carries the color of the nearest water up to "
+               "about 3 km toward shore, and a tap there says there is no satellite reading for that "
+               "spot. The coastline is OpenStreetMap's. Zoomed in, the colors blend smoothly between "
+               "MUR's grid points instead of showing 1 km squares."),
             _p("The mapped area.",
                "37.8 to 44.0 degrees north and 76.0 to 64.8 degrees west: Cape May to Portland, east "
                "past Oceanographer Canyon and south far enough to show the Gulf Stream. Weeks saved "
@@ -250,6 +258,10 @@ def about_body():
                          _a("ETOPO 2022", "https://www.ncei.noaa.gov/products/etopo-global-relief-model"),
                          " at 15 arc-seconds (about 460 m), served by NOAA CoastWatch ERDDAP, smoothed a "
                          "little and simplified for the map."]),
+                html.Li(["Coastline: ", _a("OpenStreetMap", "https://www.openstreetmap.org/copyright"),
+                         " contributors, land polygons from ",
+                         _a("osmdata.openstreetmap.de", "https://osmdata.openstreetmap.de/data/land-polygons.html"),
+                         " (Open Database License), simplified for the map."]),
                 html.Li(["Basemap: Esri Dark Gray Canvas (",
                          _a("esri.com", "https://www.esri.com/"),
                          "; Esri, HERE, Garmin, OpenStreetMap contributors and the GIS user community)."]),

@@ -99,7 +99,8 @@ The browser draws the SST itself (review E1): the server only sends one compact 
   equals the server's `vmin`/`vmax`) or `{mode: "fixed", min, max}`, `fitToView()` (5th to 95th of the water on screen
   over the week, whole degrees, at least 3 F; sets a fixed range, returns `{min, max}`), `setOptions({stepped,
   isotherms, breaks, opacity})` ("haze" is ignored), `valueAt(lat, lon)` -> `{f, day, date, estimate: null}` or null,
-  `weekValuesAt(lat, lon)`, `histogram()` -> `{min, max, step, bins, below, above, total}` (the week's water, all days,
+  `weekValuesAt(lat, lon)`, `nearShore(lat, lon)` (true where the coast fill colors water the week has no value for;
+  the tap card then says "No satellite reading this close to shore"), `histogram()` -> `{min, max, step, bins, below, above, total}` (the week's water, all days,
   bins of 0.5 F up to a 24 F range, else 1 F), `on("ready" | "change" | "day" | "error", fn)` (returns off). Extras:
   `getRange()` -> `{mode, min, max}`, `colorFor(f)` -> `[r, g, b]` (prints as `rgb(...)`), `state()`, `palettes`,
   `_stats` (timings). "ready" fires each time a week's data is in (also when the same week is delivered again).
@@ -113,13 +114,44 @@ The browser draws the SST itself (review E1): the server only sends one compact 
   zeroed within 3 cells of land; highlight from 0.27 F/km = 0.5 F per nm, full at 0.54 F/km = 1 F per nm, up to 62%
   toward white) are computed once per day in a Web Worker (blob URL; the main thread a day at a time if workers are
   blocked), the day on the map first. Whole-degree weeks are blurred more (3 and 2.5 cells) so their terraces don't
-  read as fronts. A day's isotherm layer is rendered once per view into an offscreen canvas, and the next and previous
-  days' colors and isotherms are prepared when the browser is idle, so a crossfade only composites images.
+  read as fronts. Each day is rendered once per view into a canvas of its own (colors, isotherms and labels, the
+  coastline; `compLayer`, at most 3, 2 on a big retina screen), and the next and previous days are prepared when
+  the browser is idle (one per idle slot), so a frame, also mid-crossfade, composites one or two images.
+- **The coast** (Oct 17, 2026; `docs/coast-progress.md`): (1) *fill under the coast*: once the coastline is in, the
+  week's masked cells within 3.5 km of water (3 MUR cells; whole cells only, so none on OISST) get values ring by ring (8-connected), each
+  the mean of its neighbours in earlier rings (`buildPlan` once per week, ~10 ms on a slow phone; `dispCodes` per day,
+  ~3 ms). Drawing only: `S.week.days` stays as decoded, so readouts, the histogram, Fit to view, isotherms and breaks
+  never see a filled cell (the worker gets the decoded codes; isotherms are cut 2 cells from the week's mask as
+  before). On the week ending Oct 14, 2026, 3 cells reach 94.5% of the OSM water MUR leaves out (4: 96.3%); what
+  isn't reached is up rivers. (2) *the coastline* (`assets/sstland.js`, OSM land polygons from `tools/build_land.py`):
+  drawn into each day's canvas after the colors and isotherms: the land is cleared ("destination-out", one path for
+  the pieces in view, nonzero; pieces overlap ~20 m so cuts never show), so the SST stops at a smooth antialiased
+  coastline and the basemap shows on land as it is; islets under 1 km2 are painted land color over the SST instead
+  ("source-atop": Esri leaves many out, e.g. Casco Bay); from zoom 11 a 2 px rim of land color is stroked under what's
+  left ("destination-over", from the level below, widened by its tolerance) to cover slivers where Esri's coast and
+  OSM's differ (Bellport Bay, Montauk's north shore at zoom 12). Isotherm labels also avoid OSM land (land cover per
+  cell, rasterized from level 0 when idle). Without the coastline (its fetch failed) the map is drawn as before: no
+  fill, no clearing. (3) *interpolation*: from a cell 3 CSS px wide (MUR zoom 9; the 0.02 degree test grid zoom 8;
+  OISST zoom 5) the visible map is drawn bilinearly between cell centres (`interpImage`, per view and day, masked
+  neighbours left out by weight, drawn where they weigh 0.25 or more with a 1 px antialiased edge, breaks blended the
+  same way; output about 10 ms of work on the device, self-tuned from its measured ns per pixel, up to 1.5M pixels;
+  the padding around the view is drawn as cells, seen only mid-pan). In Stepped mode the interpolated bands come from
+  the field smoothed as the isotherms are (Gaussian sigma 1.3 cells, 3.0 for whole-degree weeks, normalized over
+  cells with a value, computed over the cells in view), so a band's edge is the temperature line instead of 0.1 F
+  noise traced cell by cell where the water is nearly even; smooth colors use the cells as they are.
 - **Frame times** (`node tools/perf_sstengine.mjs`, phone 390x664 @2x, CPU slowed 4x in CDP): decode a week 63 ms,
   histogram 54 ms (once per week); a palette / range / stepped change 5 ms (20 back to back: 4.7 ms each); a day
   change starts at once; crossfade frames median 33 ms, worst 50 ms (an idle page: 17 ms), the same with isotherms
   and breaks on; isotherms + breaks for a day 160 to 270 ms in the worker; a redraw with isotherms under 3 ms of
   script. The one long frame left: jumping to a far day with isotherms on within ~200 ms of a pan (about 80 ms).
+  Coast (Oct 17, `--only coast`, same profile; headless Chrome rasters canvases in software, so drawing costs are
+  pessimistic next to a phone's GPU): crossfade frame gaps median 16.7 ms (was 33 to 50, 90th percentile 50 to
+  170); a pan ending at zoom 9 to 12, moveend to the next frame, 75 to 90 ms (55 to 60 without the coast work;
+  with Breaks on at zoom 11, 97 vs 90), at zoom 7 the same as before (~160 ms); interpolation ~10 ms per view (Stepped
+  included); the coastline alone, raster included, 7 to 11 ms at zoom 9 and 10, 14 to 18 ms at 11 and 12 with the
+  rim (Casco Bay is the worst case); level 0 fetched and prepared ~115 ms after the map attaches; a level 1 to 3
+  file prepared in under 6 ms; the fill plan 10 ms once per week, 2 to 3 ms per day. Laptop (1440x900 @2x, no
+  throttle): pan end 48 to 62 ms (39 without), interpolation 7 to 10 ms at about CSS-pixel resolution.
 - **Readouts** (review R1): the tap card (reading, spot, a point in The Dump) is drawn by `assets/sst.js`
   (`SST.selection`) from `SSTEngine.weekValuesAt()`: tenths ("71.3 °F"), no server trip on a tap or a day change. A tap
   on the card's own marker closes it (an identical second tap gives Dash the same clickData, which wouldn't refire the
@@ -162,8 +194,10 @@ The browser draws the SST itself (review E1): the server only sends one compact 
   eviction order, the route never asking NOAA, the seeder's order, resume, 503s, rate limit and time cap against a
   mocked NOAA and app), `tools/test_sstengine.mjs` (the engine in the real page: readouts vs the Python decode, pixels
   vs `colorFor`, placement at zoom 11 across a sharp front, palettes, ranges, stepped, isotherms, breaks, "haze"
-  ignored, crossfade, reduced motion, histogram, Fit to view, an old week, a failed download),
-  `tools/perf_sstengine.mjs` (frame times above).
+  ignored, crossfade, reduced motion, histogram, Fit to view, an old week, a failed download; the coast: no filled
+  cell ever read, filled water drawn and filled land cleared, nearShore, the SST cleared on OSM land with no isotherm
+  there, the rim at zoom 11, the panes' order, interpolation off at low zoom and bilinear at high zoom),
+  `tools/perf_sstengine.mjs` (frame times above; `--only coast` for the coast part).
 
 ### Data Flow
 ```
@@ -307,7 +341,11 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 | `data/convert.py` | Kelvin→Fahrenheit, 2x visual upsample |
 | `data/cache.py` | Disk-based gzip JSON cache: one file per week in `sst/weeks/` (old two-variant entries still read), refresh checks from meta, saved-week index, `/api/cache/weeks` index, disk-budget eviction (least recently viewed), the seeder's wanted list |
 | `data/sstgrid.py` | The week's grid (GOSST1: 0.1 F codes, land mask, gzip), the weekly cache entry, the Auto range, old entries converted, the page's store payload (see SST data, cache and engine) |
-| `assets/sstengine.js` | The client-side SST engine (`window.SSTEngine`): decodes the week, draws it on an L.Canvas in Web Mercator strips, palettes, ranges, stepped, isotherms + breaks (Web Worker), crossfade, readouts, histogram |
+| `assets/sstengine.js` | The client-side SST engine (`window.SSTEngine`): decodes the week, draws it on an L.Canvas in Web Mercator strips (bilinear when zoomed past the grid), the fill under the coast and the coastline (cleared land, islets, rim), palettes, ranges, stepped, isotherms + breaks (Web Worker), per-day pictures per view, crossfade, readouts, histogram |
+| `assets/sstland.js` | The coastline (`window.SSTLand`): fetches level 0 when the map attaches and levels 1 to 3 per tile as views need them, turns pieces into Path2D (fill, coast without cut edges, islets), picks the level and the pieces in view, the basemap's land color per zoom, land cover per grid cell |
+| `assets/sst/land/` | The coastline (GOLAND1, ODbL; README.txt): `land-0.json.gz` (zoom 5 to 9, 116 KB, loaded with the page) and `land-<1,2,3>-<tile>.json.gz` (zoom 10, 11, 12; 1.3 MB in all), built by `tools/build_land.py`, served by `/api/sst/land/<name>.json` (`map/land.py`) |
+| `map/land.py` | Reads the coastline files once each (names checked); level 0's versioned URL for the page (`#sst-look-data` `data-land`) |
+| `tools/build_land.py` | Off-Render builder: OSM land polygons (downloaded once into build/land) -> clipped, simplified per level (topology-preserving, equal-scale plane), islets split out, cut into overlapping pieces, quantized; `--check` prints sizes; `--geojson` writes a level to inspect |
 | `tools/test_sst_grid.py` | Format, weekly cache, eviction, the week's bytes route, the seeder's backfill against a mocked NOAA (no network, no pytest) |
 | `tools/test_sstengine.mjs` | Headless checks of SSTEngine in the real page (boots its own server, NOAA blocked) |
 | `tools/perf_sstengine.mjs` | SSTEngine frame times on a 4x-throttled phone profile |
@@ -329,7 +367,7 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 | `assets/sst/contours.json.gz` | Depth contours (GOCONT1, 57 KB), built by `tools/build_contours.py`, served by `/api/sst/contours.json` (`map/depth.py`) |
 | `map/depth.py` | Reads the contours asset once; its versioned URL for the page |
 | `tools/build_contours.py` | Off-Render builder: ETOPO 2022 15 arc-sec from CoastWatch ERDDAP (cached in build/etopo) → ocean-only, smoothed, contoured, simplified, delta-encoded; also recomputes the Hudson Canyon head (`--check` prints sizes) |
-| `tools/test_sst_look.py` | The contours asset and route, Hudson Canyon at the head, the layout pieces, presets vs the design notes, How it works copy (no server) |
+| `tools/test_sst_look.py` | The contours asset and route, the coastline assets (budgets, hashes, land and water points at every level) and route, Hudson Canyon at the head, the layout pieces, presets vs the design notes, How it works copy (no server) |
 | `tools/sst_engine_stub.js` | TEST ONLY stand-in for `window.SSTEngine` (decodes the old PNG frames); `smoke_sst.mjs` injects it when the page has no engine; never under assets/ |
 | `layout/sstabout.py` | The SST "How it works" modal (`sst-about`), sharing Currents' modal styles; facts checked Oct 16, 2026 |
 | `assets/gotone-logo.png` | White fish logotype on transparent background |
@@ -368,6 +406,18 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 - **No cloud haze**: dropped Oct 16, 2026 (MUR's analysis_error is 0.36 to 0.40 °C everywhere, so it can't show where clouds were filled in).
 - **Dark basemap** (`layout/mapview.py`): Esri Dark Gray Base under everything; Dark Gray Reference labels in `sst-labels-pane` (z 440, opacity 0.9, `mix-blend-mode: normal` on its tiles). Land #414143, open water outside the SST #222327.
 - **Depth contours**: `tools/build_contours.py` fetches ETOPO 2022 15 arc-sec for 37.7 to 44.1 N, 76.1 to 64.7 W (16.9 MB netCDF, cached in build/etopo), keeps water connected to the deep ocean (no lake lines), smooths per level (sigma 1.5 cells for 30/40 fa, 1.0 for 100 fa, 0.9 for the meter lines), contours with contourpy, clips to the coverage box, simplifies to 35 m (0.6 px at zoom 11) and drops pieces under 2 to 3 km, then quantizes to 1e-4 degree and delta-encodes. Rebuild and commit after changing a level; `--geojson` writes plain GeoJSON to inspect. The browser draws all halos (white 16%, 1.6 px wider) then all lines (#080a0f; widths 0.7/0.7/1.3/0.9/0.9/0.9 px, +0.25 from zoom 10) on one canvas in `sst-depth-pane` (z 430, above the SST at 410 and fishing activity at 420), redrawn at each moveend (5 to 8 ms on a 4x-throttled phone) and scaled during zoom animations; pieces shorter than 30 px (55 px for 30/40 fa) at the current zoom are skipped; 30/40 fa and 500 m from zoom 7. Labels from zoom 7 at fixed distances along each piece (so they don't jump while panning), only on straight stretches (under 16 degrees of bend), 2 per level on phones and 3 (4 for 100 fa) on wider maps, at least 380 px apart (240 on phones), never over a spot, a spot name or a control; the line is cut out under the label and the text is dark or light by the SST color there (`valueAt`). Attribution "Depth: NOAA ETOPO 2022" while the lines are on.
+- **Coastline** (Oct 17, 2026): OpenStreetMap land polygons (osmdata.openstreetmap.de, built daily from
+  natural=coastline; ODbL, credited by the Esri attribution's "OpenStreetMap contributors"; the assets' own notice is
+  `assets/sst/land/README.txt`), drawn by the engine on the SST canvas (above: the colors; below: fishing activity 420,
+  depth lines 430, place names 440, spots 450/455). Chosen over GSHHG full resolution (100 to 200 m off and
+  stair-stepped at zoom 12), Natural Earth 10m (km off; it's what MUR's mask uses) and NOAA CUSP (lines only, US only)
+  because it sits on Esri's own water edge within about a pixel at zoom 12 (compared over Esri tiles at Hampton Bays,
+  Montauk, Casco Bay and the Chesapeake mouth). Levels (`tools/build_land.py`): 0 = zoom 5 to 9, 90 m, 0.5-degree
+  pieces, one file loaded with the page; 1 = zoom 10, 45 m; 2 = zoom 11, 20 m; 3 = zoom 12, 7 m (0.25-degree pieces,
+  one file per 1-degree tile, fetched when a view needs it; a view keeps the lower level until every file it needs
+  is in, so levels never meet at a cut). Esri Dark Gray Base land (sampled from its JPEG tiles): #3f3f41 at zoom 5,
+  #414143 at 6 and 7, #474749 from 8; built-up areas are a lighter #4d4d4f; water #232227 (#222327 at 5 and 7).
+  Rebuild: `.venv/bin/python tools/build_land.py` (downloads 928 MB once; ~40 s), commit `assets/sst/land/`.
 - **Spot labels** (review R6): a canvas in `sst-spotlabel-pane` (z 455, above the circles); spots are read from the Leaflet circles in `poi-pane` (so hidden spots get no name) and named from `#sst-look-data`'s `data-spots`; canyons (short names) from zoom 8, all from zoom 9, The Dump above its box; right, left, above or below the circle, whichever is free; white 600 12 px with a dark halo.
 - **Hudson Canyon** moved to the canyon head, 39.642 N, 72.440 W (was 39.54, -72.05): the 300 m isobath's most inshore point in ETOPO 2022 (the builder recomputes it into the asset's `checks`), matching NOAA's ENC general-band contours (US2EC03M/US2EC04M, from NOAA ENC Direct), whose 50-fathom line wraps the head at about 39.66 N, 72.46 W. `tools/build_declination.py`'s check point and `test_sst_ui.py` still use 39.54, -72.05 as a plain position.
 
@@ -601,7 +651,7 @@ Map layer panes and their z-index values matter enormously:
 - **tilePane**: 200 (Esri Light Gray basemap)
 - **gebco-pane**: 390 (custom: GEBCO bathymetry WMS; the layer is mounted only while ticked)
 - **contours-pane**: 400 (custom: NOAA ENC nautical chart WMS; mounted only while ticked)
-- **sst-pane**: 410 (custom — SST ImageOverlay, opacity controlled by sidebar slider)
+- **sst-pane**: 410 (custom: the SST engine's canvas, opacity from Color strength; the coastline is drawn into this canvas, so it sits above the colors and below everything else)
 - **gfw-pane**: 420 (custom: GFW fishing activity tiles, above SST for visibility; mounted only while ticked)
 - **sst-depth-pane**: 430 (created by assets/sstlook.js: the depth contours canvas)
 - **sst-labels-pane**: 440 (Esri Dark Gray Reference place names, above the SST and the depth lines)
@@ -745,6 +795,9 @@ OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES LABS_STATS_DIR=$(mktemp -d) \
 node tools/smoke_sst.mjs --base http://127.0.0.1:8062      # --sizes phone --shots DIR (--no-stub: no engine stand-in)
 # Depth contours (build-only, off-Render): rebuild + commit assets/sst/contours.json.gz
 .venv/bin/python tools/build_contours.py            # --check: sizes + the Hudson Canyon head; --geojson FILE
+# Coastline (build-only): OSM land polygons (928 MB, downloaded once into build/land) -> commit assets/sst/land/
+.venv/bin/python tools/build_land.py                # --check: sizes; --geojson FILE --level 0..3
+node tools/perf_sstengine.mjs --base http://127.0.0.1:8062 --only coast   # the coast's timings only
 # Production: dispatch the workflow (uses the GitHub secret; no local token needed)
 gh workflow run build-currents.yml -f source=hindcast -f weeks=all
 gh workflow run build-currents.yml -f source=atlas -f publish=false   # build + artifact only

@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-10-17 - SST: smooth coastlines and smooth water when zoomed in
+
+### Changed
+- **The coast is a smooth line at every zoom.** The colors used to end in a staircase of MUR's 1 km squares over the basemap's coastline (Hampton Bays at zoom 11 looked like a bar chart). They now stop at a detailed OpenStreetMap coastline, antialiased, with the basemap showing on land as it always did (its ponds, rivers, roads and built-up areas stay). Small islands and ledges that the basemap leaves out (many in Casco Bay) are drawn in the basemap's land color, and from zoom 11 a thin rim of land color hides any sliver where the basemap's coast and OpenStreetMap's differ.
+- **The water reaches the shore.** MUR's grid stops short of the shoreline along beaches and in bays; the map now carries the color of the nearest water up to about 3 km toward shore (3 cells, by repeated neighbour averages) so the colors meet the coastline. This is drawing only: a tap there says "No satellite reading this close to shore", and the color bar's histogram, Fit to view, isotherms, breaks and the measure tool never use these values. Rivers far up from the sea (the upper Delaware, the Hudson) stay uncolored, as before.
+- **Zoomed in, the water is smooth.** From the zoom where a MUR cell is 3 pixels wide (zoom 9), the map blends the temperature between cell centres instead of drawing flat 1 km squares, so the edge of the data is a smooth curve; with Stepped on, the bands are cut from the same lightly smoothed field the Breaks lines come from, so each band's edge is a temperature line instead of a staircase.
+- Each day is drawn once per view (colors, isotherms and coastline together), so stepping or playing through the week only blends two finished pictures: on a phone-speed test profile the day crossfade now runs at 60 frames a second (frame gaps median 17 ms, was 33 ms with slow frames up to 170 ms).
+- How it works: a "Near the coast" paragraph, the coastline in the sources, the near-shore row of the reliability table.
+
+### Added
+- `tools/build_land.py`: builds the coastline from OpenStreetMap's land polygons (osmdata.openstreetmap.de, ODbL; downloaded once, 928 MB, into `build/land`) into four levels: zoom 5 to 9 in one file loaded with the page (116 KB), and zoom 10, 11 and 12 in one file per 1-degree tile, loaded only when a view needs them (1.3 MB for the whole box). Served from `assets/sst/land/` at `/api/sst/land/<name>.json` (gzip, cached a week, no outside call). OpenStreetMap is already credited in the map's attribution.
+- `assets/sstland.js` (`window.SSTLand`): loads and prepares the coastline, picks the level and the pieces in view.
+- Tests: the fill never reaches a reading, filled water drawn and filled land cleared, no isotherm on land, the rim, the panes' order, interpolation off at low zoom and on (bilinear) at high zoom (`tools/test_sstengine.mjs`); the coastline assets, budgets, land and water points at every level and the route (`tools/test_sst_look.py`); coast timings in `tools/perf_sstengine.mjs --only coast`.
+
 ## 2026-10-17 - SST sprint 2 (lane V): new colors and controls, a dark map, depth lines and spot names
 
 ### Added

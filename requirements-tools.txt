@@ -1,4 +1,4 @@
-# Build-only dependencies for tools/build_currents.py, build_tide_atlas.py and
+# Build-only dependencies for tools/build_currents.py, build_tide_atlas.py, build_land.py and
 # build_inlets.py — NOT installed on Render.
 # Local:  .venv/bin/python -m pip install -r requirements-tools.txt
 #         (use `python -m pip`: the venv's pip launcher is broken from a past move)
@@ -9,3 +9,5 @@ matplotlib>=3.8.0
 netCDF4>=1.7
 requests>=2.31.0
 Pillow>=10.0.0          # tools/build_inlets.py reads NCEI's DEM TIFFs
+shapely>=2.0           # tools/build_land.py: union, simplify and cut the OpenStreetMap land polygons
+pyogrio>=0.7           # tools/build_land.py: reads the land polygons shapefile straight from its zip

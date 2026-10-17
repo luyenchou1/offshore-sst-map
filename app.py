@@ -49,6 +49,7 @@ from layout.mapview import build_map, chart_layer, gebco_layer, gfw_layer
 from layout.statsview import render_stats_page
 from layout.sidebar import build_sidebar
 from map.depth import ROUTE as DEPTH_ROUTE, contours_gz
+from map.land import ROUTE as LAND_ROUTE, land_gz
 from map.measure import format_measurement
 from map.pois import build_poi_markers, get_all_poi_names, pois_payload
 from layout.sstabout import build_about_modal
@@ -1047,6 +1048,21 @@ def _debug_state_lines():
 @server.route(DEPTH_ROUTE)
 def sst_depth_contours():
     body, etag = contours_gz()
+    if body is None:
+        return "not found", 404
+    headers = {"ETag": f'"{etag}"', "Cache-Control": "public, max-age=604800", "Vary": "Accept-Encoding"}
+    if request.headers.get("If-None-Match") == f'"{etag}"':
+        return Response(status=304, headers=headers)
+    return Response(body, mimetype="application/json", headers={**headers, "Content-Encoding": "gzip"})
+
+
+# ---- SST coastline (Oct 2026) ----
+# Committed static assets (tools/build_land.py -> assets/sst/land/land-*.json.gz, OpenStreetMap land polygons),
+# each read once into memory and sent as is with Content-Encoding: gzip. The page asks with ?v=<hash>, so they're
+# cached for a week. Names are checked against map/land.NAME_RE. No outside call, no lock held across anything slow.
+@server.route(LAND_ROUTE)
+def sst_land(name):
+    body, etag = land_gz(name)
     if body is None:
         return "not found", 404
     headers = {"ETag": f'"{etag}"', "Cache-Control": "public, max-age=604800", "Vary": "Accept-Encoding"}
