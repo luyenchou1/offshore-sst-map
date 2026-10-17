@@ -155,7 +155,8 @@ def fresh():
 
 def _app():
     import app as appmod
-    appmod.mask_land_rasterized = lambda arr, lats, lons: arr  # no Natural Earth download
+    # no Natural Earth download (weeks are built by data/sstgrid.entry_from_fetch, which calls data.geo's)
+    geo.mask_land_rasterized = lambda arr, lats, lons: arr
     return appmod
 
 

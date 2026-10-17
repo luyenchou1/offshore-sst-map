@@ -27,8 +27,8 @@ import numpy as np
 from dash import ALL, Input, Output, State, ctx, dcc, html
 
 from data.cache import (
-    entry_meta, get_cached, nearest_saved, put_cache, queue_week,
-    unqueue_week, wanted_weeks,
+    WEEK_NAME_RE, disk_report, entry_meta, get_cached, get_week, nearest_saved, old_path, put_week, put_week_file,
+    queue_week, touch_viewed, unqueue_week, wanted_weeks, week_meta, week_path, weeks_index,
 )
 from data.catches import (
     build_catch_payload,
@@ -39,21 +39,19 @@ from data import currents as currents_data
 from data import geo
 from data import labstats
 from data import outbound
+from data import sstgrid
 from data import sstmeta
 from data.erddap import SSTUnavailable, get_sst_multiday, latest_mur_date, noaa_down
-from data.geo import grid_bounds, mask_aoi_rasterized, mask_land_rasterized, orient_to_leaflet
 from layout.catchview import build_catch_page
 from layout.currentsview import build_currents_page
 from layout.labsview import build_labs_page
 from layout.mapview import build_map, chart_layer, gebco_layer, gfw_layer
 from layout.statsview import render_stats_page
 from layout.sidebar import build_sidebar
-from map.colorscale import build_legend_component, compute_color_bounds
 from map.measure import format_measurement
-from map.overlay import FRAME_FORMAT, sst_to_base64_png
 from map.pois import build_poi_markers, get_all_poi_names, pois_payload
 from layout.sstabout import build_about_modal
-from map.readout import fmt_day, measure_panel, selection_tip, week_temps
+from map.readout import fmt_day, measure_panel, week_temps
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -753,12 +751,8 @@ def precache_endpoint():
                 target_dates.append(d)
                 d += timedelta(days=interval)
 
-    # Filter out dates already cached
-    uncached = []
-    for d in target_dates:
-        cached = get_cached(d, False)  # adaptive mode
-        if not cached:
-            uncached.append(d)
+    # Filter out dates already saved as weekly files (sprint 2; old entries are replaced too)
+    uncached = [d for d in target_dates if not week_path(d).exists()]
 
     if not uncached:
         return json.dumps({"message": "All dates already cached", "total": len(target_dates)}), 200, {"Content-Type": "application/json"}
@@ -779,7 +773,7 @@ def precache_endpoint():
         for d in dates:
             # Re-check cache in case a previous run cached this date
             # before the worker restarted
-            if get_cached(d, False):
+            if week_path(d).exists():
                 _precache_status["done"] += 1
                 logger.info("Pre-cache: already cached %s, skipping", d)
                 continue
@@ -796,8 +790,7 @@ def precache_endpoint():
                                          allow_fallback=False, require_full=True, concurrency=2)
                     if geo.load_land_gdf(wait_s=60) is None:  # never save a week without the land mask
                         raise RuntimeError("land mask unavailable")
-                    dp = _precache_single_date(s, locked=False)
-                    put_cache(date_val, False, dp)
+                    put_week(date_val, _precache_single_date(s))
                     return True
 
                 _call_with_timeout(_fetch_and_cache, PER_DATE_TIMEOUT, d)
@@ -881,7 +874,8 @@ def cache_upload():
                 401, {"Content-Type": "application/json"})
 
     fname = request.headers.get("X-Cache-Filename", "")
-    if not _re.fullmatch(r"\d{4}-\d{2}-\d{2}_(adaptive|locked)\.json\.gz", fname):
+    weekly = bool(WEEK_NAME_RE.fullmatch(fname))   # <end>_week.json.gz: one file per week (data/sstgrid)
+    if not weekly and not _re.fullmatch(r"\d{4}-\d{2}-\d{2}_(adaptive|locked)\.json\.gz", fname):
         return (json.dumps({"error": f"invalid filename: {fname!r}"}),
                 400, {"Content-Type": "application/json"})
 
@@ -897,24 +891,37 @@ def cache_upload():
     try:
         import gzip as _gz
         payload = json.loads(_gz.decompress(data).decode("utf-8"))
-        if "raw_days" not in payload or "dates" not in payload:
+        if "dates" not in payload:
+            raise ValueError("missing expected cache keys")
+        if weekly:
+            if not sstgrid.is_grid_entry(payload):
+                raise ValueError("not a weekly grid entry")
+            hdr = sstgrid.read_header(_gz.decompress(sstgrid.entry_blob(payload)))
+            if hdr["nd"] != len(payload["dates"]):
+                raise ValueError("days and dates disagree")
+        elif "raw_days" not in payload:
             raise ValueError("missing expected cache keys")
     except Exception as e:
         return (json.dumps({"error": f"not a valid cache file: {e}"}),
                 400, {"Content-Type": "application/json"})
 
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    target = CACHE_DIR / fname
-    tmp = CACHE_DIR / (fname + ".uploading")
-    with open(tmp, "wb") as f:
-        f.write(data)
-    os.replace(tmp, target)
+    end = datetime.strptime(fname[:10], "%Y-%m-%d").date()
+    if weekly:
+        target = put_week_file(end, data)
+        _forget_week(end)   # a copy in memory would be older than this one
+    else:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        target = CACHE_DIR / fname
+        tmp = CACHE_DIR / (fname + ".uploading")
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, target)
     size_kb = target.stat().st_size / 1024
-    logger.info("Cache UPLOAD: %s (%.0f KB)", fname, size_kb)
+    logger.info("Cache UPLOAD: %s%s (%.0f KB)", "weeks/" if weekly else "", fname, size_kb)
     # A full MUR week answers a reader's queued request (see /api/cache/wanted)
     meta = sstmeta.meta_for_entry(payload)
     if meta["source"] == "MUR" and meta.get("complete", True):
-        unqueue_week(datetime.strptime(fname[:10], "%Y-%m-%d").date())
+        unqueue_week(end)
     return (json.dumps({"ok": True, "file": fname, "size_kb": round(size_kb, 1)}),
             200, {"Content-Type": "application/json"})
 
@@ -936,6 +943,50 @@ def cache_wanted():
         return (json.dumps({"error": "unauthorized"}), 401, {"Content-Type": "application/json"})
     return (json.dumps({"weeks": wanted_weeks()}), 200,
             {"Content-Type": "application/json", "Cache-Control": "no-store"})
+
+
+@server.route("/api/cache/weeks")
+def cache_weeks():
+    """What's saved, for the seeder's backfill (tools/sync_cache.py --backfill): end dates with a weekly file
+    ("weeks", the coverage box, 0.1 F) and end dates with only an entry from before sprint 2 ("old_only"), plus the
+    disk numbers. Same lock as /api/cache/upload."""
+    import hmac
+    token = os.environ.get("CACHE_UPLOAD_TOKEN")
+    if not token:
+        return (json.dumps({"error": "disabled (CACHE_UPLOAD_TOKEN not set)"}), 403, _JSON)
+    supplied = request.headers.get("X-Upload-Token", "")
+    if not (supplied and hmac.compare_digest(supplied, token)):
+        return json.dumps({"error": "unauthorized"}), 401, _JSON
+    out = weeks_index()
+    out.update(coverage=COVERAGE_ID, format=sstgrid.GRID_FORMAT, disk=disk_report())
+    return json.dumps(out), 200, {"Content-Type": "application/json", "Cache-Control": "no-store"}
+
+
+_WEEK_BIN_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+@server.route("/api/sst/week/<end>.bin")
+def sst_week_bin(end):
+    """The week's grid for SSTEngine (data/sstgrid GOSST1), gzip bytes sent as they are with Content-Encoding: gzip.
+    From memory or the disk only: never NOAA, no lock (incident 2026-10-16), so it answers at once even while NOAA
+    is down. 404 when the week isn't saved (the page asked for it through Load week first)."""
+    if not _WEEK_BIN_RE.match(end or ""):
+        return json.dumps({"error": "bad date"}), 404, _JSON
+    try:
+        d = date.fromisoformat(end)
+        blob = _week_blob(d)
+    except Exception:
+        logger.warning("Week bytes for %s failed", end, exc_info=True)
+        blob = None
+    if blob is None:
+        return json.dumps({"error": f"week {end} is not saved"}), 404, {**_JSON, "Cache-Control": "no-store"}
+    import hashlib
+    etag = '"' + hashlib.sha1(blob).hexdigest()[:20] + '"'
+    headers = {"Cache-Control": "public, max-age=3600", "ETag": etag, "X-Robots-Tag": "noindex"}
+    if request.headers.get("If-None-Match") == etag:
+        return Response(status=304, headers=headers)
+    return Response(blob, status=200, mimetype="application/octet-stream",
+                    headers={**headers, "Content-Encoding": "gzip"})
 
 
 @server.route("/api/debug/threads")
@@ -982,6 +1033,7 @@ def _debug_state_lines():
         lines.append(f"weeks failed in the last minute: "
                      f"{[k for k, (t, _) in list(_failed_recently.items()) if now - t < 60]}")
         lines.append(f"land mask loaded: {geo.land_ready()}")
+        lines.append(f"SST cache: {disk_report()}")
     except Exception as e:  # noqa: BLE001 - diagnostics must never fail
         lines.append(f"state unavailable: {type(e).__name__}: {e}")
     return lines
@@ -1066,11 +1118,18 @@ def currents_upload():
             200, _JSON)
 
 
-# ---- Server-side raw data cache ----
-# Raw float arrays are too large (~18 MB) for dcc.Store / browser transport.
-# Keep them server-side; click callbacks read from here instead.
-_raw_data_cache = {}  # key → {"raw_days": [...], "lats": np.array, "lons": np.array}
-_RAW_CACHE_MAX = 2  # max entries (~25 MB each) — keep tight on 512 MB Render
+# ---- Weeks in memory: the page's payload, the week's bytes, arrays for the measure panel ----
+# Since sprint 2 the browser draws the week itself (assets/sstengine.js, window.SSTEngine) from one compact binary
+# per week (data/sstgrid "GOSST1": 0.1 F codes and a land mask, ~0.6 MB for the coverage box), served by
+# GET /api/sst/week/<end>.bin. The page's sst-store holds only the week's meta, dates, bounds, Auto range and that URL
+# (no pictures). The server keeps, per week: the bytes (for the route), the decoded arrays (the measure panel's
+# temperatures, render_selection) and the store payload. At most two weeks (~20 MB each as float32), newest kept.
+COVERAGE_ID = CFG.get("coverage_id") or "aoi"
+OLD_COVERAGE_ID = "aoi-2026"   # entries saved before sprint 2: the old corridor (38.8 to 43.8 N), whole degrees
+_raw_data_cache = {}  # key -> {"raw_days": [{"arrF", "date"}], "lats", "lons", "meta", "blob", "store"}
+_RAW_CACHE_MAX = 2    # max entries — keep tight on 512 MB Render
+_blob_cache = {}      # (end ISO, source file mtime) -> gzip GOSST1 bytes, for the route (old entries are converted)
+_BLOB_CACHE_MAX = 4
 
 
 def _put_raw_cache(key, value):
@@ -1084,135 +1143,46 @@ def _put_raw_cache(key, value):
             break
 
 
-def _cache_key(end_date, locked):
-    mode = "locked" if locked else "adaptive"
-    return f"{end_date}_{mode}"
+def _cache_key(end_date, locked=False):
+    """A week's key in memory and the page's data_key: one per week (the color scale is chosen in the browser now,
+    so "locked" no longer makes a second copy; the argument is ignored)."""
+    return f"{end_date}_week"
+
+
+def _forget_week(end_date):
+    """Drop a week's copies in memory (a newer file was just uploaded)."""
+    _raw_data_cache.pop(_cache_key(end_date), None)
+    for k in [k for k in list(_blob_cache) if k[0] == str(end_date)]:
+        _blob_cache.pop(k, None)
 
 
 def _get_raw_data(data_key):
-    """Retrieve raw grid data, falling back to disk cache if needed.
-
-    This handles multi-worker gunicorn (each worker has its own memory),
-    server restarts, and any other case where in-memory cache is empty.
-    """
-    if data_key and data_key in _raw_data_cache:
-        return _raw_data_cache[data_key]
-
+    """A week's arrays for readouts, by data_key ("2026-10-15_week"; older pages sent "..._adaptive"): memory, else
+    the disk (weekly file, else an entry saved before sprint 2). Never NOAA."""
     if not data_key:
         return None
-
-    # Fall back to disk cache — parse key to get end_date and locked
-    # data_key format: "2026-03-25_adaptive" or "2026-03-25_locked"
+    if data_key in _raw_data_cache:
+        return _raw_data_cache[data_key]
+    try:
+        end_date = datetime.strptime(str(data_key).split("_", 1)[0], "%Y-%m-%d").date()
+    except ValueError:
+        logger.warning("_get_raw_data: invalid key format: %s", data_key)
+        return None
+    key = _cache_key(end_date)
+    if key in _raw_data_cache:
+        return _raw_data_cache[key]
     logger.info("_get_raw_data: memory miss for %s, trying disk cache", data_key)
     try:
-        parts = data_key.rsplit("_", 1)
-        if len(parts) != 2:
-            logger.warning("_get_raw_data: invalid key format: %s", data_key)
-            return None
-        end_date_str, mode = parts
-        end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
-        locked = mode == "locked"
-        cached = get_cached(end_date, locked)
-        if cached:
-            logger.info("_get_raw_data: disk cache HIT for %s, rebuilding raw data", data_key)
-            _, raw_data = _build_payload_from_disk_cache(cached, raw_only=True)
-            _put_raw_cache(data_key, raw_data)
-            logger.info("Raw data loaded from disk cache: %s", data_key)
-            return raw_data
-        else:
-            logger.warning("_get_raw_data: disk cache MISS for %s", data_key)
+        w = _saved_week(end_date)
+        if w:
+            _ready(w)
+            w["raw"]["meta"] = w["meta"]
+            _put_raw_cache(key, w["raw"])
+            return w["raw"]
+        logger.warning("_get_raw_data: disk cache MISS for %s", data_key)
     except Exception:
         logger.warning("Failed to load raw data from disk for %s", data_key, exc_info=True)
-
     return None
-
-
-def _render_frames(raw_days, lats, bounds, vmin, vmax):
-    """The week's PNG frames for the ImageOverlay at `bounds`, rows resampled to Web Mercator (map/overlay: drawn
-    rows evenly spaced in latitude put the SST up to 5.3 km north of true). The payload carries
-    "frame_format": FRAME_FORMAT with them, so the cache can tell these from frames drawn the old way."""
-    return [sst_to_base64_png(d["arrF"], vmin, vmax, lats=lats, bounds=bounds) for d in raw_days]
-
-
-def _frames_current(entry) -> bool:
-    """A cache entry's PNG frames can be served as they are (drawn in Web Mercator rows, map/overlay)."""
-    return bool(entry.get("frames")) and entry.get("frame_format") == FRAME_FORMAT
-
-
-# ---- Shared helper: build SST payload from raw ERDDAP result ----
-def _build_payload(sst: dict, locked: bool) -> dict:
-    """Process raw ERDDAP result into the full payload.
-
-    Runs orient → mask_aoi → mask_land → color bounds → pre-render PNGs.
-    Returns (store_payload, raw_data) where:
-      - store_payload goes to dcc.Store (frames + metadata, ~7 MB)
-      - raw_data stays server-side (float arrays for click lookups, ~18 MB)
-    """
-    lats_raw = sst["lats"]
-    lons_raw = sst["lons"]
-
-    processed_days = []
-    all_finite = []
-
-    for day_data in sst["days"]:
-        arrF = day_data["arrF"]
-        arrF, lats, lons = orient_to_leaflet(arrF, lats_raw.copy(), lons_raw.copy())
-        arrF = mask_aoi_rasterized(arrF, lats, lons, CFG)
-        arrF = mask_land_rasterized(arrF, lats, lons)
-        processed_days.append({"arrF": arrF, "date": day_data["date"]})
-        finite = arrF[np.isfinite(arrF)]
-        if finite.size > 0:
-            all_finite.append(finite)
-
-    # Re-orient once to get correct lat/lon arrays
-    _, lats, lons = orient_to_leaflet(
-        sst["days"][0]["arrF"], lats_raw.copy(), lons_raw.copy()
-    )
-
-    # Compute resolution
-    res_km = abs(float(lats[1] - lats[0])) * 111.0 if len(lats) > 1 else None
-
-    # Unified color bounds across all days
-    if locked:
-        vmin, vmax = 30.0, 90.0
-    elif all_finite:
-        stacked = np.concatenate(all_finite)
-        vmin, vmax = compute_color_bounds(
-            np.array(stacked, dtype=np.float64), locked=False
-        )
-    else:
-        vmin, vmax = 30.0, 90.0
-
-    # Pre-render each day's PNG
-    bounds = grid_bounds(lats, lons)
-    frames = _render_frames(processed_days, lats, bounds, vmin, vmax)
-    dates = [pd_item["date"] for pd_item in processed_days]
-    meta = sstmeta.meta_from_fetch(sst)
-
-    # Store payload — goes to browser via dcc.Store (~7 MB)
-    store_payload = {
-        "frames": frames,
-        "frame_format": FRAME_FORMAT,
-        "dates": dates,
-        "bounds": bounds,
-        "vmin": float(vmin),
-        "vmax": float(vmax),
-        "res_km": res_km,
-        "server": sst["server"],
-        "dataset_id": sst["dataset_id"],
-        "dataset_title": sst["dataset_title"],
-        "meta": meta,
-    }
-
-    # Raw data — stays server-side for click lookups
-    raw_data = {
-        "raw_days": processed_days,  # list of {"arrF": np.array, "date": str}
-        "lats": lats,
-        "lons": lons,
-        "meta": meta,
-    }
-
-    return store_payload, raw_data
 
 
 def _serialize_array(arr: np.ndarray) -> str:
@@ -1228,217 +1198,74 @@ def _deserialize_array(s: str) -> np.ndarray:
     return np.load(buf)
 
 
-def _precache_single_date(sst: dict, locked: bool) -> dict:
-    """Build a raw-only disk cache payload (no PNG frames).
-
-    Unlike _build_payload, this:
-    - Never renders PNGs (saves ~5-7 MB peak)
-    - Processes and serializes each day individually (never holds all
-      7 arrays + their base64 representations simultaneously)
-    - Uses running percentiles instead of np.concatenate (saves ~16 MB)
-
-    Returns a dict ready for put_cache() with frames=None.
-    """
-    import gc
-    lats_raw = sst["lats"]
-    lons_raw = sst["lons"]
-
-    # Orient once for lat/lon arrays
-    _, lats, lons = orient_to_leaflet(
-        sst["days"][0]["arrF"], lats_raw.copy(), lons_raw.copy()
-    )
-    serialized_lats = _serialize_array(lats)
-    serialized_lons = _serialize_array(lons)
-    res_km = abs(float(lats[1] - lats[0])) * 111.0 if len(lats) > 1 else None
-    bounds = grid_bounds(lats, lons)
-
-    # Process each day individually — serialize and free before next
-    serialized_days = []
-    dates = []
-    running_p5_min = float("inf")
-    running_p95_max = float("-inf")
-
-    for day_data in sst["days"]:
-        arrF = day_data["arrF"]
-        arrF, _, _ = orient_to_leaflet(arrF, lats_raw.copy(), lons_raw.copy())
-        arrF = mask_aoi_rasterized(arrF, lats, lons, CFG)
-        arrF = mask_land_rasterized(arrF, lats, lons)
-
-        # Running percentiles (avoids 16 MB concatenation)
-        finite = arrF[np.isfinite(arrF)]
-        if finite.size >= 50:
-            running_p5_min = min(running_p5_min, float(np.nanpercentile(finite, 5)))
-            running_p95_max = max(running_p95_max, float(np.nanpercentile(finite, 95)))
-        del finite
-
-        # Serialize immediately, then free numpy array
-        serialized_days.append({
-            "arrF": _serialize_array(arrF),
-            "date": day_data["date"],
-        })
-        dates.append(day_data["date"])
-        del arrF
-
-    # Free lats/lons now that all days are processed
-    del lats, lons
-    gc.collect()
-
-    # Apply color bounds logic (matches compute_color_bounds)
-    if locked:
-        vmin, vmax = 30.0, 90.0
-    elif running_p5_min < float("inf"):
-        vmin = max(running_p5_min, 28.0)
-        vmax = min(running_p95_max, 95.0)
-        if vmax - vmin < 5.0:
-            mid = (vmin + vmax) / 2
-            vmin, vmax = mid - 3.0, mid + 3.0
-    else:
-        vmin, vmax = 30.0, 90.0
-
-    return {
-        "frames": None,  # sentinel: raw-only, render PNGs on demand
-        "dates": dates,
-        "bounds": bounds,
-        "vmin": float(vmin),
-        "vmax": float(vmax),
-        "res_km": res_km,
-        "server": sst["server"],
-        "dataset_id": sst["dataset_id"],
-        "dataset_title": sst["dataset_title"],
-        "meta": sstmeta.meta_from_fetch(sst),
-        "raw_days": serialized_days,
-        "lats": serialized_lats,
-        "lons": serialized_lons,
-    }
+def _week_url(end_date, meta):
+    """The week's bytes for SSTEngine; ?v= changes when the week is rebuilt, so a browser never keeps an old copy."""
+    return f"/api/sst/week/{end_date}.bin?v={sstgrid.stamp((meta or {}).get('built_at'))}"
 
 
-def _rebuild_payload_from_raw(raw_data: dict, locked: bool) -> dict:
-    """Re-render PNGs from existing raw arrays with new color bounds.
-
-    Used when toggling lock-scale: the raw SST data is identical between
-    adaptive and locked modes — only vmin/vmax and PNGs differ.
-    """
-    raw_days = raw_data["raw_days"]
-    lats = raw_data["lats"]
-    lons = raw_data["lons"]
-
-    if locked:
-        vmin, vmax = 30.0, 90.0
-    else:
-        all_finite = []
-        for rd in raw_days:
-            finite = rd["arrF"][np.isfinite(rd["arrF"])]
-            if finite.size > 0:
-                all_finite.append(finite)
-        if all_finite:
-            stacked = np.concatenate(all_finite)
-            vmin, vmax = compute_color_bounds(stacked, locked=False)
-        else:
-            vmin, vmax = 30.0, 90.0
-
-    bounds = grid_bounds(lats, lons)
-    frames = _render_frames(raw_days, lats, bounds, vmin, vmax)
-    dates = [rd["date"] for rd in raw_days]
-    res_km = abs(float(lats[1] - lats[0])) * 111.0 if len(lats) > 1 else None
-    meta = raw_data.get("meta") or {}
-
-    return {
-        "frames": frames,
-        "frame_format": FRAME_FORMAT,
-        "dates": dates,
-        "bounds": bounds,
-        "vmin": float(vmin),
-        "vmax": float(vmax),
-        "res_km": res_km,
-        "server": meta.get("server", ""),
-        "dataset_id": meta.get("dataset_id", ""),
-        "dataset_title": "",
-        "meta": meta or None,
-    }
+def _week_from_entry(entry, end_date):
+    """(store payload, raw) for a weekly entry (the grid format)."""
+    blob = sstgrid.entry_blob(entry)
+    week = sstgrid.unpack_week(blob)
+    raw = sstgrid.week_arrays(blob, entry["dates"], week)
+    store = sstgrid.store_payload(entry, str(end_date), url=_week_url(end_date, entry.get("meta")))
+    raw.update(meta=entry.get("meta"), blob=blob, store=store)
+    return store, raw
 
 
-def _build_payload_from_disk_cache(cached: dict, raw_only: bool = False, locked_override=None):
-    """Split a disk-cached payload into store_payload + raw_data.
+def _week_from_old(old, end_date, locked):
+    """(store payload, raw) for an entry saved before sprint 2 (either variant): drawn on its own, smaller grid, whole
+    degrees. Converted here each time it is served (about 0.2 s; Render never asks NOAA for it) and not
+    written back: the seeder replaces the week with the coverage box (tools/sync_cache.py --backfill)."""
+    arrays = sstgrid.old_entry_arrays(old)
+    blob = sstgrid.old_entry_blob(old, arrays)
+    meta = entry_meta(old, end_date, locked)
+    entry = sstgrid.entry_from_blob(blob, [d["date"] for d in arrays["raw_days"]], meta=meta,
+                                    coverage=OLD_COVERAGE_ID, server=old.get("server", ""),
+                                    dataset_id=old.get("dataset_id", ""), dataset_title=old.get("dataset_title", ""))
+    store = sstgrid.store_payload(entry, str(end_date), url=_week_url(end_date, meta))
+    arrays.update(meta=meta, blob=blob, store=store)
+    return store, arrays
 
-    Supports three formats:
-      - v3 (raw-only pre-cache): frames is None, raw arrays are base64
-      - v2: raw_days[i]["arrF"] is a base64-encoded numpy string
-      - v1: raw_days[i]["arrF"] is a nested JSON list of floats
 
-    If raw_only=True, skip PNG rendering even for raw-only entries
-    (used by _get_raw_data which only needs arrays for click lookups).
+def _week_blob(end_date):
+    """The week's gzip GOSST1 bytes for /api/sst/week/<end>.bin: memory, then the weekly file, then an old entry
+    (converted). None if nothing is saved. Never asks NOAA, holds no lock."""
+    raw = _raw_data_cache.get(_cache_key(end_date))
+    if raw and raw.get("blob"):
+        return raw["blob"]
+    path = week_path(end_date)
+    try:
+        mt = path.stat().st_mtime
+    except OSError:
+        mt = None
+    if mt is None:
+        for lk in (False, True):
+            try:
+                mt, path = old_path(end_date, lk).stat().st_mtime, old_path(end_date, lk)
+                break
+            except OSError:
+                continue
+    if mt is None:
+        return None
+    k = (str(end_date), mt)
+    if k in _blob_cache:
+        return _blob_cache[k]
+    w = _saved_week(end_date)
+    if w is None:
+        return None
+    _ready(w)
+    blob = w["raw"]["blob"]
+    _blob_cache[k] = blob
+    while len(_blob_cache) > _BLOB_CACHE_MAX:
+        _blob_cache.pop(next(iter(_blob_cache)))
+    touch_viewed(path)
+    return blob
 
-    Frames are served as saved only when they're the current frame format (_frames_current); older ones (rows
-    evenly spaced in latitude, drawn up to 5.3 km north of true) are re-rendered here from the entry's raw arrays,
-    and _saved_week has the entry rewritten with them. The bounds always come from the grid (geo.grid_bounds,
-    the cell edges; entries from before Oct 2026 saved the first and last cell centres).
-    """
-    raw_days = []
-    dates = []
-    for rd in cached["raw_days"]:
-        arr_data = rd["arrF"]
-        if isinstance(arr_data, str):
-            arrF = _deserialize_array(arr_data)
-        else:
-            arrF = np.array(arr_data, dtype=np.float64)
-        raw_days.append({"arrF": arrF, "date": rd["date"]})
-        dates.append(rd["date"])
 
-    lats_data = cached["lats"]
-    lons_data = cached["lons"]
-    raw_data = {
-        "raw_days": raw_days,
-        "lats": _deserialize_array(lats_data) if isinstance(lats_data, str) else np.array(lats_data, dtype=np.float64),
-        "lons": _deserialize_array(lons_data) if isinstance(lons_data, str) else np.array(lons_data, dtype=np.float64),
-        "meta": cached.get("meta") if isinstance(cached.get("meta"), dict) else None,
-    }
-
-    # Determine color bounds — use locked_override if provided (cross-mode reuse)
-    need_rerender = locked_override is not None
-    if need_rerender:
-        if locked_override:
-            vmin, vmax = 30.0, 90.0
-        else:
-            all_finite = []
-            for rd in raw_days:
-                finite = rd["arrF"][np.isfinite(rd["arrF"])]
-                if finite.size > 0:
-                    all_finite.append(finite)
-            if all_finite:
-                stacked = np.concatenate(all_finite)
-                vmin, vmax = compute_color_bounds(stacked, locked=False)
-            else:
-                vmin, vmax = 30.0, 90.0
-    else:
-        vmin, vmax = cached["vmin"], cached["vmax"]
-
-    # Raw-only entries (frames=None), frames drawn the old way, or a cross-mode rerender: render from the raw arrays
-    bounds = grid_bounds(raw_data["lats"], raw_data["lons"])
-    frames = cached.get("frames")
-    current = _frames_current(cached)
-    if (not current or need_rerender) and not raw_only:
-        logger.info("Rendering PNGs on the fly (rerender=%s, saved frames %s)", need_rerender,
-                    "none" if not frames else f"format {cached.get('frame_format', 1)}")
-        frames = _render_frames(raw_days, raw_data["lats"], bounds, vmin, vmax)
-        current = True
-    elif not current:
-        frames = []  # raw_only mode — caller doesn't need PNGs
-
-    store_payload = {
-        "frames": frames,
-        "frame_format": FRAME_FORMAT if current else None,
-        "dates": dates,
-        "bounds": bounds,
-        "vmin": float(vmin),
-        "vmax": float(vmax),
-        "res_km": cached.get("res_km"),
-        "server": cached.get("server", ""),
-        "dataset_id": cached.get("dataset_id", ""),
-        "dataset_title": cached.get("dataset_title", ""),
-        "meta": raw_data["meta"],
-    }
-
-    return store_payload, raw_data
+def _precache_single_date(sst: dict, locked: bool = False) -> dict:
+    """The weekly entry for a precached week (data/sstgrid.entry_from_fetch, one file per week; `locked` is ignored)."""
+    return sstgrid.entry_from_fetch(sst, CFG)
 
 
 # NOTE: layout is a callable so date.today() (and the date picker's
@@ -1493,6 +1320,11 @@ def build_sst_page():
                 dcc.Store(id="sst-pois", data=pois_payload()),
                 html.Div(id="sst-status-sink", style={"display": "none"}),
                 html.Div(id="sst-fetch-sink", style={"display": "none"}),
+                # SSTEngine wiring sinks (assets/sstengine.js): week, day, color options, selection card
+                html.Div(id="sst-engine-sink", style={"display": "none"}),
+                html.Div(id="sst-day-sink", style={"display": "none"}),
+                html.Div(id="sst-style-sink", style={"display": "none"}),
+                html.Div(id="sst-sel-sink", style={"display": "none"}),
                 build_about_modal(),
                 # Auto-fetch SST on page load (fires once after 500ms)
                 dcc.Interval(id="auto-fetch", interval=500, max_intervals=1),
@@ -1672,14 +1504,13 @@ _LOADING_OVERLAY_HIDDEN = {"display": "none"}
 # may call this with n_clicks 0 when they appear or disappear.
 app.clientside_callback(
     """
-    function(n_clicks, n_intervals, lock_scale, saved) {
+    function(n_clicks, n_intervals, saved) {
         var nu = window.dash_clientside.no_update;
         var t = (window.dash_clientside.callback_context || {}).triggered || [];
         var real = t.some(function (x) {
             var id = String(x.prop_id || "");
             if (id.indexOf("saved-week") >= 0) { return !!x.value; }
-            return id === "fetch-btn.n_clicks" || id === "auto-fetch.n_intervals" ||
-                   id === "lock-scale.value";
+            return id === "fetch-btn.n_clicks" || id === "auto-fetch.n_intervals";
         });
         if (!real) { return [nu, nu, nu]; }
         return [
@@ -1702,7 +1533,6 @@ app.clientside_callback(
     Output("map-loading-overlay", "style"),
     Input("fetch-btn", "n_clicks"),
     Input("auto-fetch", "n_intervals"),
-    Input("lock-scale", "value"),
     Input({"type": "saved-week", "index": ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
@@ -1736,33 +1566,26 @@ def _raw_meta(raw):
     return raw.get("meta") or sstmeta.meta_for_entry({"dates": [d["date"] for d in raw["raw_days"]]})
 
 
-def _saved_week(end_date, locked):
-    """The saved week ending end_date: this color mode on disk, then memory, then the other mode
-    (memory, disk). Returns {"meta", "end", "write", "make"} or None; make() builds the page
-    payload and raw arrays only when the week is actually served (see _ready). "write" says what
-    to write back in the background ("upgrade": add PNGs to a raw-only entry, or replace frames drawn the old way,
-    map/overlay.FRAME_FORMAT; "cross": save this color mode)."""
-    entry = get_cached(end_date, locked)
+def _saved_week(end_date, locked=False):
+    """The saved week ending end_date: in memory (fetched moments ago; its disk write may still be running), the
+    weekly file, else an entry saved before sprint 2 (either variant: "adaptive" and "locked" hold the same arrays).
+    Returns {"meta", "end", "write", "path", "make"} or None; make() builds the page payload and the raw arrays only
+    when the week is actually served (see _ready). Nothing is written back for a saved week ("write": None); `locked`
+    is ignored (the color scale is the browser's now)."""
+    key = _cache_key(end_date)
+    raw = _raw_data_cache.get(key)
+    if raw is not None and raw.get("store"):
+        return {"meta": _raw_meta(raw), "end": end_date, "write": None, "path": None,
+                "make": lambda: (dict(raw["store"]), raw)}
+    entry = get_week(end_date)
     if entry:
-        return {"meta": entry_meta(entry, end_date, locked), "end": end_date,
-                "write": None if _frames_current(entry) else "upgrade",
-                "make": lambda: _build_payload_from_disk_cache(entry)}
-    key = _cache_key(end_date, locked)
-    if key in _raw_data_cache:  # fetched moments ago; its disk write may still be running
-        raw = _raw_data_cache[key]
-        return {"meta": _raw_meta(raw), "end": end_date, "write": None,
-                "make": lambda: (_rebuild_payload_from_raw(raw, locked), raw)}
-    alt_key = _cache_key(end_date, not locked)
-    if alt_key in _raw_data_cache:
-        raw = _raw_data_cache[alt_key]
-        logger.info("Cross-mode reuse from memory: %s -> %s", alt_key, key)
-        return {"meta": _raw_meta(raw), "end": end_date, "write": "cross",
-                "make": lambda: (_rebuild_payload_from_raw(raw, locked), raw)}
-    alt = get_cached(end_date, not locked)
-    if alt:
-        logger.info("Cross-mode reuse from disk: %s (locked=%s -> %s)", end_date, not locked, locked)
-        return {"meta": entry_meta(alt, end_date, not locked), "end": end_date, "write": "cross",
-                "make": lambda: _build_payload_from_disk_cache(alt, locked_override=locked)}
+        return {"meta": week_meta(entry, end_date), "end": end_date, "write": None, "path": week_path(end_date),
+                "make": lambda: _week_from_entry(entry, end_date)}
+    for lk in (False, True):
+        old = get_cached(end_date, lk)
+        if old and old.get("raw_days"):
+            return {"meta": entry_meta(old, end_date, lk), "end": end_date, "write": None,
+                    "path": old_path(end_date, lk), "make": lambda old=old, lk=lk: _week_from_old(old, end_date, lk)}
     return None
 
 
@@ -1811,8 +1634,10 @@ def _serve(w, locked, requested_end, latest, match, queued=None):
         meta, requested_end=requested_end, latest_available=latest,
         from_cache=w["write"] != "fresh", week_match=match, queued=queued)
     w["store"]["meta"] = w["meta_out"]
+    w["store"]["data_key"] = _cache_key(w["end"])
     w["raw"]["meta"] = meta
-    _put_raw_cache(_cache_key(w["end"], locked), w["raw"])
+    _put_raw_cache(_cache_key(w["end"]), w["raw"])
+    touch_viewed(w.get("path"))   # "last viewed", for the cache's eviction order
     return w
 
 
@@ -1922,10 +1747,11 @@ def _week_from_noaa(saved, requested_end, end, match, recent, locked, latest):
     except SSTUnavailable as e:
         return _noaa_failed(e, saved, *args)
     _failed_recently.pop(str(end), None)
-    store, raw = _build_payload(sst, locked)
+    entry = sstgrid.entry_from_fetch(sst, CFG)
+    store, raw = _week_from_entry(entry, end)
     # Without the land mask (still loading, or its download failed) the week is shown but not saved
-    fresh = {"store": store, "raw": raw, "meta": raw["meta"], "end": end, "write": "fresh",
-             "save": geo.land_ready()}
+    fresh = {"store": store, "raw": raw, "meta": entry["meta"], "end": end, "write": "fresh", "entry": entry,
+             "path": None, "save": geo.land_ready()}
     if not fresh["save"]:
         logger.warning("Week %s built without the land mask (not loaded yet); serving it unsaved", end)
     if saved and _week_score(fresh["meta"]) < _week_score(saved["meta"]):
@@ -1938,20 +1764,14 @@ def _week_from_noaa(saved, requested_end, end, match, recent, locked, latest):
     return _serve(fresh, locked, requested_end, latest, match, queued=queued)
 
 
-def _write_week(w, locked):
-    """Background disk write for a week that was fetched, re-rendered for the other mode, or
-    loaded from a raw-only entry (now with PNGs). Uses base64 numpy arrays, never .tolist()
-    (a 3x memory spike on Render's 512 MB)."""
+def _write_week(w, locked=False):
+    """Background disk write for a week fetched from NOAA: one weekly file (data/sstgrid), with the week's own meta
+    (not this request's). `locked` is ignored."""
     try:
-        dp = {k: v for k, v in w["store"].items() if k not in ("meta", "data_key")}
-        dp["meta"] = w["meta"]
-        dp["raw_days"] = [
-            {"arrF": _serialize_array(d["arrF"]), "date": d["date"]} for d in w["raw"]["raw_days"]
-        ]
-        dp["lats"] = _serialize_array(w["raw"]["lats"])
-        dp["lons"] = _serialize_array(w["raw"]["lons"])
-        put_cache(w["end"], locked, dp)
-        logger.info("Cache written (%s): %s locked=%s", w["write"], w["end"], locked)
+        entry = dict(w["entry"])
+        entry["meta"] = w["meta"]
+        put_week(w["end"], entry)
+        logger.info("Cache written (%s): %s", w["write"], w["end"])
     except Exception:
         logger.warning("Background cache write failed", exc_info=True)
 
@@ -2054,7 +1874,6 @@ def _failure_message(err, end_date):
     inputs=[
         Input("fetch-btn", "n_clicks"),
         Input("auto-fetch", "n_intervals"),
-        Input("lock-scale", "value"),
         Input({"type": "saved-week", "index": ALL}, "n_clicks"),
     ],
     state=[
@@ -2062,7 +1881,7 @@ def _failure_message(err, end_date):
     ],
     prevent_initial_call=True,
 )
-def fetch_sst_data(n_clicks, n_intervals, lock_scale, saved_clicks, end_date_str):
+def fetch_sst_data(n_clicks, n_intervals, saved_clicks, end_date_str):
     trig = ctx.triggered_id
     if trig is None:
         raise dash.exceptions.PreventUpdate
@@ -2084,7 +1903,7 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, saved_clicks, end_date_str
         # The automatic first load is always the newest week, even if the page was built
         # before the newest day was known (its date box then said two days back)
         end_date = latest or (date.today() - timedelta(days=2))
-    locked = "lock" in (lock_scale or [])
+    locked = False   # one copy per week: "Same colors every week" is a color range in the browser (SSTEngine)
 
     t0 = time.monotonic()
     try:
@@ -2106,12 +1925,10 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, saved_clicks, end_date_str
             dash.no_update,
         )
 
-    store_payload = w["store"]
-    # Click callbacks look up the raw arrays by this key
-    store_payload["data_key"] = _cache_key(w["end"], locked)
+    store_payload = w["store"]   # meta, dates, bounds, Auto range, data_key and the week's URL (grid.url)
     if w["write"] and w.get("save", True):
         threading.Thread(target=_write_week, args=(w, locked), daemon=True).start()
-    num_days = len(store_payload["frames"])
+    num_days = len(store_payload["dates"])
     logger.info("Served %s %s (%s, %s) in %.1fs", w["meta_out"]["source"], w["end"],
                 w["meta_out"]["week_match"], "cache" if w["meta_out"]["from_cache"] else "NOAA",
                 time.monotonic() - t0)
@@ -2125,6 +1942,8 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, saved_clicks, end_date_str
     # The fishing-activity tiles follow the days on the map (?dr= on each tile request)
     gfw_range = f"{store_payload['dates'][0]},{store_payload['dates'][-1]}"
 
+    # The loading overlay stays up until SSTEngine has the week's bytes and has drawn them (its "ready" event hides
+    # it, as does an "error"; see the setWeek wiring below)
     return (
         store_payload, _status_line(w["meta_out"]),
         marks, num_days - 1, num_days - 1,
@@ -2132,70 +1951,80 @@ def fetch_sst_data(n_clicks, n_intervals, lock_scale, saved_clicks, end_date_str
         False, FETCH_LABEL,
         "gotone-sidebar", {"display": "none"},
         gfw_range,
-        {"display": "none"},
+        dash.no_update,
         w["end"].isoformat(),
     )
 
 
-# ---- Callback 2: Render static layers (POIs, legend, initial overlay) ----
-# Fires on data load or POI selection change. Also sets the SST overlay
-# on initial data load (clientside callback handles frame changes only).
+# ---- Callback 2: the spots ----
+# The SST is drawn by assets/sstengine.js (window.SSTEngine) from the week's bytes, wired below; its legend and color
+# bar are the Colors panel's (assets/sstlook.js, lane V), from SSTEngine.getRange() / colorFor() / histogram(). The
+# server legend (legend-container) and "Same colors every week" (lock-scale) went with the PNG frames: neither is in
+# any callback now (both elements stay in the layout, hidden by the panel while the engine is on).
 @app.callback(
     Output("poi-layer", "children"),
-    Output("legend-container", "children"),
-    Output("map-loading-overlay", "style", allow_duplicate=True),
-    Output("sst-overlay", "url"),
-    Output("sst-overlay", "bounds"),
-    Input("sst-store", "data"),
     Input("poi-picker", "value"),
-    State("frame-slider", "value"),
-    prevent_initial_call="initial_duplicate",
 )
-def render_static_layers(sst_data, selected_pois, frame_idx):
-    hidden = {"display": "none"}
-
-    if not sst_data or "frames" not in sst_data:
-        return build_poi_markers(selected=selected_pois), "", dash.no_update, "", [[0, 0], [0, 0]]
-
-    vmin = sst_data["vmin"]
-    vmax = sst_data["vmax"]
-    meta = sst_data.get("meta") or {}
-    res_km = meta.get("resolution_km") or sst_data.get("res_km")
-    locked = str(sst_data.get("data_key", "")).endswith("_locked")
-    coarse = meta.get("source") == "OISST" or bool(res_km and res_km >= 5)
-
-    legend = build_legend_component(vmin, vmax, res_km=res_km, locked=locked, coarse=coarse)
-    poi_markers = build_poi_markers(selected=selected_pois)
-
-    # Set overlay for current frame
-    idx = frame_idx if frame_idx is not None else len(sst_data["frames"]) - 1
-    if idx >= len(sst_data["frames"]):
-        idx = len(sst_data["frames"]) - 1
-    overlay_url = sst_data["frames"][idx]
-    overlay_bounds = sst_data["bounds"]
-
-    return poi_markers, legend, hidden, overlay_url, overlay_bounds
+def render_static_layers(selected_pois):
+    return build_poi_markers(selected=selected_pois)
 
 
-# ---- Clientside: Swap overlay PNG by frame index (instant, no server trip) ----
-# sst-store is State (not Input) — initial overlay is set by render_static_layers.
-# This callback only fires on frame slider changes (user interaction / animation).
+# ---- SSTEngine wiring (assets/sstengine.js; API in CLAUDE.md, Architecture -> SST engine) ----
+# The week goes to the engine as it arrives (the engine fetches grid.url and draws it); the overlay is hidden when the
+# engine has drawn it ("ready") or couldn't ("error": the strip says so). The day slider and Color strength only call
+# the engine: no server trip, no reload (review T6). Each writes "" to its own sink.
 app.clientside_callback(
     """
-    function(frame_idx, sst_data) {
-        if (!sst_data || !sst_data.frames) {
-            return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+    function(store) {
+        var E = window.SSTEngine, nu = window.dash_clientside.no_update;
+        if (!E || !store) { return nu; }
+        if (!E._dashWired) {
+            E._dashWired = true;
+            var hide = function () {
+                clearTimeout(E._dashOverlayTimer);
+                try { window.dash_clientside.set_props("map-loading-overlay", {style: {display: "none"}}); }
+                catch (e) { /* page gone */ }
+            };
+            E.on("ready", hide);
+            E.on("error", function (err) {
+                hide();
+                if (window.SST) { window.SST.fetchError("the temperatures didn't download (" +
+                    ((err && err.message) || "network") + "). Try Load week again."); }
+            });
         }
-        var idx = frame_idx || 0;
-        if (idx >= sst_data.frames.length) idx = sst_data.frames.length - 1;
-        return [sst_data.frames[idx], sst_data.bounds];
+        clearTimeout(E._dashOverlayTimer);   // never leave the overlay up for long, whatever happens
+        E._dashOverlayTimer = setTimeout(function () {
+            try { window.dash_clientside.set_props("map-loading-overlay", {style: {display: "none"}}); } catch (e) {}
+        }, 25000);
+        E.setWeek(store);
+        return "";
     }
     """,
-    Output("sst-overlay", "url", allow_duplicate=True),
-    Output("sst-overlay", "bounds", allow_duplicate=True),
-    Input("frame-slider", "value"),
-    State("sst-store", "data"),
+    Output("sst-engine-sink", "children"),
+    Input("sst-store", "data"),
     prevent_initial_call=True,
+)
+
+app.clientside_callback(
+    """
+    function(i) {
+        if (window.SSTEngine && i != null) { window.SSTEngine.setDay(i); }
+        return "";
+    }
+    """,
+    Output("sst-day-sink", "children"),
+    Input("frame-slider", "value"),
+)
+
+app.clientside_callback(
+    """
+    function(opacity) {
+        if (window.SSTEngine && opacity != null) { window.SSTEngine.setOptions({opacity: opacity}); }
+        return "";
+    }
+    """,
+    Output("sst-style-sink", "children"),
+    Input("sst-opacity", "value"),
 )
 
 
@@ -2424,23 +2253,37 @@ def _measure_layers(a, b, m):
     return layers
 
 
-# ---- Callback 3b: Draw the selection and the measurement for the day on the map ----
-# Fires on a tap, a measure change, a new week or a day change, so a reading, a
-# spot card or a measurement stays put and shows that day's temperature.
+# ---- Callback 3b: the selection card (in the browser) and the measurement (server) for the day on the map ----
+# A reading, a spot card or a point in The Dump is drawn by assets/sst.js (SST.selection) from SSTEngine's grid: no
+# server trip on a tap or a day change (review R1). The measurement (line, label, sidebar panel with true + magnetic
+# course and each end's temperature) is drawn here for the day on the map, so it survives day changes.
+app.clientside_callback(
+    """
+    function(sel, key, idx) {
+        if (window.SST && window.SST.selection) { window.SST.selection(sel, key, idx); }
+        return "";
+    }
+    """,
+    Output("sst-sel-sink", "children"),
+    Input("click-pos", "data"),
+    Input("sst-key", "data"),
+    Input("frame-slider", "value"),
+)
+
+
 @app.callback(
     Output("click-marker", "children"),
     Output("measure-layer", "children"),
     Output("measure-readout", "children"),
-    Input("click-pos", "data"),
     Input("measure-state", "data"),
     Input("sst-key", "data"),
     Input("frame-slider", "value"),
     prevent_initial_call=True,
 )
-def render_selection(sel, measure, key, frame_idx):
+def render_selection(measure, key, frame_idx):
     mode = (measure or {}).get("mode", "off")
-    if not sel and mode == "off":
-        if ctx.triggered_id == "frame-slider":
+    if mode == "off":
+        if ctx.triggered_id in ("frame-slider", "sst-key"):
             return dash.no_update, dash.no_update, dash.no_update   # nothing to redraw
         return [], [], ""
 
@@ -2454,36 +2297,17 @@ def render_selection(sel, measure, key, frame_idx):
     idx = frame_idx if frame_idx is not None else n - 1
     idx = max(0, min(idx, n - 1)) if n else 0
 
-    def temps_at(pt):
-        return week_temps(raw, pt["lat"], pt["lng"]) if (raw and pt) else None
-
-    def now(temps):
+    def temp_at(pt):
+        temps = week_temps(raw, pt["lat"], pt["lng"]) if (raw and pt) else None
         return temps[idx] if temps and idx < len(temps) else None
 
-    layers, mlayers, readout = [], [], ""
-    if mode in ("a", "b", "done"):
-        a, b = measure.get("a"), measure.get("b")
-        m = None
-        if a and b:
-            when = date.fromisoformat(dates[idx][:10]) if dates else None
-            m = format_measurement(a["lat"], a["lng"], b["lat"], b["lng"], when)
-        mlayers = _measure_layers(a, b, m)
-        readout = measure_panel(measure, m, now(temps_at(a)), now(temps_at(b)),
-                                fmt_day(dates[idx]) if dates else "this day")
-
-    if sel:
-        kind = sel.get("kind", "reading")
-        tip = selection_tip(sel, temps_at(sel), dates, idx)
-        poi = kind == "poi"
-        layers.append(dl.CircleMarker(
-            center=[sel["lat"], sel["lng"]],
-            radius=9 if poi else 6,
-            pathOptions={"color": "#0183fe" if poi else "#e11d48", "weight": 2.5,
-                         "fillOpacity": 0 if poi else 0.3},
-            children=[dl.Tooltip(tip, permanent=True, direction="top", offset=[0, -10],
-                                 pane="tooltipPane", className="sst-tooltip")],
-        ))
-    return layers, mlayers, readout
+    a, b = measure.get("a"), measure.get("b")
+    m = None
+    if a and b:
+        when = date.fromisoformat(dates[idx][:10]) if dates else None
+        m = format_measurement(a["lat"], a["lng"], b["lat"], b["lng"], when)
+    readout = measure_panel(measure, m, temp_at(a), temp_at(b), fmt_day(dates[idx]) if dates else "this day")
+    return [], _measure_layers(a, b, m), readout
 
 
 # ---- Callback 8: Measure, Cancel, Measure again, Clear ----
@@ -2950,15 +2774,6 @@ app.clientside_callback(
 )
 
 
-@app.callback(
-    Output("sst-overlay", "opacity"),
-    Input("sst-opacity", "value"),
-)
-def update_sst_opacity(opacity):
-    """Adjust SST overlay transparency via sidebar slider."""
-    return opacity
-
-
 # ---- Currents page (route: /currents) ----
 # All animation, station markers and the chart run in assets/currents.js
 # (window.Currents). These clientside callbacks only forward control changes —
@@ -3174,20 +2989,19 @@ def _prewarm_cache():
     time.sleep(15)  # Let gunicorn fully start and pass health check
     # The page opens on the newest MUR day (one small ERDDAP request, then cached for an hour)
     end_date = latest_mur_date(CFG, max_wait=8.0) or (date.today() - timedelta(days=2))
-    for locked in [False, True]:
-        data_key = _cache_key(end_date, locked)
-        if data_key in _raw_data_cache:
-            continue
-        cached = get_cached(end_date, locked)
-        if cached:
-            try:
-                _, raw_data = _build_payload_from_disk_cache(cached, raw_only=True)
-                _put_raw_cache(data_key, raw_data)
-                logger.info("Pre-warm: loaded from disk cache %s (locked=%s)", end_date, locked)
-            except Exception:
-                logger.warning("Pre-warm: disk cache parse failed for %s", end_date, exc_info=True)
-        else:
-            logger.info("Pre-warm: no disk cache for %s (locked=%s), will fetch on first request", end_date, locked)
+    data_key = _cache_key(end_date)
+    if data_key not in _raw_data_cache:
+        try:
+            w = _saved_week(end_date)
+            if w:
+                _ready(w)
+                w["raw"]["meta"] = w["meta"]
+                _put_raw_cache(data_key, w["raw"])
+                logger.info("Pre-warm: loaded from disk cache %s", end_date)
+            else:
+                logger.info("Pre-warm: no disk cache for %s, will fetch on first request", end_date)
+        except Exception:
+            logger.warning("Pre-warm: disk cache parse failed for %s", end_date, exc_info=True)
     # The land mask (Natural Earth 10m, downloaded once per process) is needed by the first fetch
     # from NOAA; load it now so that fetch doesn't pay for it inside its time budget.
     try:
@@ -3195,6 +3009,13 @@ def _prewarm_cache():
         load_land_gdf(wait_s=60)
     except Exception:
         logger.warning("Pre-warm: land mask load failed", exc_info=True)
+
+
+# The SST cache's size against its disk budget, once per process (the lead sizes the cap from this line on Render)
+try:
+    logger.info("SST cache at startup: %s", disk_report())
+except Exception:  # noqa: BLE001 - a log line must never stop the app
+    logger.warning("SST cache report failed", exc_info=True)
 
 
 if not os.environ.get("_SST_PREWARM_STARTED"):

@@ -17,7 +17,8 @@ Drawn from the apps' own data so the tiles show what each tool looks like:
 No map tiles are baked in (Esri's terms want attribution on every use), only
 our own data. Rerun after a redesign or to refresh the SST week:
 
-  .venv/bin/python tools/build_labs_previews.py [--sst cache/sst/<date>_adaptive.json.gz]
+  .venv/bin/python tools/build_labs_previews.py [--sst cache/sst/weeks/<date>_week.json.gz]
+  (an entry saved before sprint 2, cache/sst/<date>_adaptive.json.gz, works too)
 """
 
 import argparse
@@ -53,11 +54,17 @@ def sst_preview(path):
     from data.geo import load_land_gdf
     from map.overlay import array_to_rgba
 
+    from data import sstgrid
     d = json.load(gzip.open(path))
-    a = d["raw_days"][-1]["arrF"]                  # v2 cache: base64 .npy; v1: nested list
-    sst = _npy(a) if isinstance(a, str) else np.array(a, float)
-    lats = _npy(d["lats"]) if isinstance(d["lats"], str) else np.array(d["lats"], float)
-    lons = _npy(d["lons"]) if isinstance(d["lons"], str) else np.array(d["lons"], float)
+    if sstgrid.is_grid_entry(d):                   # one file per week since sprint 2 (data/sstgrid)
+        week = sstgrid.week_arrays(sstgrid.entry_blob(d), d["dates"])
+        sst = week["raw_days"][-1]["arrF"].astype(float)
+        lats, lons = week["lats"], week["lons"]
+    else:
+        a = d["raw_days"][-1]["arrF"]              # v2 cache: base64 .npy; v1: nested list
+        sst = _npy(a) if isinstance(a, str) else np.array(a, float)
+        lats = _npy(d["lats"]) if isinstance(d["lats"], str) else np.array(d["lats"], float)
+        lons = _npy(d["lons"]) if isinstance(d["lons"], str) else np.array(d["lons"], float)
     if lats[0] < lats[-1]:                      # north-up rows for imshow
         lats, sst = lats[::-1], sst[::-1]
     rgba = array_to_rgba(sst, d["vmin"], d["vmax"])
@@ -255,7 +262,9 @@ def main():
         return
     path = a.sst
     if not path:
-        cands = [p for p in sorted(glob.glob(os.path.join(REPO, "cache", "sst", "*_adaptive.json.gz")))
+        cands = [p for p in sorted(glob.glob(os.path.join(REPO, "cache", "sst", "*_adaptive.json.gz")) +
+                                   glob.glob(os.path.join(REPO, "cache", "sst", "weeks", "*_week.json.gz")),
+                                   key=os.path.basename)
                  if os.path.basename(p)[5:7] in ("06", "07", "08", "09", "10")]
         if not cands:
             sys.exit("no cached summer/fall SST week in cache/sst; pass --sst")

@@ -15,10 +15,9 @@
  * as it's made. (The "window.SST missing after a boot" bug was the server:
  * Dash sent pages with no /assets at all; app._finish_dash_setup.)
  *
- * This is not the client-side engine (docs/sst-review.md
- * E1, sprint 2): temperatures still come from the server (app.py
- * render_selection). What runs here, called from small clientside callbacks
- * in app.py:
+ * The SST itself is drawn by assets/sstengine.js (window.SSTEngine, sprint 2);
+ * attachMap() hands it the map. What runs here, called from small clientside
+ * callbacks in app.py:
  *
  *   classify()  a map tap -> a spot, The Dump, open water or a measure point.
  *               Spots are hit-tested in screen pixels (about 16 px for a
@@ -31,13 +30,18 @@
  *               reader's last view (localStorage, per browser).
  *   gfwRetry()  fishing-activity tiles the server was too busy for (503) are
  *               asked for again after a short pause.
+ *   selection() the tapped reading, spot or point in The Dump: a marker and
+ *               a card with that day's temperature and the week's, read from
+ *               SSTEngine's grid in the browser (no server trip on a tap or a
+ *               day change: review R1). Same markup and classes as the card
+ *               the server used to build (map/readout.selection_tip).
  */
 (function () {
     "use strict";
     if (window.SST && window.SST._setup) { return; }       // already set up by an earlier copy
 
     var VIEW_KEY = "gotone-sst-view-v1";
-    var AREA = [[38.8, -74.6], [43.8, -68.8]];            // the whole mapped area
+    var AREA = [[37.8, -76.0], [44.0, -64.8]];            // the whole mapped area (sprint 2 coverage box)
     // Small maps (phones, landscape phones, short windows), where the whole
     // area only fits at zoom 6 or less: the NY Bight to the canyons (about 39.0
     // to 41.4 N, 74.2 to 69.0 W) at zoom 7. Whole zoom levels only: fractional
@@ -281,7 +285,7 @@
         try { saved = JSON.parse(store(VIEW_KEY) || "null"); } catch (e) { saved = null; }
         map.invalidateSize({ pan: false });
         if (saved && isFinite(saved.lat) && isFinite(saved.lng) && isFinite(saved.z) &&
-            saved.lat > 36 && saved.lat < 46 && saved.lng > -78 && saved.lng < -65) {
+            saved.lat > 36 && saved.lat < 46 && saved.lng > -78 && saved.lng < -63) {
             map.setView([saved.lat, saved.lng], saved.z, { animate: false });
         } else {
             if (map.getBoundsZoom(AREA, false, window.L.point(8, 8)) >= GROUNDS.zoom) {
@@ -310,7 +314,11 @@
         if (map._gotoneSST !== "sst") { return; }
         S.map = map;
         map.whenReady(function () { setTimeout(function () { if (S.map === map) { firstView(map); } }, 0); });
-        map.on("unload", function () { if (S.map === map) { S.map = null; S.statusHtml = ""; } });
+        map.on("unload", function () {
+            if (S.map === map) { S.map = null; S.statusHtml = ""; SEL.marker = null; SEL.where = null; }
+        });
+        try { if (window.SSTEngine) { window.SSTEngine.attach(map); } }  // draws the SST on this map
+        catch (e) { if (window.console) { console.error("SSTEngine.attach", e); } }   // never let it break the map
         // The page's flex layout and the drawer can resize the map without a window resize.
         if (window.ResizeObserver) {
             var ro = new ResizeObserver(function () { if (S.map === map) { map.invalidateSize({ pan: false }); } });
@@ -371,6 +379,95 @@
         setTimeout(retry, S.waits < 600 ? 50 : 1000);    // 30 s at 50 ms, then once a second
     })();
 
+    // ------------------------------------------------- the selection card --
+    // click-pos -> a marker and a permanent tooltip in the click pane (z 500), the
+    // card's temperature from SSTEngine for the day on the map, refreshed when the
+    // day changes or the week's grid arrives. Markup = map/readout.selection_tip.
+    var SEL = { sel: null, key: null, idx: null, marker: null, where: null, hooked: false };
+    var WDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    function fmtTemp(t) {
+        if (t === null || t === undefined) { return "no data"; }
+        return Math.abs(t - Math.round(t)) < 0.05 ? Math.round(t) + " \u00b0F" : t.toFixed(1) + " \u00b0F";
+    }
+    function fmtPos(lat, lng) {
+        return lat.toFixed(3) + "\u00b0N, " + Math.abs(lng).toFixed(3) + "\u00b0" + (lng < 0 ? "W" : "E");
+    }
+    function fmtDay(iso) {
+        var d = parseDay(iso);
+        return d ? WDAYS[d.getDay()] + ", " + MONTHS[d.getMonth()] + " " + d.getDate() : "";
+    }
+    function cardHtml(sel, temps, dates, idx) {
+        var kind = sel.kind || "reading", t = temps && idx >= 0 && idx < temps.length ? temps[idx] : null;
+        var out = '<div class="sst-tip' + (kind === "poi" ? " sst-tip-poi" : "") + '">';
+        if (kind === "poi" || kind === "dump") { out += '<div class="sst-tip-name">' + esc(sel.name || "") + "</div>"; }
+        if (temps === undefined) { out += '<div class="sst-tip-none">Loading the temperature\u2026</div>'; }
+        else if (t === null) { out += '<div class="sst-tip-none">No data here</div>'; }
+        else { out += '<div class="sst-tip-temp">' + fmtTemp(t) + "</div>"; }
+        if (idx >= 0 && idx < dates.length) { out += '<div class="sst-tip-date">' + esc(fmtDay(dates[idx])) + "</div>"; }
+        out += '<div class="sst-tip-pos">' + fmtPos(sel.lat, sel.lng) + "</div>";
+        if (temps && temps.some(function (x) { return x !== null; })) {
+            out += '<div class="sst-week" title="This spot each day of the week, \u00b0F">';
+            temps.forEach(function (x, k) {
+                var day = dates[k] ? String(+dates[k].slice(8, 10)) : "";
+                out += '<div class="sst-wk-cell' + (k === idx ? " cur" : "") + '"><div class="sst-wk-t">' +
+                       (x === null ? "" : Math.round(x)) + '</div><div class="sst-wk-d">' + day + "</div></div>";
+            });
+            out += "</div>";
+        }
+        return out + "</div>";
+    }
+    function drawSelection() {
+        var map = S.map, L = window.L, E = window.SSTEngine, sel = SEL.sel;
+        if (!map || !L) { return; }
+        var where = sel ? [sel.kind || "reading", sel.lat, sel.lng, sel.name || ""].join("|") : null;
+        if (SEL.marker && (where !== SEL.where || !map.hasLayer(SEL.marker))) {
+            // Leaflet fades a removed tooltip out over 200 ms; the next card is drawn at once, so drop the old one now
+            var tt = SEL.marker.getTooltip && SEL.marker.getTooltip(), el = tt && tt.getElement && tt.getElement();
+            try { map.removeLayer(SEL.marker); } catch (e) { /* gone */ }
+            if (tt) { clearTimeout(tt._removeTimeout); }
+            if (el && el.parentNode) { el.parentNode.removeChild(el); }
+            SEL.marker = null;
+        }
+        SEL.where = where;
+        if (!sel) { return; }
+        var st = E ? E.state() : null, ready = !!(st && st.ready);
+        var dates = (ready && st.dates.length ? st.dates : (SEL.key && SEL.key.dates)) || [];
+        var idx = SEL.idx !== null && SEL.idx !== undefined ? SEL.idx : (ready ? st.day : dates.length - 1);
+        idx = Math.max(0, Math.min(idx, dates.length - 1));
+        var html = cardHtml(sel, ready ? E.weekValuesAt(sel.lat, sel.lng) : undefined, dates, idx);
+        if (!SEL.marker) {
+            var poi = sel.kind === "poi";
+            // A tap on the open card's own marker closes it (taps near it go through SST.classify, which does the
+            // same). Handled here because a tap on exactly the same spot gives Dash the same clickData, which
+            // doesn't fire the tap callback again.
+            SEL.marker = L.circleMarker([sel.lat, sel.lng], {
+                pane: map.getPane("click-pane") ? "click-pane" : "markerPane", radius: poi ? 9 : 6,
+                color: poi ? "#0183fe" : "#e11d48", weight: 2.5, fillOpacity: poi ? 0 : 0.3,
+                interactive: true, bubblingMouseEvents: false
+            }).addTo(map);
+            SEL.marker.on("click", function (ev) {
+                if (ev && ev.originalEvent) { L.DomEvent.stop(ev.originalEvent); }
+                try { window.dash_clientside.set_props("click-pos", { data: null }); } catch (e) { /* no Dash */ }
+            });
+            SEL.marker.bindTooltip(html, { permanent: true, direction: "top", offset: [0, -10], pane: "tooltipPane",
+                                           className: "sst-tooltip", interactive: false }).openTooltip();
+        } else {
+            SEL.marker.setTooltipContent(html);
+        }
+    }
+    function selection(sel, key, idx) {
+        SEL.sel = sel && isFinite(sel.lat) && isFinite(sel.lng) ? sel : null;
+        if (key) { SEL.key = key; }
+        SEL.idx = idx === undefined ? SEL.idx : idx;
+        var E = window.SSTEngine;
+        if (E && !SEL.hooked) {                          // the grid arrived or the day changed: refresh the card
+            SEL.hooked = true;
+            E.on("ready", drawSelection);
+            E.on("day", function (ev) { SEL.idx = ev.day; drawSelection(); });
+        }
+        drawSelection();
+    }
+
     // A failed Load week (the sidebar's red message, which phones don't see:
     // the drawer closes). The map still shows the last week, so the strip keeps
     // its date and leads line 2 with the error until a week loads.
@@ -391,6 +488,7 @@
         status: status,
         marks: marks,
         fetchError: fetchError,
+        selection: selection,
         ready: function () { return S.hooked; },        // Leaflet hooks installed
         _setup: true,
         _state: S

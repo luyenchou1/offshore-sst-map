@@ -86,10 +86,12 @@ async function run(size) {
     page.on('pageerror', e => errors.push('pageerror: ' + String(e)));
     page.on('console', m => { if (m.type() === 'error' && !NOISE.test(m.text() + (m.location().url || ''))) { errors.push(m.text()); } });
 
+    // Sprint 2: the week is drawn by assets/sstengine.js (window.SSTEngine) on a canvas in the SST pane, not by a PNG
+    // overlay; "ready" = the engine has the week and the loading overlay is gone.
     const ready = () => page.waitForFunction(() => {
-        const i = document.querySelector('img.leaflet-image-layer');
-        const o = document.getElementById('map-loading-overlay');
-        return i && i.src.startsWith('data:') && o && getComputedStyle(o).display === 'none';
+        const E = window.SSTEngine, o = document.getElementById('map-loading-overlay');
+        return E && !E.__stub && E.state().ready && document.querySelector('canvas.sst-engine-canvas') &&
+            o && getComputedStyle(o).display === 'none';
     }, null, { timeout: 90000, polling: 200 });
 
     // ---- first visit: How it works opens by itself ----
@@ -104,8 +106,9 @@ async function run(size) {
     }
     await ready().catch(() => {});
     await sleep(1200);
-    check(size, 'week loads (overlay shown, loading hidden)', await page.evaluate(() =>
-        !!document.querySelector('img.leaflet-image-layer[src^="data:"]')));
+    check(size, 'week loads (drawn by SSTEngine on its canvas, loading hidden)', await page.evaluate(() =>
+        !!(window.SSTEngine && window.SSTEngine.state().ready && window.__maps[0].getPane('sst-pane') &&
+           window.__maps[0].getPane('sst-pane').querySelector('canvas.sst-engine-canvas'))));
     check(size, 'window.SST set up and hooked to the map', await page.evaluate(() => !!(window.SST && window.SST.ready &&
         window.SST.ready() && window.SST._state.map === window.__maps[0])));
     await shot(page, size, 'first');
@@ -119,7 +122,8 @@ async function run(size) {
         return {
             h1: q('.gotone-header h1')?.innerText, about: vis('#sst-about-open'),
             strip: q('#sst-status-line')?.innerText || '', stripVisible: vis('#sst-status-line'),
-            legend: q('#legend-container')?.innerText || '', playbar: vis('#sst-playbar'),
+            legend: (document.documentElement.classList.contains('sst-engine-on') ? q('#sst-legend-live') : q('#legend-container'))?.innerText || '',
+            playbar: vis('#sst-playbar'),
             pbDate: q('#sst-pb-date')?.innerText || '',
             sidebarLeft: Math.round(sb.left), sidebarW: Math.round(sb.width), mapRight: Math.round(mc.right),
             sw: document.documentElement.scrollWidth, sh: document.documentElement.scrollHeight,
@@ -130,7 +134,14 @@ async function run(size) {
     check(size, 'status strip shows the date and day n of m',
         ui.stripVisible && /\w{3}, \w{3} \d{1,2}, \d{4}/.test(ui.strip) && /day \d of \d/.test(ui.strip), ui.strip.replace(/\n/g, ' / '));
     check(size, 'status strip names the source', /MUR|OISST/.test(ui.strip));
-    check(size, "legend says this week's range", /°F/.test(ui.legend) && /this week's range|fixed scale/.test(ui.legend));
+    // The legend is the Colors panel's live legend (assets/sstlook.js, lane V) once the engine is on; the server legend
+    // went with the PNG frames. Without the panel on the page (this branch alone) there is none to check.
+    const look = await page.evaluate(() => document.documentElement.classList.contains('sst-engine-on'));
+    if (look || ui.legend) {
+        check(size, "legend says which range is on", /°F/.test(ui.legend) && /this week's range|fixed scale|auto range/.test(ui.legend), ui.legend.replace(/\n/g, ' '));
+    } else {
+        console.log(`skip [${size}] legend: the Colors panel's live legend (lane V) isn't on this page`);
+    }
     check(size, 'page fits the screen (no scroll)', ui.sw <= ui.iw && ui.sh <= ui.ih, `${ui.sw}x${ui.sh} in ${ui.iw}x${ui.ih}`);
     check(size, 'map ends at the screen edge', Math.abs(ui.mapRight - ui.iw) <= 1, `right ${ui.mapRight}`);
     if (size === 'desk') {
@@ -194,21 +205,24 @@ async function run(size) {
     await setView(40.4, -71.6, 7); await sleep(1000);
 
     // ---- the colors are where the readings are (laptop only) ----
-    // At water points on MUR cell centres (2-decimal lat/lon), at zoom 9: the tap readout (raw arrays, server side)
-    // vs the color Leaflet draws under the tap, decoded through the legend's own gradient. Before the relaunch fix
-    // the image sat up to 5.3 km north of true (map/overlay.py). Also: the overlay sits exactly on its bounds.
+    // At water points on MUR cell centres (2-decimal lat/lon), at zoom 9: the tap readout vs the color SSTEngine draws
+    // under the tap, decoded through the engine's own colors (SSTEngine.colorFor over the range drawn). The engine
+    // places the grid by Web Mercator strip by strip (before the relaunch fix the image sat up to 5.3 km north of
+    // true). Also: the canvas covers the map, and the week's grid sits on the payload's bounds.
     if (size === 'desk') {
         const PTS = [[40.20, -71.00], [39.80, -72.40], [40.60, -72.80], [41.30, -69.60], [41.25, -71.40],
                      [41.20, -70.75], [42.60, -70.40], [43.00, -69.40], [39.30, -73.50], [40.90, -70.70]];
         const placed = await page.evaluate(() => {
-            const m = window.__maps[0], img = document.querySelector('img.leaflet-image-layer');
+            const E = window.SSTEngine, st = E.state(), m = window.__maps[0];
             const b = window.dash_component_api.getLayout('sst-store').props.data.bounds;
-            const c = m.getContainer().getBoundingClientRect(), r = img.getBoundingClientRect();
-            const nw = m.latLngToContainerPoint([b[1][0], b[0][1]]), se = m.latLngToContainerPoint([b[0][0], b[1][1]]);
-            return Math.max(Math.abs(r.left - c.x - nw.x), Math.abs(r.top - c.y - nw.y),
-                            Math.abs(r.right - c.x - se.x), Math.abs(r.bottom - c.y - se.y));
+            const cv = document.querySelector('canvas.sst-engine-canvas').getBoundingClientRect();
+            const c = m.getContainer().getBoundingClientRect();
+            const off = Math.max(Math.abs(st.week.bounds[0][0] - b[0][0]), Math.abs(st.week.bounds[1][0] - b[1][0]),
+                                 Math.abs(st.week.bounds[0][1] - b[0][1]), Math.abs(st.week.bounds[1][1] - b[1][1]));
+            return { off, covers: cv.left <= c.left + 1 && cv.top <= c.top + 1 && cv.right >= c.right - 1 && cv.bottom >= c.bottom - 1 };
         });
-        check(size, 'the SST image sits on its bounds (Web Mercator)', placed <= 1.01, `off by ${placed.toFixed(2)} px`);
+        check(size, 'the engine draws the week on its bounds, over the whole map', placed.off < 1e-4 && placed.covers,
+            JSON.stringify(placed));
         const bad = [];
         let last = '';
         for (const [lat, lng] of PTS) {
@@ -220,35 +234,24 @@ async function run(size) {
             last = await tipText();
             const t = /(-?\d+(?:\.\d)?) °F/.exec(last);
             const got = await page.evaluate(() => {
-                const m = window.__maps[0], img = document.querySelector('img.leaflet-image-layer');
-                const d = window.dash_component_api.getLayout('sst-store').props.data;
+                const E = window.SSTEngine, m = window.__maps[0], cv = document.querySelector('canvas.sst-engine-canvas');
                 const ll = window.dash_component_api.getLayout('sst-map').props.clickData.latlng;
-                const c = m.getContainer().getBoundingClientRect(), r = img.getBoundingClientRect();
+                const c = m.getContainer().getBoundingClientRect(), r = cv.getBoundingClientRect();
                 const p = m.latLngToContainerPoint([ll.lat, ll.lng]);
-                const fx = (c.x + p.x - r.left) / r.width, fy = (c.y + p.y - r.top) / r.height;
-                const cv = document.createElement('canvas');
-                cv.width = img.naturalWidth; cv.height = img.naturalHeight;
-                const g = cv.getContext('2d');
-                g.drawImage(img, 0, 0);
-                const px = g.getImageData(Math.floor(fx * cv.width), Math.floor(fy * cv.height), 1, 1).data;
-                // the legend's gradient, as matplotlib's 256-color table (map/overlay.array_to_rgba)
-                const bar = [...document.querySelectorAll('#legend-container *')]
-                    .map(e => getComputedStyle(e).backgroundImage).find(s => /gradient/.test(s)) || '';
-                const stops = [...bar.matchAll(/rgb\((\d+), (\d+), (\d+)\)/g)].map(x => [+x[1], +x[2], +x[3]]);
-                let best = -1, bestD = 1e9;
-                for (let i = 0; i < 256 && stops.length > 1; i++) {
-                    const x = i / 255 * (stops.length - 1), k = Math.min(stops.length - 2, Math.floor(x)), f = x - k;
-                    const col = [0, 1, 2].map(j => stops[k][j] * (1 - f) + stops[k + 1][j] * f);
-                    const dd = Math.hypot(col[0] - px[0], col[1] - px[1], col[2] - px[2]);
-                    if (dd < bestD) { bestD = dd; best = i; }
+                const x = Math.floor((c.x + p.x - r.left) * cv.width / r.width), y = Math.floor((c.y + p.y - r.top) * cv.height / r.height);
+                const px = cv.getContext('2d').getImageData(x, y, 1, 1).data;
+                const rg = E.getRange();
+                let best = null, bestD = 1e9;
+                for (let f = rg.min - 0.5; f <= rg.max + 0.5; f += 0.05) {
+                    const col = E.colorFor(f), dd = Math.hypot(col[0] - px[0], col[1] - px[1], col[2] - px[2]);
+                    if (dd < bestD) { bestD = dd; best = f; }
                 }
-                return { rgba: [...px], idx: best, dist: bestD, vmin: d.vmin, vmax: d.vmax, lat: ll.lat, lng: ll.lng };
+                return { rgba: [...px], f: best, dist: bestD, vmin: rg.min, vmax: rg.max, read: E.valueAt(ll.lat, ll.lng) };
             });
             const T = t ? +t[1] : null;
-            const v = got.vmin + (got.idx + 0.5) / 256 * (got.vmax - got.vmin);
-            const ok = T !== null && got.rgba[3] === 255 && got.dist < 6 &&
-                (Math.abs(v - T) <= 0.35 || (T <= got.vmin && got.idx <= 2) || (T >= got.vmax && got.idx >= 253));
-            if (!ok) { bad.push(`${lat},${lng}: reads ${T} °F, drawn ~${v.toFixed(1)} (${got.rgba.join(',')})`); }
+            const ok = T !== null && got.rgba[3] === 255 && got.dist < 8 && got.read && Math.abs(got.read.f - T) < 0.05 &&
+                (Math.abs(got.f - T) <= 0.35 || (T <= got.vmin && got.f <= got.vmin + 0.1) || (T >= got.vmax && got.f >= got.vmax - 0.1));
+            if (!ok) { bad.push(`${lat},${lng}: reads ${T} °F, drawn ~${got.f && got.f.toFixed(2)} (${got.rgba.join(',')}, d ${got.dist.toFixed(1)})`); }
         }
         check(size, `the colors drawn under ${PTS.length} taps match their readings`, !bad.length, bad.join('; '));
         if (last) {                                      // a second tap on the open reading closes it
@@ -297,14 +300,20 @@ async function run(size) {
         } }) });
     });
     await sleep(2500);
-    const fake = await page.evaluate(() => [document.getElementById('sst-status-line').innerText, document.getElementById('legend-container').innerText]);
+    const fake = await page.evaluate(() => [document.getElementById('sst-status-line').innerText,
+        document.getElementById(document.documentElement.classList.contains('sst-engine-on') ? 'sst-legend-live' : 'legend-container').innerText]);
     check(size, 'strip with meta: source, freshness, closest week, newest',
         /OISST/.test(fake[0]) && /updated 3 (hours|h) ago/.test(fake[0]) && /closest (saved )?week to Jan 1/.test(fake[0]) &&
         /newest (available )?Jan 2/.test(fake[0]) && /no data for Jan 3 yet/.test(fake[0]),
         fake[0].replace(/\n/g, ' / '));
     // (phones: the legend carries the warning, the strip keeps the short source name)
-    check(size, 'OISST week: legend (and the strip, if wide) say broad pattern only',
-        /broad pattern only/.test(fake[1]) && (size === 'phone' || /broad pattern only/.test(fake[0])));
+    if (look || fake[1]) {
+        check(size, 'OISST week: legend (and the strip, if wide) say broad pattern only',
+            /broad pattern only/.test(fake[1]) && (size === 'phone' || /broad pattern only/.test(fake[0])));
+    } else {
+        check(size, 'OISST week: the strip says broad pattern only (the legend is the Colors panel\'s)',
+            size === 'phone' || /broad pattern only/.test(fake[0]));
+    }
     await shot(page, size, 'meta');
 
     // ---- the newest days are marked preliminary; a failed load shows in the strip ----
@@ -327,16 +336,22 @@ async function run(size) {
     await page.evaluate(() => window.dash_clientside.set_props('fetch-status', { children: 'ok' }));
     await sleep(400);
 
-    // ---- "Same colors every week" reloads with the fixed scale (laptop only) ----
+    // ---- the range: the engine's Auto = the server's (whole coverage, the week), no reload for colors (laptop) ----
+    // ("Same colors every week" went with the PNG frames: the Colors panel's presets replace it, lane V.)
     if (size === 'desk') {
-        await page.getByLabel('Same colors every week', { exact: false }).check();
-        const locked = await page.waitForFunction(() => /fixed scale/.test(document.getElementById('legend-container').innerText)
-            && getComputedStyle(document.getElementById('map-loading-overlay')).display === 'none', null, { timeout: 60000 })
-            .then(() => true).catch(() => false);
-        check(size, 'Same colors every week: legend says fixed scale', locked,
-            (await page.innerText('#legend-container')).replace(/\n/g, ' '));
-        await page.getByLabel('Same colors every week', { exact: false }).uncheck();
-        await page.waitForFunction(() => /this week's range/.test(document.getElementById('legend-container').innerText), null, { timeout: 60000 }).catch(() => {});
+        const rg = await page.evaluate(() => {
+            const E = window.SSTEngine, d = window.dash_component_api.getLayout('sst-store').props.data;
+            const url = E.state().week.url, before = E.getRange();
+            E.setRange({ mode: 'fixed', min: 62, max: 76 });
+            const fixed = E.getRange();
+            E.setRange({ mode: 'auto' });
+            return { before, fixed, after: E.getRange(), server: [d.vmin, d.vmax], same: E.state().week.url === url,
+                     overlay: getComputedStyle(document.getElementById('map-loading-overlay')).display };
+        });
+        check(size, "engine Auto range = the server's; a fixed range recolors in place (no reload)",
+            rg.before.mode === 'auto' && rg.before.min === rg.server[0] && rg.before.max === rg.server[1] &&
+            rg.fixed.min === 62 && rg.fixed.max === 76 && rg.after.min === rg.server[0] && rg.same && rg.overlay === 'none',
+            JSON.stringify(rg));
     }
 
     // ---- How it works from the header counts; a reload doesn't reopen it ----

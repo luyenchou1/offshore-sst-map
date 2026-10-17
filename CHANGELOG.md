@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-16 - SST sprint 2 (engine and data): the map is drawn in the browser, at 0.1 °F, over a larger area
+
+### Changed
+- **The map covers more water**: 37.8 to 44.0 N and 76.0 to 64.8 W, east past Oceanographer Canyon and south far enough to show the Gulf Stream (it stopped at 38.8 N and about 69 W). Land is still masked. Fishing-activity tiles and the first view use the same area.
+- **Temperatures to a tenth of a degree** ("71.3 °F") instead of whole degrees, so breaks under a degree show and the colors are smooth instead of terraced.
+- **The browser draws the map** (`assets/sstengine.js`): the server sends each week once, about 0.6 MB, and the page colors it, so a tap reads the temperature at once (no trip to the server), the day changes with a short crossfade, and colors and ranges change without reloading the week. The colors sit where their readings are at every zoom.
+- **Weeks saved before this release** still open, in whole degrees over the old area, until the twice-daily seeder rebuilds them: the 10 newest weeks on its first run, the rest newest first over about a week.
+- **One saved file per week** (no separate "same colors every week" copy), in `cache/sst/weeks/`; the cache now keeps within a share of its disk and lets go of the weeks nobody has opened for the longest first.
+- "Same colors every week" and the server-drawn legend are gone from the page's workings; the Colors panel's presets and live legend replace them. Color strength starts at full.
+
+### Added
+- `GET /api/sst/week/<end>.bin` (the week for the page, from memory or disk, never NOAA) and `GET /api/cache/weeks` (token: which weeks are saved in which format, and the disk numbers).
+- The seeder rebuilds old-format weeks (`tools/sync_cache.py --backfill`, 24 a run in the workflow, resumable, gentle with NOAA, tolerant of its 503s), fetches each day once per run, and won't upload a week without the land mask.
+- Tests: `tools/test_sst_grid.py`, `tools/test_sstengine.mjs`, `tools/perf_sstengine.mjs`; the smoke and boot tests read the engine's canvas.
+
+### Not done
+- **No cloud haze**: NOAA's error estimate for MUR is 0.36 to 0.40 °C everywhere on every date checked, so it can't show where clouds were filled in. A cloud layer would need a different source.
+
 ## 2026-10-16 - SST relaunch: the map is drawn where its readings are, and works on every load after a deploy
 
 ### Fixed

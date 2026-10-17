@@ -40,7 +40,7 @@
 **History:** from June 2026 NOAA CoastWatch ERDDAP blocked Render's datacenter IP at the network layer (`Network is unreachable`, `Connection reset by peer`, connect timeouts; `coastwatch.noaa.gov` additionally tarpits with `ReadTimeout` from every IP), so cache misses on Render hung the full 90s and showed the red "SST fetch timed out after 90s" error. **As of 2026-10-10 the block is lifted** — Render fetched an uncached Oct 8 window live in ~10 s. **On 2026-10-16 it was back**: from Render every request to coastwatch.pfeg waits out the connect timeout and then says `[Errno 101] Network is unreachable` (see ERDDAP Behavior), and together with the fishing-activity proxy that took the whole server down (Critical Lessons, Incident 2026-10-16). The off-Render seeding is what serves cache misses while it lasts.
 
 - **Render (production)** serves from its disk cache first; on a miss it asks ERDDAP via `get_sst_multiday()`, unless NOAA failed to connect in the last minute: then it answers at once with the honest message and the nearest saved weeks, and queues the week for the seeder.
-- **Off-Render seeder**: a daily GitHub Action (`.github/workflows/seed-sst-cache.yml`) runs `tools/sync_cache.py`, which fetches recent 7-day windows from ERDDAP and POSTs raw-only cache files to `POST /api/cache/upload` (auth: `CACHE_UPLOAD_TOKEN` env var + GitHub repo secret). Seeds the 10 end dates ending on MUR's newest day, twice daily, plus weeks readers asked for that NOAA couldn't send (see SST fetch below). Uploads retry on transient Render 502s. **GitHub silently disabled this job for inactivity on 2026-08-30**; `.github/workflows/keepalive.yml` now prevents that (see Lessons).
+- **Off-Render seeder**: a daily GitHub Action (`.github/workflows/seed-sst-cache.yml`) runs `tools/sync_cache.py`, which fetches recent 7-day windows from ERDDAP and POSTs weekly files (`<end>_week.json.gz`, see SST data, cache and engine) to `POST /api/cache/upload` (auth: `CACHE_UPLOAD_TOKEN` env var + GitHub repo secret). Seeds the 10 end dates ending on MUR's newest day, twice daily, plus weeks readers asked for that NOAA couldn't send (see SST fetch below), plus up to 24 weeks a run that the app still has only in the format from before sprint 2 (the backfill). Uploads retry on transient Render 502s. **GitHub silently disabled this job for inactivity on 2026-08-30**; `.github/workflows/keepalive.yml` now prevents that (see Lessons).
 - **localhost (dev)** fetches ERDDAP live, exactly as the Data Flow below describes.
 
 ### SST fetch: known datasets, one time budget, OISST fallback, payload meta (Oct 2026)
@@ -59,23 +59,126 @@
 - **Tests**: `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES .venv/bin/python tools/test_sst_fetch.py` (fake ERDDAP: 503 then success, 403, dead dataset, timeouts, gap days, the newest day, OISST final/NRT split, partial weeks, honest failure, refresh rules, GFW per-request range, layers, the wanted queue); `tools/test_sst_hang.py` (real sockets: drip, tarpit, refused, errno 101, no DNS, IPv4 dropped; 30 readers at once, a slow NOAA, slow or unreachable GFW, the land mask, the diagnostics); `tools/load_sst_outage.py` (gunicorn as production under tools/netsim, 50 concurrent mixed requests, every answer within 30 s).
 - **Without the land mask** (still downloading after `geo.LAND_WAIT_S`, 5 s in the app and waited once per load, or its download failed) a fetched week is shown but not saved (`w["save"]`); precache waits up to 60 s for it and never saves a week without it.
 
+### SST data, cache and engine (sprint 2, Oct 2026)
+The browser draws the SST itself (review E1): the server only sends one compact binary per week, and
+`assets/sstengine.js` (`window.SSTEngine`) colors it, draws it in place, reads values and animates the days.
+- **Coverage**: 37.8 to 44.0 N, 76.0 to 64.8 W (past Oceanographer Canyon, south to the Gulf Stream). `config.json`
+  `aoi_polygon_lonlat` is that box and `coverage_id` names it (`box-2026-10`); land is masked with Natural Earth 10m
+  (`data/geo`). MUR's 0.01 degree grid is 1121 x 621 cells, 30% land; one day is 1.2 MB on the wire (1.3 to 1.6 s).
+  The first view (`assets/sst.js` AREA) and the fishing-activity tile bounds (`layout/mapview.AOI_TILE_BOUNDS`) use it.
+- **0.1 F**: ERDDAP values are kept to 0.1 F (`data/convert.to_fahrenheit`; whole degrees before, review R4).
+- **One file per week** (`data/sstgrid.py`, `"grid_format": 1`): `SST_CACHE_DIR/sst/weeks/<end>_week.json.gz`, gzip
+  JSON with dates, bounds (cell edges), the Auto range (`vmin`/`vmax`), `precision`, `coverage`, `meta` and `grid` =
+  base64 of the week's gzip GOSST1 bytes. No adaptive/locked pair any more: the color scale is the browser's.
+  GOSST1 (layout in the module doc): a 64-byte header, one water/land mask for the week, and per day the codes
+  (0.1 F steps from 28 F) as left-neighbour residuals in zigzag bytes, with escapes for big jumps. Built in one place,
+  `sstgrid.entry_from_fetch()`, by the reader fetch, `/api/precache` and the seeder alike.
+- **Sizes** (week of Oct 9 to 15, 2026, real MUR over the box): 588 KB at gzip -9 (the seeder; ~3.6 s to encode),
+  641 KB at -6 (anything built on Render; 0.3 s). Plain gzip of the uint16 codes was 1002 KB; byte planes 855 to
+  939 KB; other predictors within 4% (the 0.1 F quantization noise is the floor). The JSON file is ~5 KB more.
+- **The week's bytes**: `GET /api/sst/week/<end>.bin` sends the gzip bytes as they are with `Content-Encoding: gzip`
+  (every browser inflates them natively), ETag/304, `max-age` 1 h; the page's URL carries `?v=<built_at>`, so a
+  rebuilt week is fetched again. From memory, the weekly file, or an old entry converted on the fly: never NOAA, no
+  lock, 404 when the week isn't saved (the page always loads a week through Load week first).
+- **sst-store** (`sstgrid.store_payload`): `dates`, `bounds`, `vmin`/`vmax` (Auto), `res_km`, `server`,
+  `dataset_id`, `meta`, `data_key` (`"<end>_week"`), `grid` {`url`, `bytes`, `nx`, `ny`, `precision` (0.1, or 1 for an
+  old week), `coverage`, `format`}. No pictures: about 2 KB (it was 190 KB of PNG frames).
+- **Old entries** (`SST_CACHE_DIR/sst/<end>_<adaptive|locked>.json.gz`, saved before sprint 2: the old corridor
+  38.8 to 43.8 N, 74.96 to 68.8 W, whole degrees, any of the old encodings): either variant loads, is converted to
+  GOSST1 on its own grid each time it's served (~0.2 s; the bytes are kept in memory, `_blob_cache`), is drawn on its
+  own bounds, and is never rewritten: the seeder replaces the week (backfill below). Code from before sprint 2 only
+  globs `sst/*.json.gz`, so it never sees `sst/weeks/` and a rollback keeps serving the old files.
+- **What the reader sees during the switch**: weeks saved before the deploy show whole degrees over the old corridor
+  until the seeder rebuilds them; weeks fetched or seeded after it have tenths and the larger area. The first seed run
+  after the deploy rebuilds the 10 newest weeks; older saved weeks follow newest first, about 48 a day.
+- **SSTEngine API** (the seam with assets/sstlook.js, lane V): `attach(map)` (the engine also attaches itself to the
+  `sst-map` map; idempotent), `setWeek(payload)` (the sst-store data; fetches `grid.url`), `setDay(i)` (300 ms
+  crossfade unless the reader prefers reduced motion), `setPalette("spectrum" | "classic" | "cvd")` (design-notes
+  stops; the old 11 colors; cividis), `setRange({mode: "auto"})` (5th to 95th percentile of all water in the coverage
+  over the week, rounded out to whole degrees, at least 8 F: the same integer rule as `sstgrid.auto_range`, so it
+  equals the server's `vmin`/`vmax`) or `{mode: "fixed", min, max}`, `fitToView()` (5th to 95th of the water on screen
+  over the week, whole degrees, at least 3 F; sets a fixed range, returns `{min, max}`), `setOptions({stepped,
+  isotherms, breaks, opacity})` ("haze" is ignored), `valueAt(lat, lon)` -> `{f, day, date, estimate: null}` or null,
+  `weekValuesAt(lat, lon)`, `histogram()` -> `{min, max, step, bins, below, above, total}` (the week's water, all days,
+  bins of 0.5 F up to a 24 F range, else 1 F), `on("ready" | "change" | "day" | "error", fn)` (returns off). Extras:
+  `getRange()` -> `{mode, min, max}`, `colorFor(f)` -> `[r, g, b]` (prints as `rgb(...)`), `state()`, `palettes`,
+  `_stats` (timings). "ready" fires each time a week's data is in (also when the same week is delivered again).
+- **Drawing**: an `L.Canvas` renderer in `sst-pane` (z 410, pointer-events none), so Leaflet moves and scales it while
+  panning and zooming. Per day, a canvas the size of the grid colored through a 65536-entry lookup table (palette x
+  range x stepped), blended toward white by the break strength; drawn in strips of 16 grid rows, each placed by Web
+  Mercator at its cell edges (under 0.1 px of error at zoom 12; strips snapped to whole device pixels so they neither
+  overlap nor gap). Isotherms (every 1 F, 0.9 px at 95% on even degrees, 0.5 px at 60% on odd, tonal colors, loops
+  under 26 px dropped, sparse labels on even degrees: at most 2 per level 420 px apart, 1 per level 300 px apart on
+  phone-sized maps, straight stretches in water only) and breaks (gradient on the field blurred 1 cell, F per km,
+  zeroed within 3 cells of land; highlight from 0.27 F/km = 0.5 F per nm, full at 0.54 F/km = 1 F per nm, up to 62%
+  toward white) are computed once per day in a Web Worker (blob URL; the main thread a day at a time if workers are
+  blocked), the day on the map first. Whole-degree weeks are blurred more (3 and 2.5 cells) so their terraces don't
+  read as fronts. A day's isotherm layer is rendered once per view into an offscreen canvas, and the next and previous
+  days' colors and isotherms are prepared when the browser is idle, so a crossfade only composites images.
+- **Frame times** (`node tools/perf_sstengine.mjs`, phone 390x664 @2x, CPU slowed 4x in CDP): decode a week 63 ms,
+  histogram 54 ms (once per week); a palette / range / stepped change 5 ms (20 back to back: 4.7 ms each); a day
+  change starts at once; crossfade frames median 33 ms, worst 50 ms (an idle page: 17 ms), the same with isotherms
+  and breaks on; isotherms + breaks for a day 160 to 270 ms in the worker; a redraw with isotherms under 3 ms of
+  script. The one long frame left: jumping to a far day with isotherms on within ~200 ms of a pan (about 80 ms).
+- **Readouts** (review R1): the tap card (reading, spot, a point in The Dump) is drawn by `assets/sst.js`
+  (`SST.selection`) from `SSTEngine.weekValuesAt()`: tenths ("71.3 °F"), no server trip on a tap or a day change. A tap
+  on the card's own marker closes it (an identical second tap gives Dash the same clickData, which wouldn't refire the
+  tap callback). The measure line and panel stay server-side (`render_selection`, true + magnetic course), with the
+  ends' temperatures from the week's arrays decoded server-side (`_get_raw_data`, 0.1 F, float32, two weeks in memory).
+- **No cloud layer** (review D3, deferred): MUR's `analysis_error` was the planned source of a haze where the value
+  is an estimate, but over the box it is 0.36 to 0.40 °C on every date checked (12 dates, 2005 to 2026; 4 or 5
+  distinct values, never above 0.40), so it can't tell a cloudy week from a clear one, and the haze was dropped
+  (Luyen, Oct 16, 2026). A real signal would need its own fetch (per-pixel L3 infrared observation counts, for
+  instance); GOSST1's header keeps bytes 40 to 63 reserved for it.
+- **Retention** (what is kept, refreshed, or lives in memory):
+  - *Final and kept*: a week fetched 7 or more days after its last day (MUR's revision window has passed) is never
+    fetched again.
+  - *Refreshed* (`sstmeta.refresh_due`; the saved copy is served if the refetch fails, which on Render is at once while
+    NOAA is unreachable): a week with preliminary days (fetched under 4 days after its last day) after 12 h; a week
+    inside MUR's 7-day revision window after 24 h; an OISST or incomplete week (a day NOAA didn't send in time): MUR is
+    tried again after 6 h, and the week goes on the seeder's list. The seeder rebuilds the 10 newest weeks twice a day.
+  - *Disk* (`data/cache.evict`): the SST files may use 70% of their disk (`SST_CACHE_MAX_MB` overrides); past that,
+    old entries whose week has a weekly file go first, then the least recently viewed (serving a week sets its file's
+    access time, at most hourly; the modification time is kept). A small dedicated disk (64 GB or less, like Render's
+    1 GB) also keeps 5% of itself free. A file viewed or written in the last 10 minutes is never evicted; `MAX_ENTRIES`
+    (4000 files) is only a backstop. On Render's 1 GB disk: 700 MB, about 1100 weekly files. An evicted week only comes
+    back through the seeder (Render can't reach NOAA). The startup log line `SST cache at startup: {...}`,
+    `/api/debug/threads` and `/api/cache/weeks` give files, MB, the disk and the budget: size the cap from those.
+  - *Memory only* (gone after every deploy or restart): the GFW tiles (300) and generate-png styles (32 ranges), the
+    newest-day lookup (1 h; a failure 5 min), the decoded weeks for the measure panel (2), the converted old weeks'
+    bytes (4), the per-week failure and refresh timers. The seeder's wanted list is on disk (`sst/wanted.json`).
+- **Backfill** (`tools/sync_cache.py --backfill N`): after the recent and wanted weeks, up to N weeks the app has only
+  in the old format (`GET /api/cache/weeks` -> `old_only`, newest first), `--backfill-delay` (20 s) apart, 2 requests
+  at a time; a week NOAA is too busy for is tried once more after 30 s, then left for the next run (backfill failures
+  don't fail the run; recent-week failures do). No new week starts after `--max-minutes` (40). The server's index is
+  the state, so it resumes by itself. Days are fetched once per run (the 10 recent weeks share 16 days: 16 downloads,
+  not 70). A week is uploaded only if the Natural Earth land mask loaded. The workflow runs it twice a day with
+  `--backfill 24` (`workflow_dispatch` takes `backfill` and `dates` inputs). Time: about 40 s a week (7 days ~10 to
+  15 s from GitHub, encoding 3.6 s, the upload, 2 s + 20 s pauses), so 24 a run (~16 min) and ~48 a day: the ~320
+  saved weeks on Render (Oct 2026) take about a week. Faster by hand: `gh workflow run seed-sst-cache.yml -f
+  backfill=60`, or locally `CACHE_UPLOAD_TOKEN=... .venv/bin/python tools/sync_cache.py --count 0 --no-wanted
+  --backfill 50`. Render never asks NOAA for any of this.
+- **Tests**: `tools/test_sst_grid.py` (format round trip, codes, Auto range, sizes, old entries, the weekly cache and
+  eviction order, the route never asking NOAA, the seeder's order, resume, 503s, rate limit and time cap against a
+  mocked NOAA and app), `tools/test_sstengine.mjs` (the engine in the real page: readouts vs the Python decode, pixels
+  vs `colorFor`, placement at zoom 11 across a sharp front, palettes, ranges, stepped, isotherms, breaks, "haze"
+  ignored, crossfade, reduced motion, histogram, Fit to view, an old week, a failed download),
+  `tools/perf_sstengine.mjs` (frame times above).
+
 ### Data Flow
 ```
-User picks date → Fetch button → _load_week(): a saved copy, or get_sst_multiday()
-  (22 s budget, 3 days at a time newest first, OISST only if MUR sends nothing)
-  → orient_to_leaflet() → mask_aoi → mask_land (per day, 2D only)
-  → compute unified vmin/vmax across all 7 days
-  → pre-render 7 base64 PNGs (rows resampled to Web Mercator, map/overlay.mercator_rows; "frame_format": 2)
+User picks date → Load week → _load_week(): a saved copy (weekly file, else an old entry), or get_sst_multiday()
+  (22 s budget, 3 days at a time newest first, OISST only if MUR sends nothing; 0.1 F over the coverage box)
+  → sstgrid.entry_from_fetch(): orient → mask land (Natural Earth) → 0.1 F codes → GOSST1 (gzip -6) + Auto range
+  → sst-store: meta, dates, bounds, Auto range, grid.url (~2 KB; no pictures)
+  → memory (_raw_data_cache, 2 weeks): the bytes + float32 arrays for the measure panel
+  → disk: sst/weeks/<end>_week.json.gz, written in a background thread (one file per week)
 
-Two-part storage:
-  → dcc.Store (browser): PNG frames + metadata (~7 MB)
-  → _raw_data_cache (server): raw float arrays for click lookups (~18 MB)
-      ↑ populated BEFORE disk write (memory-first for reliability)
-  → Disk cache: gzip JSON with base64-encoded numpy arrays
-      ↑ written in background thread (non-blocking, memory-efficient)
-
-render_static_layers sets initial overlay + POIs + legend
-  → clientside callback swaps PNG by frame index (instant)
+Browser (assets/sstengine.js, window.SSTEngine):
+  sst-store → SSTEngine.setWeek() → GET /api/sst/week/<end>.bin (gzip, from memory or disk, never NOAA)
+  → decode → per-day canvas through the color table → strips placed by Web Mercator on an L.Canvas (sst-pane)
+  → "ready": the loading overlay goes; the day slider → setDay() (crossfade); Color strength → setOptions({opacity})
+  → taps: SST.classify → click-pos → SST.selection() card from SSTEngine (no server trip); measure: render_selection
 
 GFW Fishing Activity (separate data path):
   fetch_sst_data writes the served dates to the gfw-range store
@@ -86,17 +189,10 @@ GFW Fishing Activity (separate data path):
   → Tiles cached 24hr (Cache-Control: public, max-age=86400)
   → updateWhenZooming=False prevents proxy flood during zoom
 
-Pre-cache (memory-efficient raw-only mode):
-  /api/precache → _run_precache thread → for each date:
-    get_sst_multiday() → _precache_single_date() (one day at a time):
-      orient + mask → running percentiles (no np.concatenate)
-      → serialize array → free → next day
-    → put_cache() with frames=None (no PNG rendering)
-    → 120s hard timeout per date via ThreadPoolExecutor
-  On user load of raw-only cache entry:
-    _build_payload_from_disk_cache() renders PNGs on-the-fly (~0.4 s; also entries whose frames
-      aren't frame_format 2, i.e. saved before Oct 16 2026: redrawn from their raw arrays, no NOAA)
-    → background thread upgrades cache with PNGs for instant future loads
+Pre-cache (token-locked, rarely used: the seeder does this off-Render):
+  /api/precache → _run_precache thread → for each date without a weekly file:
+    get_sst_multiday() (MUR only, whole week) → sstgrid.entry_from_fetch() → put_week()
+    → 120s hard timeout per date via _call_with_timeout
 ```
 
 ### Currents Page (`/currents`)
@@ -209,10 +305,15 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 | `data/sstmeta.py` | The payload `meta` dict (what was served, from where, how fresh) and the refresh rules |
 | `data/geo.py` | Orient arrays, AOI mask, land mask (all 2D only) |
 | `data/convert.py` | Kelvin→Fahrenheit, 2x visual upsample |
-| `data/cache.py` | Disk-based gzip JSON cache, refresh checks from meta, saved-week index, the seeder's wanted list |
+| `data/cache.py` | Disk-based gzip JSON cache: one file per week in `sst/weeks/` (old two-variant entries still read), refresh checks from meta, saved-week index, `/api/cache/weeks` index, disk-budget eviction (least recently viewed), the seeder's wanted list |
+| `data/sstgrid.py` | The week's grid (GOSST1: 0.1 F codes, land mask, gzip), the weekly cache entry, the Auto range, old entries converted, the page's store payload (see SST data, cache and engine) |
+| `assets/sstengine.js` | The client-side SST engine (`window.SSTEngine`): decodes the week, draws it on an L.Canvas in Web Mercator strips, palettes, ranges, stepped, isotherms + breaks (Web Worker), crossfade, readouts, histogram |
+| `tools/test_sst_grid.py` | Format, weekly cache, eviction, the week's bytes route, the seeder's backfill against a mocked NOAA (no network, no pytest) |
+| `tools/test_sstengine.mjs` | Headless checks of SSTEngine in the real page (boots its own server, NOAA blocked) |
+| `tools/perf_sstengine.mjs` | SSTEngine frame times on a 4x-throttled phone profile |
 | `layout/sidebar.py` | Date picker, animation controls, collapsible POI checklist, fetch button, version indicator |
 | `layout/mapview.py` | dl.Map with custom panes, loading overlay, hamburger button |
-| `map/overlay.py` | Array → RGBA → base64 PNG, rows resampled to Web Mercator first (`mercator_rows`: Leaflet stretches an ImageOverlay linearly in Mercator); `FRAME_FORMAT` marks frames drawn this way (see ImageOverlay Is Stretched in Web Mercator) |
+| `map/overlay.py` | Array → RGBA → base64 PNG with rows resampled to Web Mercator (`mercator_rows`). No longer used to serve the map (sprint 2: SSTEngine draws it); kept for `tools/build_labs_previews.py` and `tools/test_sst_ui.py` |
 | `map/colorscale.py` | Legend component, adaptive color bounds |
 | `map/pois.py` | 32 fishing spots + The Dump rectangle, multi-select picker |
 | `map/measure.py` | Haversine distance, initial bearing, compass direction, magnetic variation (bilinear lookup in `map/declination.py`) and the true + magnetic course |
@@ -230,7 +331,7 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 | `tools/build_currents.py` | Off-Render builder for the example weeks: NECOFS → gridded frames + NOAA predictions → upload |
 | `tools/build_tide_atlas.py` | Off-Render builder for the tide-stage atlas behind Today / Tide cycle (see Architecture → Currents Page) |
 | `tools/build_inlets.py` | Builder for the harbor-inlet estimates (DEM hypsometry, inlet survey, outside-tide offsets, report, Lake Montauk check, selftest) → `data/inlets.json` |
-| `tools/smoke_sst.mjs` | Headless smoke test of /sst at 1440x900, 390x664 and 820x1180 against a local server (run before pushing; see Running Locally); on the laptop also the SST image on its bounds and the color drawn under 10 taps vs each tap's reading |
+| `tools/smoke_sst.mjs` | Headless smoke test of /sst at 1440x900, 390x664 and 820x1180 against a local server (run before pushing; see Running Locally); on the laptop also the engine's canvas over the map on the week's bounds and the color it draws under 10 taps vs each tap's reading |
 | `tools/boot_sst_pages.mjs` | Cold-boot test: boots gunicorn as production N times, opens 4 /sst pages at once right after each boot, requires every /assets script and `window.SST` on the map; then sst.js before Leaflet, after the map exists, twice, and across page changes |
 | `tools/test_sst_ui.py` | Checks of the SST readout / legend / measure / declination helpers, and that the overlay is drawn where its data is (pixel under a lat/lon vs the readout there; synthetic field and the newest saved week) (no server) |
 | `tools/build_declination.py` | WMM-2025 synthesis → `map/declination.py`; `--check` compares with NOAA's calculator |
@@ -256,9 +357,9 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 
 ### Callback Structure
 1. **show_loading_on_fetch** — **Clientside** callback on button click / auto-fetch, shows loading overlay immediately (must be clientside — with 1 gunicorn worker, a server-side version gets blocked behind the slow fetch callback)
-2. **fetch_sst_data**: synchronous. `_load_week()` (saved copy or NOAA within the budget, see SST fetch), pre-renders PNGs, stores raw data server-side (memory-first, then background disk write). `lock-scale` is an **Input** (not State) so toggling triggers re-fetch; the `saved-week` buttons of a failed load are Inputs too (n_clicks 0 when they appear is ignored, here and in the clientside overlay callback). Sets the date box to the week served and the `gfw-range` store. Auto-closes the mobile drawer on success, opens it on failure. The button label it restores is `FETCH_LABEL`.
-3. **render_static_layers** — Sets initial overlay PNG + bounds, POIs, legend, hides loading overlay. Fires on POI picker changes.
-4. **clientside: swap overlay** — Swaps overlay PNG by frame index (sst-store as State, not Input)
+2. **fetch_sst_data**: synchronous. `_load_week()` (saved copy or NOAA within the budget, see SST fetch), returns the week's store payload (no pictures since sprint 2), keeps the week in memory and writes a fetched one to disk in the background. "Same colors every week" (`lock-scale`) is no longer an input (sprint 2: the color range is the browser's); the `saved-week` buttons of a failed load are Inputs (n_clicks 0 when they appear is ignored, here and in the clientside overlay callback). Sets the date box to the week served and the `gfw-range` store. Auto-closes the mobile drawer on success, opens it on failure. The button label it restores is `FETCH_LABEL`.
+3. **render_static_layers**: the spot markers (POI picker). The server legend went with the PNG frames (the Colors panel's live legend replaces it).
+4. **clientside: SSTEngine wiring**: `sst-store` → `SSTEngine.setWeek()` (its "ready"/"error" hide the loading overlay; a 25 s safety timer too); `frame-slider` → `setDay()`; `sst-opacity` → `setOptions({opacity})` (replaces the server's update_sst_opacity); each writes `""` to a sink
 5. **clientside: play/pause** — Toggles dcc.Interval, from the sidebar's Play or the floating playbar's (`sst-pb-play`); returns both labels
 6. **clientside: auto-advance** — Increments frame slider on interval tick (wraps 6→0)
 7. **clientside: step frame** — Step forward/back buttons (sidebar or playbar `sst-pb-back` / `sst-pb-fwd`)
@@ -266,13 +367,13 @@ Short, wide inlets (Lake Montauk, Accabonac, Northwest Creek, Sag Harbor Cove) d
 8b. **clientside: sst-key** — copies the week's `data_key`, `dates`, `meta` (no frames) from `sst-store` into `sst-key`. Server callbacks that only need those take `sst-key`: Dash uploads every Input/State with the request, and the old click callbacks uploaded the whole week's PNGs (~180 KB) on every tap and day change
 8c. **clientside: status strip** — `SST.status(sst-key, frame)` fills `#sst-status-line` and the playbar date (and shows the playbar once a week is loaded); weekday slider marks from `SST.marks` (`frame-slider.marks`, allow_duplicate over the load callback's day-of-month marks); a load failure (an Alert in `fetch-status`) goes to `SST.fetchError`
 9. **clientside: classify taps** (`sst-map.clickData` → `click-pos` or `measure-state`) — `SST.classify` in assets/sst.js: a spot's circle within ~16 px (finger) / 9 px (mouse) opens its card, anywhere else reads the water (inside The Dump: that point, named), a second tap on the open card closes it, measure mode places A then B (snapping to a circle). Replaces the server `handle_map_click`, saving a round trip per tap
-10. **render_selection** — draws `click-pos` (`click-marker` group) and the measurement (`measure-layer` group, A/B/line/label in a fixed order) for the day on the map, plus the measure panel; fires on a tap, a measure change, a new week (`sst-key`) or a day change, so readings, spot cards and measurements survive day changes and show each day's value (the card has the week's 7 values at that point). Reads raw arrays via `_get_raw_data`. Two layer groups because react-leaflet reuses layers by position and a Tooltip's `className` is fixed at creation
+10. **render_selection**: since sprint 2 only the measurement (the reading / spot card is drawn in the browser: `sst-sel-sink` callback → `SST.selection`, from SSTEngine); historically: draws `click-pos` (`click-marker` group) and the measurement (`measure-layer` group, A/B/line/label in a fixed order) for the day on the map, plus the measure panel; fires on a tap, a measure change, a new week (`sst-key`) or a day change, so readings, spot cards and measurements survive day changes and show each day's value (the card has the week's 7 values at that point). Reads raw arrays via `_get_raw_data`. Two layer groups because react-leaflet reuses layers by position and a Tooltip's `className` is fixed at creation
 11. **toggle_measure** — Measure / Cancel / Measure again / Clear / the on-map hint's Cancel → `measure-state`; starting clears the open card and closes the drawer. A clientside callback sets the button label, the Clear button and the on-map hint (`sst-map-hint`) from `measure-state`
 11b. **clientside: How it works (SST)** — like Currents: `sst-about` opens once per browser (`gotone-sst-intro-v1` localStorage flag) and from the header / sidebar links; only a click counts (`how_it_works`)
 11c. **clientside: fishing-activity note** — shows `#sst-gfw-note` under the legend while "Fishing activity" is ticked
 12. **update_poi_count** — Shows "All" or "n/total" count next to "Spots" label
 13. **toggle_layers**: adds/removes the NOAA ENC, GEBCO and GFW layers (`layout/mapview.chart_layer()` etc.) in their pane holders (`contours-holder`, `gebco-holder`, `gfw-holder`) from the sidebar checklist, so a hidden layer downloads nothing; a new week (`gfw-range`) re-renders only the GFW layer with its dates
-14. **update_sst_opacity** — Adjusts SST overlay opacity from sidebar slider
+14. **(Color strength)**: clientside since sprint 2 (item 4): `SSTEngine.setOptions({opacity})`; the slider starts at 1.0 (opaque)
 15. **clientside: drawer toggle** — Opens/closes mobile sidebar drawer + backdrop (toggles `drawer-open` class)
 16. **clientside: POI collapse toggle** — Expands/collapses POI checklist, flips chevron (▾/▴)
 17. **poi_select_all** — Server callback for Select all / Deselect all links in POI checklist
@@ -406,8 +507,8 @@ Full write-up: `docs/incident-2026-10-16.md`. About 10 minutes after SST sprint 
 ### Payload Size Management
 - **dcc.Store payload must stay under ~7 MB** for reliable delivery on Render.
 - **Raw float arrays are the biggest culprit**: 7 days × ~93K floats × ~8 bytes/float = ~5 MB as numpy. These MUST be kept server-side.
-- **Store payload contents**: 7 base64 PNG frames (~6.5 MB) + dates + bounds + metadata = ~7 MB total.
-- **Server-side `_raw_data_cache`**: In-memory dict keyed by `"{end_date}_{mode}"`. Stores numpy arrays for click-to-read-temp lookups. **Limited to 2 entries** (~25 MB each) via `_put_raw_cache()` to stay within Render's 512 MB. Oldest entry evicted when limit exceeded. **Populated BEFORE disk write** so clicks work even if disk write fails. Falls back to disk cache on miss (handles restarts).
+- **Store payload contents** (since sprint 2): meta, dates, bounds, the Auto range and the week's URL, ~2 KB; the week's grid (~0.6 MB gzip) comes from `/api/sst/week/<end>.bin`. Before: 7 base64 PNG frames.
+- **Server-side `_raw_data_cache`**: In-memory dict keyed by `"{end_date}_week"` (was `"{end_date}_{mode}"`). Stores the week's bytes, its store payload and float32 arrays for the measure panel. **Limited to 2 entries** (~25 MB each) via `_put_raw_cache()` to stay within Render's 512 MB. Oldest entry evicted when limit exceeded. **Populated BEFORE disk write** so clicks work even if disk write fails. Falls back to disk cache on miss (handles restarts).
 - **Disk cache** (`data/cache.py`): Stores the FULL payload with raw arrays as **base64-encoded numpy `.npy`** format (v2) instead of JSON lists (v1). Written in a **background thread** to avoid blocking the callback response. Backward-compatible: reads both v1 and v2 formats.
 
 ### Memory Management on Render (512 MB)
@@ -438,12 +539,12 @@ Full write-up: `docs/incident-2026-10-16.md`. About 10 minutes after SST sprint 
 - **Endpoint**: `GET /api/precache` triggers background fetching of historical SST data for tuna season dates (Jun–Nov, weekly intervals, 2020–2025).
 - **Status**: `GET /api/precache/status` returns JSON with `running`, `done`, `total`, `errors`, `cache_dir`, `cached_files`.
 - **Raw-only mode**: Pre-cache uses `_precache_single_date()` which skips PNG rendering entirely. Processes each day individually (serialize → free → next), uses running percentiles instead of `np.concatenate`. Peak memory ~30-35 MB per iteration (down from 65-70 MB with `_build_payload`).
-- **On-the-fly PNG rendering**: When a user loads a raw-only cache entry (`frames: None`), or one whose frames aren't the current `frame_format` (saved before Oct 16, 2026; see ImageOverlay Is Stretched in Web Mercator), `_build_payload_from_disk_cache()` renders PNGs on-the-fly (~0.4 s on this Mac). A background thread then upgrades the cache entry with PNGs so subsequent loads are instant.
+- **On-the-fly PNG rendering** (before sprint 2; old entries are now converted to the weekly grid instead, see SST data, cache and engine): When a user loads a raw-only cache entry (`frames: None`), or one whose frames aren't the current `frame_format` (saved before Oct 16, 2026; see ImageOverlay Is Stretched in Web Mercator), `_build_payload_from_disk_cache()` renders PNGs on-the-fly (~0.4 s on this Mac). A background thread then upgrades the cache entry with PNGs so subsequent loads are instant.
 - **Per-date timeout**: 120s hard timeout via `_call_with_timeout` (a ThreadPoolExecutor shut down with `wait=False`). If ERDDAP hangs, the date is skipped and logged as an error instead of blocking the worker indefinitely. Before Oct 16, 2026 it was `with ThreadPoolExecutor(...)`, whose exit waits for the fetch, so the timeout never applied.
 - **Query params**: `start_year`, `end_year`, `months` (comma-sep), `interval` (days between dates, default 7), `delay` (seconds between fetches, default 45).
 - **Skips already-cached dates**: Checks disk cache before fetching. Safe to re-run after interruptions or worker restarts.
 - **Cache persistence**: Render Persistent Disk ($0.25/GB/month) at `/var/data/cache`. Set via `SST_CACHE_DIR` env var. Cache survives worker restarts and deploys. Without persistent disk, Render's ephemeral filesystem wipes cache on every container restart.
-- **MAX_ENTRIES**: 500 in `data/cache.py` to accommodate pre-cached data.
+- **MAX_ENTRIES**: 4000 in `data/cache.py`, a backstop only since sprint 2: eviction follows a disk budget, least recently viewed first (see SST data, cache and engine, Retention).
 - **Timing**: ~1 date per 90 seconds (45s fetch + 45s delay on Render). Full 180 dates takes ~4-5 hours.
 - **Idempotent**: Safe to call `/api/precache` multiple times. Already-cached dates are skipped. If the worker restarts mid-run, just hit the endpoint again to resume.
 - **`raw_only` parameter on `_build_payload_from_disk_cache()`**: When `True`, skips PNG rendering entirely (returns `frames=[]`). Used by `_get_raw_data()` for click-lookup paths and pre-warm thread, where only raw arrays are needed.
@@ -506,7 +607,7 @@ Set `interactive=False` on `dl.ImageOverlay` AND add `pointer-events: none !impo
 - **Fix** (`map/overlay.mercator_rows`): before encoding, output row r is centred where Leaflet draws it and shows the grid row with the nearest centre to that latitude (nearest: exact raw values, land and the AOI mask; no row skipped), rows at most 0.005 deg (0.56 km) tall, so a cell edge lands within 0.28 km of true (max 0.274 km, mean 0.13 km; OISST too). A MUR frame is 1041 rows for 501 grid rows, about 27 KB (190 KB for a week, was 152 KB). Bounds and raw arrays are unchanged.
 - **Saved weeks**: frames carry `"frame_format": 2` (`map/overlay.FRAME_FORMAT`). An entry without it (saved before Oct 16, 2026) is redrawn from its own raw arrays when served (about 0.4 s, no NOAA call, so it works on Render) and rewritten in the background (`"write": "upgrade"`); its bounds are recomputed from the grid too (entries from before sprint 1 saved the first/last cell centres instead of the edges). Older code serves the redrawn frames correctly, so a rollback is safe. **Bump `FRAME_FORMAT` whenever the drawing changes** (palette, projection): every saved week then redraws itself on its next view.
 - Tests: `tools/test_sst_ui.py` (every image row shows the cell under it; the pixel under 600 random points is the readout's color; the old drawing fails 414 of them), `tools/test_sst_fetch.py` (an old entry is redrawn without NOAA and written back), `tools/smoke_sst.mjs` (in Chrome: the image on its bounds, the legend color under 10 taps vs their readings).
-- Sprint 2's client-side engine needs the same: a row lookup through the Mercator formula when it draws the canvas.
+- Sprint 2's client-side engine does the same in the browser: it draws the grid in 16-row strips, each placed by Web Mercator at its cell edges (`tools/test_sstengine.mjs` checks cell centres across a sharp front at zoom 11).
 
 ### Interaction Model — Unified Click System
 Every tap goes through one clientside callback (`SST.classify`, assets/sst.js) into one selection (`click-pos`: `{kind: "reading" | "poi" | "dump", lat, lng, name}`) or the measure state; `render_selection` draws both for the day on the map. One card at a time; a second tap on it closes it.
@@ -514,7 +615,7 @@ Every tap goes through one clientside callback (`SST.classify`, assets/sst.js) i
 - **Anywhere else**, including next to a spot → the temperature where you tapped. **Inside The Dump** → that point's temperature, named "The Dump" (it used to jump to the box's centre).
 - **Measure mode** → A then B, snapping to a spot's circle (not to The Dump's centre).
 - POI markers are **visual-only** (`bubblingMouseEvents=True`, no Popup/Tooltip children); the spot list (`sst-pois` store, `map/pois.pois_payload()`) feeds the hit test.
-- Readings show whole degrees ("71 °F": the data is rounded to whole °F at ingest; tenths print once the data has them). Out-of-grid taps read "No data here", not the edge pixel.
+- Readings show tenths ("71.3 °F") since sprint 2 (weeks saved before it read whole degrees until the seeder rebuilds them). Out-of-grid taps read "No data here", not the edge pixel. The card is drawn in the browser from SSTEngine (no server trip).
 - Two quick taps are Leaflet's double-tap zoom: closing a card needs a separate tap.
 
 ### Measure Tool
@@ -524,12 +625,12 @@ Every tap goes through one clientside callback (`SST.classify`, assets/sst.js) i
 - Math in `map/measure.py`: haversine distance, initial bearing, `magnetic_variation()`
 
 ### Performance Notes
-- **dcc.Store payload**: ~2.5 MB (7 base64 PNGs at 1x native resolution + dates + metadata). Raw arrays stored server-side.
+- **dcc.Store payload**: ~2 KB since sprint 2 (the week's grid, ~0.6 MB gzip, is fetched by SSTEngine and kept by the browser's HTTP cache for an hour). Before: ~2.5 MB of PNGs.
 - **Server-side raw data**: ~25 MB in memory per date window. Falls back to disk cache on miss.
 - **Disk cache**: gzip JSON, ~200 KB per date window. Persistent across deploys.
-- **Pre-rendering PNGs server-side** with unified vmin/vmax makes frame switching instant — the clientside callback just selects a pre-built base64 URL.
+- **Day switching** is a crossfade between two per-day canvases in the browser (SSTEngine); before sprint 2 it swapped pre-rendered PNGs.
 - **1x native upsample**: Dropped from 2x to 1x when AOI expanded — reduces payload by ~62% with no visible quality difference at typical zoom levels. The `upsample_visual()` call with factor 1 returns the array unchanged.
-- **AOI coverage**: Cape May, NJ (38.80°N) to Portland, ME (43.80°N), ~501×617 grid at MUR 1km. Bounding box: 5.00° lat × 6.16° lon.
+- **Coverage** (sprint 2): 37.8 to 44.0 N, 76.0 to 64.8 W, 1121 x 621 at MUR 1 km. Before: Cape May (38.80 N) to Portland, ME (43.80 N), 501 x 617, an AOI polygon.
 - **Cache hit path**: disk read + decompress + parse → ~2-5s on Render. No ERDDAP call needed.
 - **Closest saved week**: for weeks ending more than 10 days before the newest day, `_saved_nearby()` in app.py takes a saved week within ±3 days of the requested end date before asking NOAA. With pre-cached entries every 7 days, most tuna-season dates hit one, avoiding ERDDAP entirely. The meta says so (`week_match: "closest_saved"`, `requested_end`) and the date box shows the week served. Recent weeks are always fetched exactly (the nearby one is only the fallback). The `data_key` in `sst-store` is the served week's so click-to-read-temp works.
 - **Cache miss path** (Oct 16, 2026, this Mac): uncached weeks from 2005, 2009, 2011, 2012, 2014 and 2018 took 4.8 to 6.8 s server-side (fetch 3 to 6 s, processing under 1 s), the newest week 5.6 s; the first fetch after a restart pays ~3 s for the land mask unless the pre-warm loaded it. At worst ~25 s, then the honest failure. Render can fetch ERDDAP again since 2026-10-10 but gets the same 503 bursts; the seeder keeps recent weeks in the cache either way.
@@ -603,6 +704,12 @@ python app.py
 .venv/bin/python tools/test_sst_ui.py
 OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES .venv/bin/python tools/test_sst_fetch.py
 OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES .venv/bin/python tools/test_sst_hang.py
+# SST grid format, weekly cache, eviction, the week's route, the seeder's backfill (mocked NOAA)
+OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES .venv/bin/python tools/test_sst_grid.py
+# SSTEngine in the real page (boots its own server with NOAA blocked) and its frame times on a 4x-throttled phone
+node tools/test_sstengine.mjs --port 8083
+node tools/perf_sstengine.mjs --base http://127.0.0.1:8062   # needs a server whose default week is a weekly file
+# Never point a dev server or a boot test at ./cache when it's a link to another checkout: use a copy (--cache-dir)
 # The venv must have the pinned gunicorn (23.0.0): .venv/bin/python -m pip install -r requirements.txt
 # gunicorn exactly as production, with NOAA / GFW failing (tools/netsim), 2 x 50 concurrent requests and 16 idle
 # connections per scenario (~3 min)
@@ -642,3 +749,4 @@ gh workflow run build-currents.yml -f source=atlas -f publish=true    # rebuild 
 | `SLOW_REQUEST_S` | No | A request running longer than this (default 60 s) is logged with its stack by the watchdog. |
 | `REQUEST_THREADS` | No | gunicorn's `--threads` (default 16), for the watchdog's "all request threads busy" dump. |
 | `GFW_API_BASE` | No | Tests only: another base URL for the GFW API (a local fake). Default `https://gateway.api.globalfishingwatch.org`. |
+| `SST_CACHE_MAX_MB` | No | Disk budget for the SST cache files, in MB. Default: 70% of the disk `SST_CACHE_DIR` is on (Render's 1 GB disk: 700 MB). Past it, eviction removes superseded old entries, then the least recently viewed weeks. |

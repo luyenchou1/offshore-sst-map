@@ -32,7 +32,7 @@ import requests  # noqa: F401 - tests replace requests.get (data/outbound looks 
 import xarray as xr
 
 from data import outbound
-from data.convert import to_fahrenheit_whole
+from data.convert import to_fahrenheit
 from data.outbound import Deadline  # noqa: F401 - re-exported: erddap.Deadline
 
 logger = logging.getLogger(__name__)
@@ -325,7 +325,8 @@ def _open_nc(content: bytes) -> xr.Dataset:
 def parse_grids(content: bytes, var: str):
     """ERDDAP .nc bytes -> ([(iso_date, arrF[lat, lon]), ...], lats, lons, units).
 
-    Handles MUR [time][lat][lon] and OISST [time][zlev][lat][lon]; values become whole °F.
+    Handles MUR [time][lat][lon] and OISST [time][zlev][lat][lon]; values become °F to 0.1 (sprint 2: data/sstgrid
+    keeps tenths; whole degrees before).
     """
     try:
         ds = _open_nc(content)
@@ -350,9 +351,9 @@ def parse_grids(content: bytes, var: str):
         for i in range(da.sizes["time"]):
             day = str(np.datetime_as_string(np.asarray(times[i], dtype="datetime64[ns]"), unit="D"))
             arr = da.isel(time=i).transpose(lat_name, lon_name).values
-            out.append((day, to_fahrenheit_whole(arr, units)))
+            out.append((day, to_fahrenheit(arr, units)))
     else:
-        out.append((None, to_fahrenheit_whole(da.transpose(lat_name, lon_name).values, units)))
+        out.append((None, to_fahrenheit(da.transpose(lat_name, lon_name).values, units)))
     return out, lats, lons, units
 
 
@@ -367,14 +368,24 @@ def _fetch_mur_day(src, d: date, bbox, deadline: Deadline):
     return {"date": str(d), "arrF": arr, "lats": lats, "lons": lons, "units": units}
 
 
-def fetch_days(src, dates: List[date], bbox, deadline: Deadline, concurrency: int = 3):
+def fetch_days(src, dates: List[date], bbox, deadline: Deadline, concurrency: int = 3,
+               cache: Optional[Dict] = None):
     """Fetch one day per request, `concurrency` at a time, newest first.
 
     Returns (results {date: day}, errors {date: kind}). Returns at the deadline even if
     requests are still running; those finish (or give up) on their own and are discarded.
+    cache (the seeder's, for one run): days already fetched are taken from it, new ones added.
     """
     results, errors = {}, {}
     stop = {}  # set when the dataset is gone or the server refuses us: no point going on
+    if cache is not None:
+        for d in list(dates):
+            hit = cache.get(("sst", src["dataset_id"], d))
+            if hit is not None:
+                results[d] = hit
+        dates = [d for d in dates if d not in results]
+        if not dates:
+            return results, errors
 
     def one(d):
         if stop:
@@ -397,6 +408,8 @@ def fetch_days(src, dates: List[date], bbox, deadline: Deadline, concurrency: in
             d = futs[f]
             try:
                 results[d] = f.result()
+                if cache is not None:
+                    cache[("sst", src["dataset_id"], d)] = results[d]
             except FetchError as e:
                 errors[d] = e.kind
                 if e.kind == UNREACHABLE:
@@ -485,7 +498,7 @@ def _reason(errors: Dict) -> str:
 
 def get_sst_multiday(end_date, config: Dict, num_days: int = 7, budget_s: Optional[float] = None,
                      allow_fallback: bool = True, require_full: bool = False,
-                     concurrency: Optional[int] = None) -> Dict:
+                     concurrency: Optional[int] = None, cache: Optional[Dict] = None) -> Dict:
     """Fetch the week ending `end_date` (or the newest MUR day, if that is earlier).
 
     Returns within `budget_s` (config "budget_s", default 22) with:
@@ -500,6 +513,7 @@ def get_sst_multiday(end_date, config: Dict, num_days: int = 7, budget_s: Option
       fetch_seconds   time spent
     Raises SSTUnavailable when nothing could be had. require_full=True (seeder, precache) raises
     unless every day that exists was fetched, and allow_fallback=False never uses OISST.
+    cache: the seeder's per-run cache of days already fetched (overlapping weeks share their days).
     """
     src_cfg = sources(config)
     budget = float(budget_s if budget_s is not None else src_cfg.get("budget_s", 22))
@@ -524,7 +538,7 @@ def get_sst_multiday(end_date, config: Dict, num_days: int = 7, budget_s: Option
         todo = [d for d in dates if d not in got]
         if not todo or mur_deadline.left() < 1.0:
             break
-        res, errs = fetch_days(src, todo, bbox, mur_deadline, concurrency=conc)
+        res, errs = fetch_days(src, todo, bbox, mur_deadline, concurrency=conc, cache=cache)
         if res and served_by is None:
             served_by = src
         if served_by is src:
