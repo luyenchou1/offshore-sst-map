@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 // Smoke test for the Offshore SST page (/sst). Run it against a local dev server before pushing
 // (Render deploys every push to main):
 //
@@ -47,7 +48,7 @@ const SIZES = {
     ipad: { viewport: { width: 820, height: 1180 }, deviceScaleFactor: 1, hasTouch: true },
 };
 const sizes = (args.sizes || 'desk,phone,ipad').split(',').filter(s => SIZES[s]);
-const STUB = new URL('./sst_engine_stub.js', import.meta.url).pathname;
+const STUB = fileURLToPath(new URL('./sst_engine_stub.js', import.meta.url));   // fileURLToPath: paths with spaces
 const HUDSON = [39.642, -72.44];                         // the canyon head (map/pois.py)
 const LOOK_EVENTS = ['preset_tuna', 'preset_marlin', 'preset_gulfstream', 'preset_custom', 'custom_range',
                      'fit_view', 'preset_auto', 'stepped', 'breaks', 'contours'];
