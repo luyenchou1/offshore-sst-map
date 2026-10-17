@@ -379,18 +379,37 @@ def test_app_fresh_fetch_meta_and_cache_hit():
     assert m["source"] == "MUR" and m["from_cache"] is False and m["week_match"] == "exact"
     assert m["requested_end"] == "2014-08-20" and m["served_end"] == "2014-08-20"
     assert m["latest_available"] == str(LATEST) and len(m["days"]) == 7
-    assert w["store"]["meta"] is m and len(w["store"]["frames"]) == 7
+    st = w["store"]
+    assert st["meta"] is m and len(st["dates"]) == 7 and "frames" not in st     # no pictures since sprint 2
+    assert st["grid"]["url"].startswith("/api/sst/week/2014-08-20.bin?v=") and st["data_key"] == "2014-08-20_week"
+    assert st["grid"]["precision"] == 0.1 and st["vmin"] < st["vmax"] and st["vmax"] - st["vmin"] >= 8
     # half a cell beyond the first/last centres
-    (s, wv), (n, e) = w["store"]["bounds"]
-    assert abs(s - (38.80 - 0.025)) < 1e-6 and abs(e - (MUR_LONS[-1] + 0.025)) < 1e-6
+    (s, wv), (n, e) = st["bounds"]
+    assert abs(s - (38.80 - 0.025)) < 1e-4 and abs(e - (MUR_LONS[-1] + 0.025)) < 1e-4
     appmod._write_week(w, False)
+    assert cachemod.week_path(date(2014, 8, 20)).exists()                     # one file per week...
+    assert not list(cachemod.CACHE_DIR.glob("*.json.gz"))                      # ...and no adaptive/locked pair
     appmod._raw_data_cache.clear()
     w2 = appmod._load_week(date(2014, 8, 20), False, LATEST)
     m2 = w2["meta_out"]
     assert m2["from_cache"] is True and m2["built_at"] == m["built_at"] and m2["days"] == m["days"]
-    # the other color mode is rebuilt from the same week, meta intact
+    assert w2["store"]["grid"]["url"] == st["grid"]["url"] and w2["write"] is None
+    # "Same colors every week" is the browser's now: the same week, nothing rebuilt or written
     w3 = appmod._load_week(date(2014, 8, 20), True, LATEST)
-    assert w3["meta_out"]["source"] == "MUR" and w3["write"] == "cross" and w3["store"]["vmin"] == 30.0
+    assert w3["meta_out"]["source"] == "MUR" and w3["write"] is None and w3["store"]["vmin"] == st["vmin"]
+    # the week's bytes come from memory or disk, never NOAA; the readout arrays match them (0.1 F)
+    appmod._raw_data_cache.clear()
+    c = appmod.server.test_client()
+    r = c.get("/api/sst/week/2014-08-20.bin?v=1")
+    assert r.status_code == 200 and r.headers["Content-Encoding"] == "gzip" and r.data[:2] == b"\x1f\x8b"
+    assert c.get("/api/sst/week/2014-08-20.bin", headers={"If-None-Match": r.headers["ETag"]}).status_code == 304
+    assert c.get("/api/sst/week/2001-01-01.bin").status_code == 404
+    assert c.get("/api/sst/week/x.bin").status_code == 404
+    from data import sstgrid
+    wk = sstgrid.unpack_week(r.data)
+    raw = appmod._get_raw_data("2014-08-20_week")
+    i, j = 10, 20
+    assert abs(sstgrid.codes_to_f(wk["codes"][3], wk["valid"][3])[i, j] - raw["raw_days"][3]["arrF"][i, j]) < 1e-6
 
 
 def test_app_requested_after_newest_day():
@@ -450,13 +469,13 @@ def test_app_oisst_week_is_saved_retried_and_queued():
     w = appmod._load_week(date(2026, 10, 12), False, LATEST)
     m = w["meta_out"]
     assert m["source"] == "OISST" and m["resolution_km"] == 25 and m["queued"] is True
-    assert m["dataset_id"] == "ncdcOisst21NrtAgg_LonPM180" and len(w["store"]["frames"]) == 7
+    assert m["dataset_id"] == "ncdcOisst21NrtAgg_LonPM180" and len(w["store"]["dates"]) == 7
     status = json.dumps(appmod._status_line(m).to_plotly_json(), default=str)
     assert "OISST 25 km" in status and "broad pattern" in status
     appmod._write_week(w, False)
     appmod._raw_data_cache.clear()
     # Six hours later MUR is back: the saved OISST week is replaced by MUR
-    p = cachemod.CACHE_DIR / "2026-10-12_adaptive.json.gz"
+    p = cachemod.week_path(date(2026, 10, 12))
     entry = json.load(gzip.open(p, "rt"))
     entry["meta"]["built_at"] = sstmeta.utc_iso(time.time() - 7 * 3600)
     with gzip.open(p, "wt") as f:
@@ -473,7 +492,7 @@ def test_app_due_refresh_failure_serves_saved_copy():
     w = appmod._load_week(date(2026, 10, 14), False, LATEST)
     appmod._write_week(w, False)
     appmod._raw_data_cache.clear()
-    p = cachemod.CACHE_DIR / "2026-10-14_adaptive.json.gz"
+    p = cachemod.week_path(date(2026, 10, 14))
     entry = json.load(gzip.open(p, "rt"))
     entry["meta"]["built_at"] = sstmeta.utc_iso(time.time() - 13 * 3600)  # preliminary, 13 h old
     with gzip.open(p, "wt") as f:
@@ -531,74 +550,72 @@ def test_app_failure_not_reasked_within_a_minute():
         appmod._failed_recently.clear()
 
 
-def _old_style_entry(appmod, path):
-    """Rewrite a saved entry the way entries were saved before the Web Mercator fix (Oct 16, 2026): frames with one
-    image row per grid row (rows evenly spaced in latitude), no "frame_format", bounds at the first/last cell centres."""
+def _old_entries(appmod, d, end, fake_week):
+    """Entries the way they were saved before sprint 2, from a week of whole-degree arrays over the old corridor:
+    v2 (base64 .npy, raw-only, the seeder's), v2 with PNG frames and the "locked" variant only, and v1 (JSON lists)."""
     import base64
     import io as _io
-    from PIL import Image
-    from map.overlay import array_to_rgba
-    with gzip.open(path, "rt") as f:
-        entry = json.load(f)
-    lats, lons = appmod._deserialize_array(entry["lats"]), appmod._deserialize_array(entry["lons"])
-    frames = []
-    for rd in entry["raw_days"]:
+    lats, lons = fake_week["lats"], fake_week["lons"]
+    days = [{"arrF": appmod._serialize_array(x["arrF"]), "date": x["date"]} for x in fake_week["days"]]
+
+    def npy(a):
         buf = _io.BytesIO()
-        Image.fromarray(array_to_rgba(appmod._deserialize_array(rd["arrF"]), entry["vmin"], entry["vmax"]),
-                        "RGBA").save(buf, format="PNG")
-        frames.append("data:image/png;base64," + base64.b64encode(buf.getvalue()).decode())
-    entry.update(frames=frames, bounds=[[float(lats.min()), float(lons.min())], [float(lats.max()), float(lons.max())]])
-    entry.pop("frame_format", None)
-    with gzip.open(path, "wt") as f:
-        json.dump(entry, f)
-    return entry
+        np.save(buf, a)
+        return base64.b64encode(buf.getvalue()).decode()
+    base = {"dates": [x["date"] for x in fake_week["days"]], "vmin": 60.0, "vmax": 70.0, "res_km": 5.55,
+            "server": "https://coastwatch.pfeg.noaa.gov/erddap", "dataset_id": "jplMURSST41",
+            "lats": npy(lats), "lons": npy(lons), "bounds": [[38.8, -74.96], [43.8, -68.81]],
+            "meta": sstmeta.make_meta("MUR", "jplMURSST41", "x", [x["date"] for x in fake_week["days"]],
+                                      built_at="2025-01-01T00:00:00Z")}
+    kinds = {
+        "raw-only": (False, dict(base, frames=None, raw_days=days)),
+        "locked, with frames": (True, dict(base, frames=["data:image/png;base64,AAAA"] * 7, raw_days=days)),
+        "v1 lists": (False, dict(base, frames=None, lats=lats.tolist(), lons=lons.tolist(),
+                                 raw_days=[{"arrF": x["arrF"].tolist(), "date": x["date"]} for x in fake_week["days"]])),
+    }
+    return kinds
 
 
-def test_app_old_frames_redrawn_from_saved_arrays():
-    """Frames saved before the Web Mercator fix are redrawn from the entry's own arrays, without asking NOAA
-    (Render can't reach it), served at once and written back; then the entry is served as saved."""
-    from map.overlay import FRAME_FORMAT
+def test_app_old_entries_load_on_their_own_grid_without_noaa():
+    """Weeks saved before sprint 2 (either variant, any of the old encodings) load without asking NOAA (Render can't
+    reach it), are drawn on their own, smaller grid in whole degrees, and are never rewritten: the seeder replaces
+    them (--backfill)."""
+    from data import sstgrid
     appmod = _app()
-    fresh()
-    fake = install(FakeErddap())
     end = date(2014, 8, 20)
-    w = appmod._load_week(end, False, LATEST)
-    assert w["store"]["frame_format"] == FRAME_FORMAT
-    appmod._write_week(w, False)
-    path = cachemod._path_for(end, False)
-    with gzip.open(path, "rt") as f:
-        assert json.load(f)["frame_format"] == FRAME_FORMAT
-    old = _old_style_entry(appmod, path)
-    asked = len(fake.calls)
-    appmod._raw_data_cache.clear()
-    w2 = appmod._load_week(end, False, LATEST)
-    assert len(fake.calls) == asked, fake.calls[asked:]                 # NOAA not asked
-    assert w2["write"] == "upgrade" and w2["meta_out"]["from_cache"] is True
-    assert w2["store"]["frame_format"] == FRAME_FORMAT and w2["store"]["frames"] != old["frames"]
-    assert w2["store"]["frames"] == w["store"]["frames"]               # the same picture as a fresh fetch
-    assert w2["store"]["bounds"] == w["store"]["bounds"] != old["bounds"]   # cell edges again
-    appmod._write_week(w2, False)
-    with gzip.open(path, "rt") as f:
-        e2 = json.load(f)
-    assert e2["frame_format"] == FRAME_FORMAT and e2["frames"] == w["store"]["frames"]
-    assert e2["bounds"] == w["store"]["bounds"] and e2["meta"]["built_at"] == old["meta"]["built_at"]
-    appmod._raw_data_cache.clear()
-    w3 = appmod._load_week(end, False, LATEST)
-    assert w3["write"] is None and w3["store"]["frames"] == e2["frames"]   # current frames: served as saved
-    # the other color mode from an old-style entry is drawn fresh too, and a raw-only entry (the seeder's) as before
-    _old_style_entry(appmod, path)
-    appmod._raw_data_cache.clear()
-    w4 = appmod._load_week(end, True, LATEST)
-    assert w4["write"] == "cross" and w4["store"]["frame_format"] == FRAME_FORMAT and w4["store"]["vmin"] == 30.0
-    with gzip.open(path, "rt") as f:
-        e = json.load(f)
-    e["frames"] = None
-    with gzip.open(path, "wt") as f:
-        json.dump(e, f)
-    appmod._raw_data_cache.clear()
-    w5 = appmod._load_week(end, False, LATEST)
-    assert w5["write"] == "upgrade" and w5["store"]["frames"] == w["store"]["frames"]
-    assert len(fake.calls) == asked
+    lats = MUR_LATS[::-1].copy()
+    lons = MUR_LONS.copy()
+    la, lo = np.meshgrid(lats, lons, indexing="ij")
+    arr = np.round(60 + 5 * np.sin(la * 3) + 2 * np.cos(lo * 2)).astype(np.float64)
+    arr[(lo < -73.5) & (la > 40.6)] = np.nan
+    fake_week = {"lats": lats, "lons": lons,
+                 "days": [{"arrF": arr + k, "date": str(end - timedelta(days=6 - k))} for k in range(7)]}
+    for name, (locked, entry) in _old_entries(appmod, None, end, fake_week).items():
+        d = fresh()
+        fake = install(FakeErddap())
+        p = d / f"{end}_{'locked' if locked else 'adaptive'}.json.gz"
+        with gzip.open(p, "wt") as f:
+            json.dump(entry, f)
+        before = p.stat().st_mtime
+        w = appmod._load_week(end, False, LATEST)
+        assert not any(".nc?" in u for u in fake.calls), (name, fake.calls)    # NOAA not asked
+        st = w["store"]
+        assert w["write"] is None and w["meta_out"]["from_cache"] is True, name
+        assert st["grid"]["coverage"] == appmod.OLD_COVERAGE_ID and st["grid"]["precision"] == 1.0, name
+        assert st["bounds"][0][0] < 38.8 < st["bounds"][0][0] + 0.05, (name, st["bounds"])   # its own (old) bounds
+        r = appmod.server.test_client().get(f"/api/sst/week/{end}.bin")
+        assert r.status_code == 200, name
+        wk = sstgrid.unpack_week(r.data)
+        assert wk["header"]["whole"] and wk["header"]["ny"] == len(lats) and wk["header"]["nx"] == len(lons)
+        got = sstgrid.codes_to_f(wk["codes"][2], wk["valid"][2])
+        want = fake_week["days"][2]["arrF"]
+        assert np.array_equal(np.isnan(got), np.isnan(want)) and np.nanmax(np.abs(got - want)) < 1e-6, name
+        assert np.all(wk["mask"][np.isnan(want)] == sstgrid.NODATA), name   # land and outside the old area
+        raw = appmod._get_raw_data(f"{end}_week")
+        assert np.isfinite(want[50, 60]) and abs(raw["raw_days"][2]["arrF"][50, 60] - want[50, 60]) < 1e-6, name
+        assert p.stat().st_mtime == before and not cachemod.week_path(end).exists(), name   # never rewritten
+        idx = cachemod.weeks_index()
+        assert idx["old_only"] == [str(end)] and idx["weeks"] == [], (name, idx)
 
 
 # ---------------- app: routes and layers ----------------
@@ -682,14 +699,21 @@ def test_wanted_route_locked_and_upload_unqueues():
         assert r.status_code == 200 and r.get_json() == {"weeks": ["2019-02-10"]}
         install(FakeErddap())
         sst = erddap.get_sst_multiday(date(2019, 2, 10), CFG)
-        from tools.sync_cache import build_raw_payload
-        payload = build_raw_payload(sst, CFG)
-        assert payload["meta"]["source"] == "MUR" and payload["meta"]["days"][-1] == "2019-02-10"
-        blob = gzip.compress(json.dumps(payload).encode())
-        r = c.post("/api/cache/upload", data=blob, headers={
-            "X-Upload-Token": "tok", "X-Cache-Filename": "2019-02-10_adaptive.json.gz"})
+        from tools.sync_cache import build_week_file
+        fname, blob, entry = build_week_file(sst, CFG, level=1)
+        assert fname == "2019-02-10_week.json.gz"
+        assert entry["meta"]["source"] == "MUR" and entry["meta"]["days"][-1] == "2019-02-10"
+        bad = c.post("/api/cache/upload", data=gzip.compress(b'{"dates": [], "grid_format": 1}'), headers={
+            "X-Upload-Token": "tok", "X-Cache-Filename": fname})
+        assert bad.status_code == 400
+        assert c.get("/api/cache/weeks", headers={"X-Upload-Token": "tok"}).get_json()["weeks"] == []
+        r = c.post("/api/cache/upload", data=blob, headers={"X-Upload-Token": "tok", "X-Cache-Filename": fname})
         assert r.status_code == 200, r.data
         assert cachemod.wanted_weeks() == []
+        assert cachemod.week_path(date(2019, 2, 10)).read_bytes() == blob          # stored as uploaded
+        js = c.get("/api/cache/weeks", headers={"X-Upload-Token": "tok"}).get_json()
+        assert js["weeks"] == ["2019-02-10"] and js["coverage"] == CFG["coverage_id"] and "disk" in js
+        assert c.get("/api/cache/weeks").status_code == 401
         # precache is still locked
         assert c.get("/api/precache").status_code == 401
     finally:

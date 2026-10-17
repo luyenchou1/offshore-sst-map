@@ -4,8 +4,9 @@ import numpy as np
 from scipy.ndimage import zoom
 
 
-def to_fahrenheit_whole(arr: np.ndarray, units_hint: str) -> np.ndarray:
-    """Convert an SST array to whole-degree Fahrenheit."""
+def to_fahrenheit(arr: np.ndarray, units_hint: str, decimals: int = 1) -> np.ndarray:
+    """Convert an SST array to Fahrenheit, rounded to `decimals` (0.1 F since sprint 2: data/sstgrid stores tenths).
+    NaN stays NaN."""
     data = arr.astype("float32")
     u = (units_hint or "").lower()
     if u.startswith("k"):
@@ -18,7 +19,12 @@ def to_fahrenheit_whole(arr: np.ndarray, units_hint: str) -> np.ndarray:
         # Default: assume Kelvin
         f = (data - 273.15) * 9 / 5 + 32
     f = np.where(np.isfinite(f), f, np.nan)
-    return np.round(f, 0)
+    return np.round(f, decimals)
+
+
+def to_fahrenheit_whole(arr: np.ndarray, units_hint: str) -> np.ndarray:
+    """Whole-degree Fahrenheit (what the cache held before sprint 2)."""
+    return to_fahrenheit(arr, units_hint, decimals=0)
 
 
 def upsample_visual(arr: np.ndarray, factor: int) -> np.ndarray:

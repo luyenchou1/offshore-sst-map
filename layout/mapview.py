@@ -110,15 +110,11 @@ def build_map():
                                 name="gfw-pane",
                                 style={"zIndex": 420},
                             ),
-                            # SST overlay on top of chart layers
+                            # The SST, above the chart layers: assets/sstengine.js (window.SSTEngine)
+                            # draws the week on its own canvas in this pane (no image overlay since
+                            # sprint 2). The empty group only keeps the pane mounted.
                             dl.Pane(
-                                dl.ImageOverlay(
-                                    id="sst-overlay",
-                                    url="",
-                                    bounds=[[0, 0], [0, 0]],
-                                    opacity=0.7,
-                                    interactive=False,
-                                ),
+                                dl.LayerGroup(id="sst-engine-holder", children=[]),
                                 name="sst-pane",
                                 style={"zIndex": 410},
                             ),

@@ -283,7 +283,7 @@ def build_sidebar(labs_href="/"):
                                 min=0.1,
                                 max=1.0,
                                 step=0.1,
-                                value=0.7,
+                                value=1.0,   # opaque by default (sprint 2, mockup B)
                                 marks=None,
                                 tooltip={"placement": "bottom"},
                             ),
