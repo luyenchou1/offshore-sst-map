@@ -401,7 +401,10 @@
         var out = '<div class="sst-tip' + (kind === "poi" ? " sst-tip-poi" : "") + '">';
         if (kind === "poi" || kind === "dump") { out += '<div class="sst-tip-name">' + esc(sel.name || "") + "</div>"; }
         if (temps === undefined) { out += '<div class="sst-tip-none">Loading the temperature\u2026</div>'; }
-        else if (t === null) { out += '<div class="sst-tip-none">No data here</div>'; }
+        else if (t === null) {                       // the coast fill (sstengine.js) colors water MUR doesn't cover
+            var E = window.SSTEngine, shore = E && E.nearShore && E.nearShore(sel.lat, sel.lng);
+            out += '<div class="sst-tip-none">' + (shore ? "No satellite reading this close to shore" : "No data here") + "</div>";
+        }
         else { out += '<div class="sst-tip-temp">' + fmtTemp(t) + "</div>"; }
         if (idx >= 0 && idx < dates.length) { out += '<div class="sst-tip-date">' + esc(fmtDay(dates[idx])) + "</div>"; }
         out += '<div class="sst-tip-pos">' + fmtPos(sel.lat, sel.lng) + "</div>";

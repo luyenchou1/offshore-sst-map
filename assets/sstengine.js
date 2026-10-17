@@ -18,6 +18,8 @@
  *   setOptions({stepped, isotherms, breaks, opacity})      ("haze" is accepted and ignored: no cloud layer, below)
  *   valueAt(lat, lon)           {f, day, date, estimate} | null       (estimate is always null: no cloud signal)
  *   weekValuesAt(lat, lon)      [f or null per day]
+ *   nearShore(lat, lon)         true where the coast fill colors water the week has no value for (the tap card says
+ *                               "No satellite reading this close to shore"); never a temperature
  *   histogram()                 {min, max, step, bins, below, above, total}: the week's water, for the color bar
  *   on(evt, fn)                 "ready" (a week drawn), "day", "change" (palette, range, options, auto range),
  *                               also "error" (the week's grid didn't download); returns an off() function
@@ -38,6 +40,14 @@
  * Worker (marching squares on the field blurred 1.3 cells; gradient on the field blurred 1 cell, F per km, zeroed
  * within 3 cells of land), cached, and drawn as Path2D in world coordinates: a redraw at another zoom is one stroke
  * per level. Whole-degree weeks (saved before sprint 2) are blurred more so their terraces don't read as fronts.
+ * The coast (Oct 17 2026, docs/coast-progress.md): once the coastline (assets/sstland.js, OpenStreetMap) is in,
+ * water values are carried up to 3 cells (within 3.5 km; none on OISST) into the masked cells next to water, for
+ * drawing only (readouts, histogram, Fit to view, isotherms and breaks use the decoded week as it is), and the land
+ * is cleared from the picture along that smooth coastline (small islands painted in land color, a thin rim from
+ * zoom 11). Zoomed past
+ * the grid (a cell 3 CSS px or wider: MUR from zoom 9) the visible map is interpolated bilinearly between cell
+ * centres instead of drawn as cells. Each day is drawn once per view into a canvas of its own (colors,
+ * isotherms, coastline), so a frame, also mid-crossfade, composites one or two images.
  * No cloud haze: MUR's analysis_error is 0.36 to 0.40 C everywhere on every date checked, so it can't show where the
  * value is an estimate; the layer was dropped (Oct 16 2026) until a real signal exists (CLAUDE.md, SST engine).
  */
@@ -51,6 +61,14 @@
     var BREAK_G0 = 0.27, BREAK_G1 = 0.54, BREAK_MAX = 0.62;   // F per km: 0.5 and 1 F per nautical mile
     var ISO_MIN_PX = 26;                                       // isotherm loops shorter than this on screen: dropped
     var AUTO_MIN_SPAN = 8, FIT_MIN_SPAN = 3;
+    // The coast (docs/coast-progress.md): water values are carried FILL_KM (at most FILL_MAX cells; whole cells only,
+    // so none on OISST) into the masked cells next to water, for drawing only, so the SST reaches under the coastline
+    // (assets/sstland.js), which then clears it on land. Readouts, histogram, Fit to view, isotherms and breaks never
+    // see these cells.
+    var FILL_KM = 3.5, FILL_MAX = 3;
+    // Past the grid's resolution (a cell INTERP_PX CSS px wide or more: MUR from zoom 9) the view is drawn with
+    // bilinear interpolation between cell centres, in about INTERP_BUDGET output pixels (fewer on a slow device).
+    var INTERP_PX = 3, INTERP_BUDGET = 1500000, INTERP_TARGET_MS = 10;
 
     function hexes(list) {
         return list.map(function (h) {
@@ -91,12 +109,15 @@
         palette: "spectrum", range: { mode: "auto" }, vmin: 30, vmax: 90, auto: null,
         opts: { stepped: false, isotherms: false, breaks: false, opacity: 1 },
         lut: new Uint32Array(65536), lutSig: "",
-        img: {}, imgOrder: [], analysis: {}, labels: null, isoCache: null,
+        img: {}, imgOrder: [], analysis: {}, labels: null, comp: null,
         hist: null, histTotal: 0,
         worker: null, workerFailed: false, queued: {},
+        plan: null, planGen: 0, fillOn: false, disp: {}, landGrid: null, landOff: null, landCache: null,
+        interp: null, ival: null, interpNow: false, interpOff: false, nsPerPx: 25,
         listeners: { ready: [], day: [], change: [], error: [] },
         stats: { decodeMs: null, histMs: null, lutMs: [], recolorMs: [], drawMs: [], fadeFrameMs: [],
-                 analysisMs: {}, bytes: null }
+                 analysisMs: {}, bytes: null, planMs: null, fillMs: [], interpMs: [], interpPx: null, landMs: [],
+                 landGridMs: null, compMs: [], compParts: null, interpColorMs: [] }
     };
     function stat(list, v) { list.push(Math.round(v * 100) / 100); if (list.length > 60) { list.shift(); } }
 
@@ -253,11 +274,146 @@
         return { mode: S.range.mode === "fixed" ? "fixed" : "auto", min: r.min, max: r.max };
     }
 
+    // ------------------------------------------------- fill under the coast --
+    // Once per week (when the coastline is in): the masked cells within FILL_KM of water, ring by ring outward
+    // (8-connected), each with the neighbours of earlier rings it takes the mean of. Per day that is one pass over
+    // a few tens of thousands of cells (dispCodes). Display only: S.week.days stays as decoded.
+    // Rings of cells within FILL_KM: 3 on MUR's 1 km grid, none on OISST's 25 km one (its gap to the shore is a
+    // whole cell, too far to carry a value: How it works says OISST shows nothing near the coast).
+    function fillRings(h) { return clamp(Math.floor(FILL_KM / Math.max(h.dlat * 111.2, 0.01)), 0, FILL_MAX); }
+    function buildPlan(w) {
+        var t0 = now(), h = w.h, nx = h.nx, ny = h.ny, n = nx * ny, mask = w.mask, N = fillRings(h);
+        var ring = new Uint8Array(n), cells = [], i, r, c, k, dr, dc;
+        for (i = 0; i < n; i++) { ring[i] = mask[i] === 0 ? 0 : 255; }
+        var prev = [];
+        for (r = 0; r < ny && N > 0; r++) {              // ring 1: masked cells touching water
+            for (c = 0; c < nx; c++) {
+                i = r * nx + c;
+                if (ring[i] !== 255) { continue; }
+                var hit = false;
+                for (dr = -1; dr <= 1 && !hit; dr++) {
+                    var rr = r + dr;
+                    if (rr < 0 || rr >= ny) { continue; }
+                    for (dc = -1; dc <= 1; dc++) {
+                        var cc = c + dc;
+                        if (cc >= 0 && cc < nx && ring[rr * nx + cc] === 0) { hit = true; break; }
+                    }
+                }
+                if (hit) { prev.push(i); }
+            }
+        }
+        prev.forEach(function (j) { ring[j] = 1; });
+        cells = prev.slice();
+        for (k = 2; k <= N; k++) {                       // rings 2..N: unreached neighbours of the last ring
+            var next = [];
+            for (var p = 0; p < prev.length; p++) {
+                var j0 = prev[p], r0 = (j0 / nx) | 0, c0 = j0 - r0 * nx;
+                for (dr = -1; dr <= 1; dr++) {
+                    var r1 = r0 + dr;
+                    if (r1 < 0 || r1 >= ny) { continue; }
+                    for (dc = -1; dc <= 1; dc++) {
+                        var c1 = c0 + dc, j1 = r1 * nx + c1;
+                        if (c1 >= 0 && c1 < nx && ring[j1] === 255) { ring[j1] = k; next.push(j1); }
+                    }
+                }
+            }
+            cells = cells.concat(next);
+            prev = next;
+        }
+        var T = cells.length, start = new Int32Array(T + 1), nb = [];
+        for (var t = 0; t < T; t++) {
+            i = cells[t];
+            var ri = (i / nx) | 0, ci = i - ri * nx, kr = ring[i];
+            start[t] = nb.length;
+            for (dr = -1; dr <= 1; dr++) {
+                var r2 = ri + dr;
+                if (r2 < 0 || r2 >= ny) { continue; }
+                for (dc = -1; dc <= 1; dc++) {
+                    var c2 = ci + dc, j2 = r2 * nx + c2;
+                    if ((dr || dc) && c2 >= 0 && c2 < nx && ring[j2] < kr) { nb.push(j2); }
+                }
+            }
+        }
+        start[T] = nb.length;
+        S.stats.planMs = Math.round((now() - t0) * 10) / 10;
+        return { cells: new Int32Array(cells), start: start, nb: new Int32Array(nb), rings: N, ring: ring };
+    }
+    function fillSig() { return S.fillOn && S.plan ? S.planGen : 0; }
+    // The coast fill is drawn faded (Luyen, Oct 17): washed out toward gray and a little see-through, so water the
+    // satellite has no reading for (narrow bays, the last km to the shore) reads as an estimate, not a measurement.
+    var FILL_FADE = 0.62, FILL_ALPHA = 0.78;
+    // How faded a fill cell is: graded by its ring (1 = next to a reading, lightly; the last ring fully), so the
+    // fade blends into the measured water instead of stepping at the cell edges.
+    function fillW(i) { var P = S.plan, r = P ? P.ring[i] : 0; return S.fillOn && P && r > 0 && r <= P.rings ? (r + 1) / (P.rings + 1) : 0; }
+    function fade(col, f) {                              // f: 0 (as measured) .. 1 (all fill)
+        if (!f) { return col; }
+        var p = unpack(col), L = 0.3 * p[0] + 0.59 * p[1] + 0.11 * p[2], m = FILL_FADE * f;
+        return pack((p[0] + (L - p[0]) * m) | 0, (p[1] + (L - p[1]) * m) | 0, (p[2] + (L - p[2]) * m) | 0,
+                    (p[3] * (1 - (1 - FILL_ALPHA) * f)) | 0);
+    }
+    // The day's codes as drawn: water as measured, plus the fill under the coast while the coastline is on.
+    function dispCodes(d) {
+        var w = S.week;
+        if (!S.fillOn || !S.plan) { return w.days[d]; }
+        var hit = S.disp[d];
+        if (hit) { return hit; }
+        var t0 = now(), P = S.plan, out = new Uint16Array(w.days[d]), cells = P.cells, st = P.start, nb = P.nb;
+        for (var t = 0; t < cells.length; t++) {
+            var sum = 0, cnt = 0;
+            for (var j = st[t]; j < st[t + 1]; j++) {
+                var v = out[nb[j]];
+                if (v !== NODATA) { sum += v; cnt++; }
+            }
+            out[cells[t]] = cnt ? Math.round(sum / cnt) : NODATA;
+        }
+        S.disp[d] = out;
+        stat(S.stats.fillMs, now() - t0);
+        return out;
+    }
+    // The coastline (assets/sstland.js) arrived, or a week did while it was in: fill on, land cover per cell (for
+    // the isotherm labels), every cached picture redone.
+    function landChanged() {
+        var Land = window.SSTLand, w = S.week;
+        if (!Land || !Land.ready() || !w) { return; }
+        if (!S.plan || S.plan.week !== w) {
+            S.plan = buildPlan(w);
+            S.plan.week = w;
+            S.planGen++;
+            S.disp = {};
+            dropImages();
+            S.interp = null; S.ival = null;
+            S.landGrid = null;
+            landGridLater(w);
+        }
+        if (!S.fillOn) { S.fillOn = true; dropImages(); S.interp = null; S.ival = null; }
+    }
+    // Land cover per grid cell from the coastline (isotherm labels stay off land), when the browser is idle: it
+    // takes ~15 ms (~65 ms on a slow phone), once per week. Until then labels only avoid the week's own mask.
+    function landGridLater(w) {
+        var idle = window.requestIdleCallback || function (fn) { return setTimeout(fn, 200); };
+        idle(function () {
+            var Land = window.SSTLand;
+            if (S.week !== w || S.landGrid || !Land || !Land.ready()) { return; }
+            var t0 = now();
+            try { S.landGrid = Land.rasterize(w.h); } catch (e) { S.landGrid = null; }
+            S.stats.landGridMs = Math.round((now() - t0) * 10) / 10;
+            S.labels = null;
+            if (S.opts.isotherms) { S.comp = null; redraw(); }
+        }, { timeout: 3000 });
+    }
+    function hookLand() {
+        var Land = window.SSTLand;
+        if (!Land || S.landOff) { return; }
+        S.landOff = Land.on("change", function () { landChanged(); redraw(); });
+        Land.start();
+        landChanged();
+    }
+
     // ------------------------------------------------------- per-day images --
     function dropImages() { S.img = {}; S.imgOrder = []; }
     function dayImage(d) {
         var w = S.week, br = S.opts.breaks && S.analysis[d] ? S.analysis[d].breakA : null;
-        var sig = S.lutSig + "|" + (br ? 1 : 0);
+        var sig = S.lutSig + "|" + (br ? 1 : 0) + "|" + fillSig();
         var hit = S.img[d];
         if (hit && hit.sig === sig) { return hit.canvas; }
         var t0 = now(), h = w.h, nx = h.nx, ny = h.ny, n = nx * ny;
@@ -268,9 +424,11 @@
             S.imgData = g.createImageData(nx, ny);
             S.imgBuf = new Uint32Array(S.imgData.data.buffer);
         }
-        var out = S.imgBuf, codes = w.days[d], lut = S.lut, i;
+        var out = S.imgBuf, codes = dispCodes(d), lut = S.lut, i;
+        var faded = fillSig() !== 0;
         if (!br) {
             for (i = 0; i < n; i++) { out[i] = lut[codes[i]]; }
+            if (faded) { for (var t = 0, fc = S.plan.cells; t < fc.length; t++) { var j = fc[t]; if (out[j]) { out[j] = fade(out[j], fillW(j)); } } }
         } else {
             for (i = 0; i < n; i++) {
                 var code = codes[i], a = br[i];
@@ -280,6 +438,7 @@
                 out[i] = pack((p[0] + (255 - p[0]) * a / 255) | 0, (p[1] + (255 - p[1]) * a / 255) | 0,
                               (p[2] + (255 - p[2]) * a / 255) | 0, 255);
             }
+            if (faded) { for (var t2 = 0, fc2 = S.plan.cells; t2 < fc2.length; t2++) { var j2 = fc2[t2]; if (out[j2]) { out[j2] = fade(out[j2], fillW(j2)); } } }
         }
         g.putImageData(S.imgData, 0, 0);
         S.img[d] = { canvas: cv, sig: sig };
@@ -293,13 +452,12 @@
 
     // ------------------------------------------------------------- drawing --
     function retina() { return (window.L && L.Browser && L.Browser.retina) ? 2 : 1; }
-    function drawDay(ctx, map, d, alpha, b0) {
+    function drawStrips(ctx, map, d, b0, rough) {
         var w = S.week, h = w.h, cv = dayImage(d);
         var k = 256 * Math.pow(2, map.getZoom()), po = map.getPixelOrigin(), m = retina();
         var x0 = worldX(h.edgeW) * k / 256 - po.x, x1 = worldX(h.edgeE) * k / 256 - po.x;
         var top = b0.min.y, bottom = b0.max.y;
-        ctx.globalAlpha = alpha;
-        ctx.imageSmoothingEnabled = !S.opts.stepped;
+        ctx.imageSmoothingEnabled = !S.opts.stepped && !rough;     // rough: the padding, seen only mid-pan
         var snap = function (y) { return Math.round((y - b0.min.y) * m) / m + b0.min.y; };
         var yPrev = snap(worldY(h.edgeN) * k / 256 - po.y);
         for (var r0 = 0; r0 < h.ny; r0 += STRIP_ROWS) {
@@ -309,7 +467,278 @@
             if (y1 <= top || y0 >= bottom || y1 <= y0) { continue; }
             ctx.drawImage(cv, 0, r0, h.nx, r1 - r0, x0, y0, x1 - x0, y1 - y0);
         }
+    }
+    // Zoomed past the grid: the part of the grid in the visible map, interpolated bilinearly between cell centres
+    // (stepped bands then follow the temperature lines instead of the cells). Where some of the four cells around a
+    // pixel are masked, the others are averaged by their weights, and the pixel is drawn where they weigh at least
+    // a quarter (the edge of the data is then a smooth curve, antialiased). Two steps, each cached per view and day:
+    // the values (interpValues: the bilinear work, ~10 ms on a slow phone), then the colors through the color table
+    // (interpImage: a few ms), so a palette or range change only redoes the second.
+    var IV_SCALE = 8, IV_NONE = 65535;                    // values in 1/8 code steps (0.0125 F); none = transparent
+    function cellPx(map) { return S.week ? S.week.h.dlon * 256 * Math.pow(2, map.getZoom()) / 360 : 0; }
+    function interpView(layer) {                          // the visible part of the grid, layer px; null if none
+        var map = layer._map, h = S.week.h, k = 256 * Math.pow(2, map.getZoom()), po = map.getPixelOrigin();
+        var size = map.getSize(), v0 = map.containerPointToLayerPoint([0, 0]);
+        var gx0 = worldX(h.edgeW) * k / 256 - po.x, gx1 = worldX(h.edgeE) * k / 256 - po.x;
+        var gy0 = worldY(h.edgeN) * k / 256 - po.y, gy1 = worldY(h.edgeS) * k / 256 - po.y;
+        var X0 = Math.floor(Math.max(v0.x, gx0)), X1 = Math.ceil(Math.min(v0.x + size.x, gx1));
+        var Y0 = Math.floor(Math.max(v0.y, gy0)), Y1 = Math.ceil(Math.min(v0.y + size.y, gy1));
+        if (X1 <= X0 || Y1 <= Y0) { return null; }
+        return { X0: X0, Y0: Y0, X1: X1, Y1: Y1, k: k, po: po, z: map.getZoom(),
+                 key: [map.getZoom(), X0, Y0, X1, Y1, po.x, po.y].join("|") };
+    }
+    function interpValues(layer, d, vw) {
+        var w = S.week, h = w.h, nx = h.nx, ny = h.ny, k = vw.k, po = vw.po;
+        var br = S.opts.breaks && S.analysis[d] ? S.analysis[d].breakA : null;
+        var key = [vw.key, S.opts.stepped ? 1 : 0, fillSig()].join("|");
+        if (!S.ival || S.ival.key !== key) { S.ival = { key: key, days: {}, order: [] }; }
+        var hit = S.ival.days[d];
+        if (hit && hit.br === br) { return hit; }
+        var t0 = now(), X0 = vw.X0, Y0 = vw.Y0, W = vw.X1 - X0, H = vw.Y1 - Y0;
+        var budget = clamp(INTERP_TARGET_MS * 1e6 / S.nsPerPx, 150000, INTERP_BUDGET);
+        var rs = Math.min(retina(), Math.sqrt(budget / (W * H)));     // output pixels per CSS px
+        var wo = Math.max(1, Math.round(W * rs)), ho = Math.max(1, Math.round(H * rs));
+        var sx = W / wo, sy = H / ho;
+        var cols0 = new Int32Array(wo), colsF = new Float32Array(wo), colIn = new Uint8Array(wo);
+        for (var ox = 0; ox < wo; ox++) {
+            var lon = (X0 + (ox + 0.5) * sx + po.x) / k * 360 - 180, fc = (lon - h.lonW) / h.dlon;
+            colIn[ox] = fc >= -0.5 && fc <= nx - 0.5 ? 1 : 0;
+            var c0 = clamp(Math.floor(fc), 0, nx - 2);
+            cols0[ox] = c0;
+            colsF[ox] = clamp(fc - c0, 0, 1);
+        }
+        var rows0 = new Int32Array(ho), rowsF = new Float32Array(ho), rowIn = new Uint8Array(ho);
+        for (var oy = 0; oy < ho; oy++) {
+            var wyp = Y0 + (oy + 0.5) * sy + po.y;
+            var lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * wyp / k))) * 180 / Math.PI;
+            var fr = (h.latN - lat) / h.dlat;
+            rowIn[oy] = fr >= -0.5 && fr <= ny - 0.5 ? 1 : 0;
+            rows0[oy] = clamp(Math.floor(fr), 0, ny - 2);
+            rowsF[oy] = clamp(fr - rows0[oy], 0, 1);
+        }
+        var codes = dispCodes(d), n = wo * ho;
+        var vals = new Uint16Array(n), alpha = new Uint8Array(n), brk = br ? new Uint8Array(n) : null;
+        var fadeOn = fillSig() !== 0, fadeW = fadeOn ? new Uint8Array(n) : null;
+        vals.fill(IV_NONE);
+        var aaK = h.dlon * k / 360 / sx;                     // output pixels per cell, for the edge's antialiasing
+        // Stepped: the bands come from the field smoothed as the isotherms are (analysisWorker), over the cells in
+        // view, so a band's edge is the temperature line itself instead of following 0.1 F noise cell by cell where
+        // the water is nearly even. Smooth colors use the cells as they are.
+        var sm = null, swR = 0, swC = 0, swW = 0;
+        if (S.opts.stepped) {
+            var sig = h.whole ? 3.0 : 1.3, R = Math.ceil(3 * sig) + 1;
+            var cr0 = clamp(rows0[0] - R, 0, ny - 1), cr1 = clamp(rows0[ho - 1] + 1 + R, 0, ny - 1);
+            var cc0 = clamp(cols0[0] - R, 0, nx - 1), cc1 = clamp(cols0[wo - 1] + 1 + R, 0, nx - 1);
+            sm = smoothWindow(codes, h, cr0, cr1, cc0, cc1, sig);
+            swR = cr0; swC = cc0; swW = cc1 - cc0 + 1;
+        }
+        for (oy = 0; oy < ho; oy++) {
+            if (!rowIn[oy]) { continue; }
+            var r0 = rows0[oy], fy = rowsF[oy], gy = 1 - fy;
+            var rowA = r0 * nx, rowB = rowA + nx, o = oy * wo, srA = (r0 - swR) * swW - swC, srB = srA + swW;
+            for (ox = 0; ox < wo; ox++) {
+                if (!colIn[ox]) { continue; }
+                var cA = cols0[ox], fx = colsF[ox], gx = 1 - fx;
+                var ia = rowA + cA, ib = ia + 1, ic = rowB + cA, id = ic + 1;
+                var a = codes[ia], b = codes[ib], c = codes[ic], e = codes[id];
+                var wa = gx * gy, wb = fx * gy, wc = gx * fy, we = fx * fy;
+                var sw = 0, sv = 0;
+                if (sm) {
+                    if (a !== NODATA) { sw += wa; sv += wa * sm[srA + cA]; }
+                    if (b !== NODATA) { sw += wb; sv += wb * sm[srA + cA + 1]; }
+                    if (c !== NODATA) { sw += wc; sv += wc * sm[srB + cA]; }
+                    if (e !== NODATA) { sw += we; sv += we * sm[srB + cA + 1]; }
+                } else {
+                    if (a !== NODATA) { sw += wa; sv += wa * a; }
+                    if (b !== NODATA) { sw += wb; sv += wb * b; }
+                    if (c !== NODATA) { sw += wc; sv += wc * c; }
+                    if (e !== NODATA) { sw += we; sv += we * e; }
+                }
+                if (sw <= 0) { continue; }
+                var al = (sw - 0.25) * aaK + 0.5;
+                if (al <= 0) { continue; }
+                var v = (sv / sw) * IV_SCALE + 0.5;
+                vals[o + ox] = v < 0 ? 0 : (v > 65534 ? 65534 : v | 0);
+                alpha[o + ox] = al >= 1 ? 255 : (al * 255) | 0;
+                if (brk) {
+                    brk[o + ox] = ((a !== NODATA ? wa * br[ia] : 0) + (b !== NODATA ? wb * br[ib] : 0) +
+                                   (c !== NODATA ? wc * br[ic] : 0) + (e !== NODATA ? we * br[id] : 0)) / sw;
+                }
+                if (fadeW) {
+                    fadeW[o + ox] = 255 * ((a !== NODATA ? wa * fillW(ia) : 0) + (b !== NODATA ? wb * fillW(ib) : 0) +
+                                          (c !== NODATA ? wc * fillW(ic) : 0) + (e !== NODATA ? we * fillW(id) : 0)) / sw;
+                }
+            }
+        }
+        var ms = now() - t0;
+        S.nsPerPx = clamp(0.7 * S.nsPerPx + 0.3 * (ms * 1e6 / (wo * ho)), 3, 400);
+        stat(S.stats.interpMs, ms);
+        S.stats.interpPx = [wo, ho];
+        var res = { vals: vals, alpha: alpha, brk: brk, fade: fadeW, wo: wo, ho: ho, x: X0, y: Y0, w: W, h: H, br: br };
+        S.ival.days[d] = res;
+        S.ival.order.push(d);
+        while (S.ival.order.length > 3) { delete S.ival.days[S.ival.order.shift()]; }
+        return res;
+    }
+    function interpImage(layer, d) {
+        if (!S.week) { return null; }
+        var vw = interpView(layer);
+        if (!vw) { return null; }
+        var iv = interpValues(layer, d, vw);
+        var key = [vw.key, S.lutSig, S.opts.stepped ? 1 : 0, fillSig()].join("|");
+        if (!S.interp || S.interp.key !== key) { S.interp = { key: key, days: {}, order: [] }; }
+        var hit = S.interp.days[d];
+        if (hit && hit.iv === iv) { return hit; }
+        var t0 = now(), wo = iv.wo, ho = iv.ho, n = wo * ho, lut = S.lut, vals = iv.vals, alpha = iv.alpha, brk = iv.brk;
+        var cv = document.createElement("canvas");
+        cv.width = wo; cv.height = ho;
+        var g = cv.getContext("2d"), img = g.createImageData(wo, ho), out = new Uint32Array(img.data.buffer);
+        for (var i = 0; i < n; i++) {
+            var v = vals[i];
+            if (v === IV_NONE) { continue; }
+            var col = lut[(v + IV_SCALE / 2) >> 3], al = alpha[i];
+            if (brk && brk[i]) {
+                var ba = brk[i], p = unpack(col);
+                col = pack((p[0] + (255 - p[0]) * ba / 255) | 0, (p[1] + (255 - p[1]) * ba / 255) | 0,
+                           (p[2] + (255 - p[2]) * ba / 255) | 0, 255);
+            }
+            if (al < 255) { var q = unpack(col); col = pack(q[0], q[1], q[2], al); }
+            if (iv.fade && iv.fade[i]) { col = fade(col, iv.fade[i] / 255); }
+            out[i] = col;
+        }
+        g.putImageData(img, 0, 0);
+        stat(S.stats.interpColorMs, now() - t0);
+        var res = { canvas: cv, x: iv.x, y: iv.y, w: iv.w, h: iv.h, iv: iv };
+        S.interp.days[d] = res;
+        S.interp.order.push(d);
+        while (S.interp.order.length > 3) { delete S.interp.days[S.interp.order.shift()]; }
+        return res;
+    }
+    // The codes in rows r0..r1, columns c0..c1 smoothed by a Gaussian of sigma cells, normalized over the cells
+    // that have a value (so land doesn't drag the water toward it): code units, a cell without a value keeps its own.
+    function smoothWindow(codes, h, r0, r1, c0, c1, sigma) {
+        var W = c1 - c0 + 1, H = r1 - r0 + 1, n = W * H, nx = h.nx;
+        var F = new Float32Array(n), M = new Float32Array(n), tF = new Float32Array(n), tM = new Float32Array(n);
+        var R = Math.max(1, Math.ceil(3 * sigma)), K = new Float32Array(2 * R + 1), ks = 0, x, y, j, i, q, sf, sm2;
+        for (j = -R; j <= R; j++) { K[j + R] = Math.exp(-j * j / (2 * sigma * sigma)); ks += K[j + R]; }
+        for (j = 0; j < K.length; j++) { K[j] /= ks; }
+        for (y = 0; y < H; y++) {
+            for (x = 0; x < W; x++) {
+                var v = codes[(r0 + y) * nx + c0 + x];
+                if (v !== NODATA) { F[y * W + x] = v; M[y * W + x] = 1; }
+            }
+        }
+        for (y = 0; y < H; y++) {
+            var row = y * W;
+            for (x = 0; x < W; x++) {
+                sf = 0; sm2 = 0;
+                for (j = -R; j <= R; j++) {
+                    q = x + j; q = q < 0 ? 0 : (q >= W ? W - 1 : q);
+                    sf += F[row + q] * K[j + R]; sm2 += M[row + q] * K[j + R];
+                }
+                tF[row + x] = sf; tM[row + x] = sm2;
+            }
+        }
+        var out = new Float32Array(n);
+        for (y = 0; y < H; y++) {
+            for (x = 0; x < W; x++) {
+                sf = 0; sm2 = 0;
+                for (j = -R; j <= R; j++) {
+                    q = y + j; q = q < 0 ? 0 : (q >= H ? H - 1 : q);
+                    i = q * W + x;
+                    sf += tF[i] * K[j + R]; sm2 += tM[i] * K[j + R];
+                }
+                i = y * W + x;
+                out[i] = sm2 > 0.3 ? sf / sm2 : F[i];
+            }
+        }
+        return out;
+    }
+    function drawDay(ctx, layer, d, alpha) {
+        var map = layer._map, b0 = layer._bounds;
+        var it = S.interpNow ? interpImage(layer, d) : null;
+        ctx.globalAlpha = alpha;
+        if (!it) {
+            drawStrips(ctx, map, d, b0);
+        } else {
+            ctx.save();                                     // the padding around the visible map: cells, as before
+            ctx.beginPath();
+            ctx.rect(b0.min.x, b0.min.y, b0.max.x - b0.min.x, b0.max.y - b0.min.y);
+            ctx.rect(it.x, it.y, it.w, it.h);
+            ctx.clip("evenodd");
+            drawStrips(ctx, map, d, b0, true);
+            ctx.restore();
+            ctx.globalAlpha = alpha;
+            ctx.imageSmoothingEnabled = true;
+            ctx.drawImage(it.canvas, it.x, it.y, it.w, it.h);
+        }
         ctx.globalAlpha = 1;
+    }
+
+    // The coastline over the SST (assets/sstland.js). Per view, the land in view as one path (pieces overlap, so
+    // filling them together leaves no seams), drawn into each day's picture after its colors and isotherms: the
+    // land is cleared ("destination-out"), so the SST stops at a smooth, antialiased coastline at full resolution and
+    // the basemap shows on land as it is (ponds, rivers, roads, lighter built-up areas). Islets (under 1 km2) are
+    // painted in the basemap's land color over the SST instead: the basemap leaves many out. From zoom 11 (a pixel is
+    // under 60 m there), where the basemap's coast and ours can differ by a pixel or two, a rim of the basemap's
+    // land color RIM px wide is laid under what's left ("destination-over"), so it shows only where the SST isn't:
+    // on land along the coast, covering any sliver of the basemap's water. It is stroked from the level below
+    // (fewer vertices), widened by that level's tolerance.
+    var RIM_ZOOM = 11;
+    function landLayer(layer) {
+        var Land = window.SSTLand;
+        if (!S.fillOn || !Land || !Land.ready()) { return null; }
+        var map = layer._map, b0 = layer._bounds, c = layer._container, z = map.getZoom(), k = Math.pow(2, z);
+        var po = map.getPixelOrigin();
+        var v = Land.view(z, [(b0.min.x + po.x) / k, (b0.min.y + po.y) / k, (b0.max.x + po.x) / k, (b0.max.y + po.y) / k]);
+        if (!v) { return null; }
+        var key = [z, b0.min.x, b0.min.y, po.x, po.y, c.width, c.height, v.key].join("|");
+        if (S.landCache && S.landCache.key === key) { return S.landCache; }
+        var t0 = now(), bw = b0.max.x - b0.min.x;
+        var res = { key: key, level: v.level, rimLevel: null, tiles: v.tiles.length, color: Land.color(z),
+                    m: c.width / Math.max(1, bw), k: k, ox: b0.min.x + po.x, oy: b0.min.y + po.y,
+                    path: null, islets: null, coast: null, rimW: 0 };
+        if (v.tiles.length) {
+            res.path = new Path2D();
+            v.tiles.forEach(function (t) {
+                res.path.addPath(t.fill);
+                if (t.islets) { res.islets = res.islets || new Path2D(); res.islets.addPath(t.islets); }
+            });
+            if (z >= (S.rimZoom || RIM_ZOOM)) {
+                var mpp = 156543.03 * Math.cos(map.getCenter().lat * Math.PI / 180) / k;   // metres per CSS px
+                res.coast = new Path2D();
+                v.rim.tiles.forEach(function (t) { res.coast.addPath(t.coast); });
+                res.rimW = 2 * (Land.rimPx + v.rim.tol / mpp) / k;
+                res.rimLevel = v.rim.level;
+            }
+        }
+        S.landCache = res;
+        stat(S.stats.landMs, now() - t0);
+        return res;
+    }
+    function drawLand(ctx, layer) {
+        var land = landLayer(layer);
+        if (!land || !land.path) { return; }
+        ctx.save();
+        ctx.setTransform(land.m * land.k, 0, 0, land.m * land.k, -land.ox * land.m, -land.oy * land.m);
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = "destination-out";
+        ctx.fillStyle = "#000";
+        ctx.fill(land.path, "nonzero");
+        if (land.islets) {                              // small islands: land color over the SST
+            ctx.globalCompositeOperation = "source-atop";
+            ctx.fillStyle = land.color;
+            ctx.fill(land.islets, "nonzero");
+        }
+        if (land.coast) {
+            ctx.globalCompositeOperation = "destination-over";
+            ctx.strokeStyle = land.color;
+            ctx.lineWidth = land.rimW;
+            ctx.lineJoin = "bevel";                     // its edge lies on land color or under the SST: the
+            ctx.lineCap = "butt";                       // cheaper stroke doesn't show
+            ctx.stroke(land.coast);
+        }
+        ctx.restore();
     }
 
     function isoColor(T) {
@@ -335,29 +764,60 @@
         });
         return an.paths;
     }
-    // A day's isotherms and labels, rendered once per view (zoom, position, size, colors) into a canvas the size of
-    // the layer's, so a crossfade only composites two images per frame instead of stroking every level twice.
-    function isoLayer(layer, d) {
-        var an = S.analysis[d], map = layer._map, b0 = layer._bounds, c = layer._container;
-        if (!an || !an.iso) { return null; }
-        var key = [map.getZoom(), b0.min.x, b0.min.y, c.width, c.height, S.lutSig].join("|");
-        if (!S.isoCache || S.isoCache.key !== key) { S.isoCache = { key: key, days: {}, order: [] }; }
-        var hit = S.isoCache.days[d];
-        if (hit && hit.an === an) { return hit.canvas; }
-        var cv = document.createElement("canvas");
-        cv.width = c.width;
-        cv.height = c.height;
+    // A day as drawn in one view (zoom, position, size, colors, coastline): its colors (cells, or interpolated when
+    // zoomed past the grid), isotherms and labels, and the coastline over them, on a canvas the size of the layer's.
+    // Built once per view and day (the next and previous days while the browser is idle), so every frame, also
+    // mid-crossfade, only composites one or two images. At most three of these (two on a big retina screen: each is
+    // the canvas's size, ~30 MB at 1440 x 900 @2x); a new view reuses the old canvases.
+    function compKeep(c) { return c.width * c.height > 4e6 ? 2 : 3; }
+    function compLayer(layer, d) {
+        var map = layer._map, b0 = layer._bounds, c = layer._container;
+        var an = S.analysis[d] || null;
+        var br = S.opts.breaks && an && an.breakA ? an.breakA : null;
+        var iso = S.opts.isotherms && an && an.iso ? an.iso : null;
+        var land = landLayer(layer);
+        var key = [map.getZoom(), b0.min.x, b0.min.y, c.width, c.height, S.lutSig, fillSig(), S.interpNow ? 1 : 0,
+                   land ? land.key : "-", S.opts.isotherms ? 1 : 0, S.opts.breaks ? 1 : 0].join("|");
+        if (!S.comp || S.comp.key !== key) {
+            var spare = [];
+            if (S.comp) {
+                spare = S.comp.spare;
+                S.comp.order.forEach(function (k) { spare.push(S.comp.days[k].canvas); });
+            }
+            S.comp = { key: key, days: {}, order: [], spare: spare.slice(0, compKeep(c)) };
+        }
+        var hit = S.comp.days[d];
+        if (hit && hit.br === br && hit.iso === iso) { return hit.canvas; }
+        var t0 = now();
+        var cv = hit ? hit.canvas : (S.comp.spare.pop() || document.createElement("canvas"));
+        if (cv.width !== c.width || cv.height !== c.height) { cv.width = c.width; cv.height = c.height; }
         var g = cv.getContext("2d"), m = c.width / Math.max(1, b0.max.x - b0.min.x);
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        g.globalAlpha = 1;
+        g.globalCompositeOperation = "source-over";
+        g.clearRect(0, 0, cv.width, cv.height);
         g.setTransform(m, 0, 0, m, -b0.min.x * m, -b0.min.y * m);   // layer points, as the layer's own context
-        drawIsotherms(g, map, d, 1);
-        S.isoCache.days[d] = { canvas: cv, an: an };
-        S.isoCache.order.push(d);
-        while (S.isoCache.order.length > 3) { delete S.isoCache.days[S.isoCache.order.shift()]; }
+        drawDay(g, layer, d, 1);
+        var t1 = now();
+        if (iso) { drawIsotherms(g, map, d, 1); }
+        var t2 = now();
+        drawLand(g, layer);
+        S.stats.compParts = { day: t1 - t0, iso: t2 - t1, land: now() - t2 };
+        S.comp.days[d] = { canvas: cv, br: br, iso: iso };
+        var at = S.comp.order.indexOf(d);
+        if (at >= 0) { S.comp.order.splice(at, 1); }
+        S.comp.order.push(d);
+        while (S.comp.order.length > compKeep(c)) {
+            var old = S.comp.order.shift();
+            if (S.comp.spare.length < 1) { S.comp.spare.push(S.comp.days[old].canvas); }
+            delete S.comp.days[old];
+        }
+        stat(S.stats.compMs, now() - t0);
         return cv;
     }
-    function drawIsoLayer(ctx, layer, d, alpha) {
-        var cv = isoLayer(layer, d), b0 = layer._bounds;
-        if (!cv || alpha <= 0) { return; }
+    function drawComp(ctx, layer, d, alpha) {
+        var cv = compLayer(layer, d), b0 = layer._bounds;
+        if (alpha <= 0) { return; }
         ctx.globalAlpha = alpha;
         ctx.drawImage(cv, b0.min.x, b0.min.y, b0.max.x - b0.min.x, b0.max.y - b0.min.y);
         ctx.globalAlpha = 1;
@@ -396,7 +856,8 @@
         function water(x, y) {                           // container px -> grid cell -> water?
             var ll = map.containerPointToLatLng([x, y]);
             var r = Math.round((h.latN - ll.lat) / h.dlat), c = Math.round((ll.lng - h.lonW) / h.dlon);
-            return r >= 0 && r < h.ny && c >= 0 && c < h.nx && w.mask[r * h.nx + c] === 0;
+            return r >= 0 && r < h.ny && c >= 0 && c < h.nx && w.mask[r * h.nx + c] === 0 &&
+                (!S.landGrid || S.landGrid[r * h.nx + c] < 96);      // and not on the coastline's land
         }
         an.iso.forEach(function (lv) {
             if (lv.T % 2 !== 0) { return; }
@@ -478,18 +939,17 @@
     function render(layer) {
         var map = layer._map, ctx = layer._ctx, w = S.week;
         if (!map || !ctx || !w) { return; }
-        var t0 = now(), b0 = layer._bounds, t = fadeT();
+        var t0 = now(), t = fadeT();
         if (t >= 1) { S.prevDay = null; }
         buildLut();
+        hookLand();
+        landChanged();
+        S.interpNow = !S.interpOff && cellPx(map) >= INTERP_PX;      // interpOff: tests and tools/perf only
         if (S.prevDay !== null && S.prevDay < w.days.length) {
-            drawDay(ctx, map, S.prevDay, 1, b0);
-            drawDay(ctx, map, S.day, t, b0);
+            drawComp(ctx, layer, S.prevDay, 1);
+            drawComp(ctx, layer, S.day, t);
         } else {
-            drawDay(ctx, map, S.day, 1, b0);
-        }
-        if (S.opts.isotherms) {
-            if (S.prevDay !== null) { drawIsoLayer(ctx, layer, S.prevDay, 1 - t); }
-            drawIsoLayer(ctx, layer, S.day, S.prevDay !== null ? t : 1);
+            drawComp(ctx, layer, S.day, 1);
         }
         var dt = now() - t0;
         if (S.prevDay !== null) { stat(S.stats.fadeFrameMs, dt); } else { stat(S.stats.drawMs, dt); prewarm(layer); }
@@ -500,19 +960,20 @@
     function prewarm(layer) {
         clearTimeout(S.prewarmTimer);
         var idle = window.requestIdleCallback || function (fn) { return setTimeout(fn, 60); };
+        var gen = (S.prewarmGen = (S.prewarmGen || 0) + 1);
         S.prewarmTimer = setTimeout(function () {
-            idle(function () {
-                var w = S.week;
-                if (!w || S.prevDay !== null || layer !== S.layer || !layer._map) { return; }
-                var n = w.days.length;
-                [(S.day + 1) % n, (S.day + n - 1) % n].forEach(function (d) {
-                    if (d === S.day || S.prevDay !== null) { return; }
-                    dayImage(d);
-                    if (S.opts.isotherms) { isoLayer(layer, d); }
+            var w = S.week;
+            if (!w) { return; }
+            var n = w.days.length, todo = [(S.day + 1) % n, (S.day + n - 1) % n, S.day];   // the day on the map last
+            (function next() {                       // one day per idle slot: a slow phone takes ~40 ms for one
+                if (gen !== S.prewarmGen || !todo.length) { return; }
+                idle(function () {
+                    if (gen !== S.prewarmGen || S.week !== w || S.prevDay !== null || layer !== S.layer || !layer._map) { return; }
+                    var d = todo.shift();
+                    if (d !== S.day || !todo.length) { compLayer(layer, d); }
+                    next();
                 });
-                if (S.img[S.day] === undefined) { dayImage(S.day); }   // keep the day on the map cached last
-                if (S.opts.isotherms) { isoLayer(layer, S.day); }
-            });
+            })();
         }, 120);
     }
 
@@ -815,7 +1276,9 @@
         S.week = w;
         S.payload = payload;
         S.url = url;
-        S.img = {}; S.imgOrder = []; S.analysis = {}; S.queued = {}; S.labels = null; S.isoCache = null;
+        S.img = {}; S.imgOrder = []; S.analysis = {}; S.queued = {}; S.labels = null; S.comp = null;
+        S.plan = null; S.disp = {}; S.interp = null; S.ival = null; S.landGrid = null;
+        landChanged();
         var hs = histogramOf(w);
         S.hist = hs.hist;
         S.histTotal = hs.total;
@@ -944,6 +1407,14 @@
         if (f === null) { return null; }
         return { f: f, day: S.day, date: (S.payload && S.payload.dates || [])[S.day] || null, estimate: null };
     }
+    // A point the coast fill colors (water near shore MUR has no value for): the tap card says so instead of
+    // "No data here". Never a temperature: the fill is for drawing only.
+    function nearShore(lat, lon) {
+        var i = cellAt(lat, lon);
+        if (i < 0 || !S.fillOn || !S.plan || S.week.mask[i] === 0) { return false; }
+        var g = S.landGrid;
+        return S.plan.ring[i] > 0 && S.plan.ring[i] !== 255 && (!g || g[i] < 128);
+    }
     function weekValuesAt(lat, lon) {
         var w = S.week;
         if (!w) { return []; }
@@ -1009,7 +1480,13 @@
             vmin: r.min, vmax: r.max,
             auto: S.auto ? { min: S.auto.min, max: S.auto.max } : null,
             options: { stepped: S.opts.stepped, isotherms: S.opts.isotherms, breaks: S.opts.breaks,
-                       opacity: S.opts.opacity }
+                       opacity: S.opts.opacity },
+            // the coast (docs/coast-progress.md): coastline in, fill under it (rings of cells), the land level drawn,
+            // and whether the view is interpolated (zoomed past the grid)
+            coast: { land: !!(window.SSTLand && window.SSTLand.ready()), fill: S.fillOn && !!S.plan,
+                     rings: S.plan ? S.plan.rings : 0, cells: S.plan ? S.plan.cells.length : 0,
+                     level: S.landCache ? S.landCache.level : null },
+            interp: S.interpNow
         };
     }
 
@@ -1025,6 +1502,7 @@
         detach();
         S.map = map;
         map.on("unload", function () { if (S.map === map) { detach(); } });
+        try { hookLand(); } catch (e) { if (window.console) { console.error("SSTEngine coastline", e); } }
         try { ensureLayer(); redraw(); } catch (e) { if (window.console) { console.error("SSTEngine attach", e); } }
     }
 
@@ -1051,6 +1529,7 @@
         setOptions: setOptions,
         valueAt: valueAt,
         weekValuesAt: weekValuesAt,
+        nearShore: nearShore,
         histogram: histogram,
         on: on,
         getRange: getRange,
@@ -1059,6 +1538,8 @@
         palettes: PALETTES,
         _stats: S.stats,
         _state: S,
+        _debug: { landLayer: landLayer, drawLand: drawLand, compLayer: compLayer, interpImage: interpImage,
+                  dispCodes: dispCodes },
         _setup: true
     };
 })();

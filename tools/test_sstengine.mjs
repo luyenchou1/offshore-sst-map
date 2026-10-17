@@ -9,8 +9,10 @@
 // corridor). The Python decode of the same bytes gives the expected values. Checks: the week draws (canvas pixels =
 // SSTEngine.colorFor of the value there), readouts at known points and land, palettes, ranges, stepped bands,
 // isotherms and labels, the break highlight at the front only, "haze" ignored, the day crossfade (and none with
-// reduced motion), histogram and Auto range = the server's, Fit to view, events, an old week on its own grid, and a
-// week that can't download ("error"). Needs Playwright (as tools/smoke_sst.mjs) and the venv. Exit 1 on a failure.
+// reduced motion), histogram and Auto range = the server's, Fit to view, events, an old week on its own grid, a
+// week that can't download ("error"); and the coast: the fill under the coastline never reaches a reading, filled
+// cells drawn under water and cleared on land, the SST cleared on the coastline's land (no isotherm there), the rim
+// from zoom 11, the panes' order, and interpolation off at low zoom and on (bilinear) at high zoom. Needs Playwright (as tools/smoke_sst.mjs) and the venv. Exit 1 on a failure.
 
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, openSync, mkdirSync } from 'node:fs';
@@ -359,6 +361,169 @@ const err = await page.evaluate(async () => {
     return { msg: await got, still: E.state().ready };
 });
 check('a grid that won\'t download fires "error" and leaves the last week drawn', /404/.test(err.msg) && err.still, JSON.stringify(err));
+// ---- the coast (docs/coast-progress.md): fill under the coastline, the coastline itself, interpolation ----
+await page.evaluate(async O => {                        // back to the default week, day 7, everything off
+    const E = window.SSTEngine;
+    const ready = new Promise(r => { const off = E.on('ready', ev => { off(); r(ev); }); });
+    E.setWeek({ dates: O.dates, grid: { url: `/api/sst/week/${O.end}.bin` } });
+    await ready;
+    E.setDay(6);
+    E.setOptions({ stepped: false, isotherms: false, breaks: false });
+    E.setRange({ mode: 'auto' });
+}, { end: F.end, dates: F.dates });
+const coast = await page.evaluate(async () => {
+    const E = window.SSTEngine, S = E._state, L = window.SSTLand;
+    for (let k = 0; k < 200 && !(L.ready() && S.plan && S.landGrid); k++) { await new Promise(r => setTimeout(r, 50)); }
+    const st = E.state().coast, h = S.week.h;
+    // masked cells the fill reaches: never a reading, but drawn where the coastline says water
+    const P = S.plan, disp = E._debug.dispCodes(6), raw = S.week.days[6], leaks = [], waterFill = [], landFill = [];
+    for (let t = 0; t < P.cells.length; t++) {
+        const i = P.cells[t], r = (i / h.nx) | 0, c = i - r * h.nx, lat = h.latN - r * h.dlat, lon = h.lonW + c * h.dlon;
+        const v = E.valueAt(lat, lon), wk = E.weekValuesAt(lat, lon);
+        if (v !== null || wk.some(x => x !== null) || raw[i] !== 65535) { leaks.push([lat, lon, v, raw[i]]); }
+        const g = S.landGrid[i];
+        if (disp[i] !== 65535 && g === 0 && lon < -72.2 && lon > -73.6 && lat < 41.08) {
+            waterFill.push({ lat, lon, f: (h.baseT + disp[i] * h.stepT) / 10 });       // under Long Island Sound
+        }
+        if (disp[i] !== 65535 && g === 255 && lat > 41.1 && lat < 42.0) { landFill.push({ lat, lon }); }   // Connecticut
+    }
+    return { st, cells: P.cells.length, rings: P.rings, leaks: leaks.slice(0, 5), nLeaks: leaks.length,
+             waterFill: waterFill.slice(0, 400), landFill: landFill.slice(0, 400), l0: L._state.url,
+             hist: E.histogram().total };
+});
+check('coastline: level 0 loads with the page (versioned URL) and the fill under the coast is on',
+      coast.st.land && coast.st.fill && coast.rings === 1 && coast.cells > 300 && /\/api\/sst\/land\/0\.json\?v=/.test(coast.l0),
+      JSON.stringify({ st: coast.st, cells: coast.cells, l0: coast.l0 }));
+check(`fill never reaches a reading: valueAt / weekValuesAt null at all ${coast.cells} filled cells; histogram unchanged`,
+      coast.nLeaks === 0 && coast.hist === F.water, JSON.stringify({ leaks: coast.leaks, n: coast.nLeaks, hist: coast.hist }));
+// drawn: filled cells under Long Island Sound show their color faded; filled cells on land are cleared (zoom 9, no rim)
+const filled = await page.evaluate(async C => {
+    const E = window.SSTEngine;
+    await window.__go(41.03, -72.9, 9);
+    const inView = p => window.SST._state.map.getBounds().pad(-0.05).contains([p.lat, p.lon]);
+    C.waterFill = C.waterFill.filter(inView);
+    if (C.landFill.filter(inView).length < 12) { await window.__go(41.5, -72.3, 9); }
+    const landNow = C.landFill.filter(inView);
+    const pick = (a, n) => a.filter((_, k) => k % Math.max(1, Math.floor(a.length / n)) === 0).slice(0, n);
+    const land = pick(landNow, 12).map(p => { const px = window.__px(p.lat, p.lon); return { p: [p.lat, p.lon], px, ok: px[3] === 0 }; });
+    await window.__go(41.03, -72.9, 9);
+    const water = pick(C.waterFill, 12).map(p => {
+        const px = window.__px(p.lat, p.lon), c = E.colorFor(p.f);
+        // drawn, but faded (Oct 17): see-through and grayer than the full color, never a measured look
+        const sat = q => Math.max(q[0], q[1], q[2]) - Math.min(q[0], q[1], q[2]);
+        return { p: [p.lat, p.lon], px, c, ok: px[3] > 140 && px[3] < 255 && sat(px) < sat(c) };
+    });
+    const shore = { water: water.map(d => E.nearShore(d.p[0], d.p[1])), land: land.map(d => E.nearShore(d.p[0], d.p[1])),
+                    sea: E.nearShore(39.5, -71.0), inland: E.nearShore(41.6, -73.6) };
+    return { water, land, shore, interp: E.state().interp };
+}, coast);
+check('nearShore: true in filled water (the tap card says no satellite reading this close to shore), false at sea and on land',
+      filled.shore.water.every(Boolean) && !filled.shore.land.some(Boolean) && !filled.shore.sea && !filled.shore.inland,
+      JSON.stringify(filled.shore));
+check('filled cells under the Sound are drawn faded (see-through, grayer than the full color), filled cells on the coastline\'s land are cleared',
+      filled.water.length >= 6 && filled.water.every(d => d.ok) && filled.land.length >= 6 && filled.land.every(d => d.ok),
+      JSON.stringify({ water: filled.water.filter(d => !d.ok), land: filled.land.filter(d => !d.ok), n: [filled.water.length, filled.land.length] }).slice(0, 400));
+
+// the SST stops at the coastline: the synthetic week has "water" over Long Island; the coastline clears it there, on
+// the composited canvas, with isotherms on too (no line on land); from zoom 11 a rim of land color along the shore
+const landDraw = await page.evaluate(async () => {
+    const E = window.SSTEngine, S = E._state, L = window.SSTLand, m = S.map;
+    E.setOptions({ isotherms: true });
+    await new Promise(r => { const iv = setInterval(() => { const a = S.analysis[S.day]; if (a && a.iso) { clearInterval(iv); r(); } }, 30); setTimeout(r, 20000); });
+    await window.__go(40.85, -72.9, 9);
+    const inland = [[40.85, -72.9], [40.9, -72.6], [40.82, -73.2]].map(p => window.__px(p[0], p[1]));
+    const reads = [[40.85, -72.9]].map(p => E.valueAt(p[0], p[1]));
+    // isotherm pixels vs the coastline's land, drawn into a scratch canvas with the same transform
+    const cv = S.layer._container, b0 = S.layer._bounds, k = 2 ** m.getZoom(), po = m.getPixelOrigin(), mm = cv.width / (b0.max.x - b0.min.x);
+    const withIso = window.__snap();
+    E.setOptions({ isotherms: false });
+    const without = window.__snap();
+    E.setOptions({ isotherms: true });
+    const v = L.view(m.getZoom(), [(b0.min.x + po.x) / k, (b0.min.y + po.y) / k, (b0.max.x + po.x) / k, (b0.max.y + po.y) / k]);
+    const sc = document.createElement('canvas'); sc.width = cv.width; sc.height = cv.height;
+    const g = sc.getContext('2d');
+    g.setTransform(mm * k, 0, 0, mm * k, -(b0.min.x + po.x) * mm, -(b0.min.y + po.y) * mm);
+    v.tiles.forEach(t => { g.fill(t.fill); if (t.islets) { g.fill(t.islets); } });
+    const landA = g.getImageData(0, 0, sc.width, sc.height).data;
+    let isoPx = 0, isoOnLand = 0, landPx = 0, landPainted = 0;
+    for (let i = 0; i < withIso.length; i += 4) {
+        const onLand = landA[i + 3] === 255;
+        if (onLand) { landPx++; if (withIso[i + 3] > 0) { landPainted++; } }
+        if (Math.abs(withIso[i] - without[i]) + Math.abs(withIso[i + 1] - without[i + 1]) + Math.abs(withIso[i + 2] - without[i + 2]) + Math.abs(withIso[i + 3] - without[i + 3]) > 6) {
+            isoPx++;
+            if (onLand) { isoOnLand++; }
+        }
+    }
+    // zoom 11 across the south shore of Long Island (Fire Island): water, then a rim of land color, then cleared land
+    await window.__go(40.66, -73.0, 11);
+    for (let t = 0; t < 100 && Object.keys(L._state.pending).length; t++) { await new Promise(r => setTimeout(r, 50)); }
+    S.layer._redraw();
+    const col = [], x = m.latLngToContainerPoint([40.66, -73.0]).x;
+    const c0 = m.getContainer().getBoundingClientRect(), r0 = cv.getBoundingClientRect(), ctx = cv.getContext('2d');
+    for (let y = 0; y < m.getSize().y; y++) {
+        col.push([...ctx.getImageData(Math.floor(c0.x + x - r0.left), Math.floor(c0.y + y - r0.top), 1, 1).data]);
+    }
+    const rim = col.filter(p => p[3] === 255 && Math.abs(p[0] - 0x47) <= 2 && Math.abs(p[1] - 0x47) <= 2 && Math.abs(p[2] - 0x49) <= 2).length;
+    const clear = col.filter(p => p[3] === 0).length, sst = col.filter(p => p[3] === 255).length;
+    E.setOptions({ isotherms: false });
+    return { inland, reads, isoPx, isoOnLand, landPx, landPainted, rim, clear, sst, level: E.state().coast.level,
+             panes: ['sst-pane', 'sst-depth-pane', 'sst-labels-pane', 'poi-pane', 'sst-spotlabel-pane'].map(n => +getComputedStyle(m.getPane(n)).zIndex),
+             depthCanvas: !!m.getPane('sst-depth-pane').querySelector('canvas') };
+});
+check('the coastline clears the SST on land (the week\'s own mask calls it water there), readings untouched',
+      landDraw.inland.every(p => p[3] === 0) && landDraw.reads[0] && isFinite(landDraw.reads[0].f) && landDraw.landPx > 10000 &&
+      landDraw.landPainted < landDraw.landPx * 0.002, JSON.stringify({ inland: landDraw.inland, reads: landDraw.reads, land: [landDraw.landPx, landDraw.landPainted] }));
+check('isotherms: lines drawn over the synthetic water, none on the coastline\'s land',
+      landDraw.isoPx > 500 && landDraw.isoOnLand === 0, JSON.stringify({ iso: landDraw.isoPx, onLand: landDraw.isoOnLand }));
+check('zoom 11: the level for the zoom (tiles fetched), a rim of the basemap\'s land color between the water and cleared land',
+      landDraw.level === 2 && landDraw.rim >= 1 && landDraw.rim <= 8 && landDraw.clear > 20 && landDraw.sst > 20,
+      JSON.stringify({ level: landDraw.level, rim: landDraw.rim, clear: landDraw.clear, sst: landDraw.sst }));
+check('the coastline is drawn on the SST canvas (pane 410), under depth lines (430), place names (440), spots (450, 455)',
+      landDraw.panes.join() === '410,430,440,450,455' && landDraw.depthCanvas, JSON.stringify(landDraw.panes));
+
+// interpolation: off while a cell is under 3 px wide (this grid's 0.02 degree cells: 1.8 px at zoom 7), on from
+// 3.6 px (zoom 8; MUR's 0.01 degree cells get there at zoom 9); at zoom 11 the pixel halfway between two cell
+// centres across the front shows the mean of the two
+const interp = await page.evaluate(async () => {
+    const E = window.SSTEngine;
+    await window.__go(40.0, -70.5, 7);
+    const at7 = E.state().interp, px7 = E._debug && E._state.stats.interpPx;
+    await window.__go(40.0, -70.5, 8);
+    const at8 = E.state().interp;
+    await window.__go(40.0, -70.5, 11);
+    const at11 = E.state().interp, out = [];
+    for (const [a, b] of [[40.02, 40.04], [39.96, 39.98], [40.06, 40.08]]) {
+        const va = E.valueAt(a, -70.5).f, vb = E.valueAt(b, -70.5).f, mid = window.__px((a + b) / 2, -70.5);
+        const want = E.colorFor((va + vb) / 2), ca = E.colorFor(va), cb = E.colorFor(vb);
+        out.push({ va, vb, mid: mid.slice(0, 3), want: [want[0], want[1], want[2]], ok: window.__near(mid, want, 14) &&
+                   (Math.abs(va - vb) < 0.8 || (!window.__near(mid, ca, 6) && !window.__near(mid, cb, 6))) });
+    }
+    // Stepped at zoom 11: every pixel down a column across the front is one band's color (bar a few on band edges,
+    // smoothed by the canvas), and there are several bands
+    E.setOptions({ stepped: true });
+    const m = window.SST._state.map, cv = E._state.layer._container, ctx = cv.getContext('2d');
+    E._state.layer._redraw();
+    const bands = [];
+    for (let T = 55; T <= 80; T++) { const c = E.colorFor(T + 0.5); bands.push([c[0], c[1], c[2]]); }
+    const x = m.latLngToContainerPoint([40.0, -70.5]).x, c0 = m.getContainer().getBoundingClientRect(), r0 = cv.getBoundingClientRect();
+    let off = 0, n = 0;
+    const seen = new Set();
+    for (let y = 20; y < m.getSize().y - 20; y += 2) {
+        const px = ctx.getImageData(Math.floor(c0.x + x - r0.left), Math.floor(c0.y + y - r0.top), 1, 1).data;
+        if (px[3] !== 255) { continue; }
+        n++;
+        const k = bands.findIndex(b => window.__near(px, b, 6));
+        if (k < 0) { off++; } else { seen.add(k); }
+    }
+    E.setOptions({ stepped: false });
+    await window.__go(41.0, -70.4, 7);
+    return { at7, at8, at11, out, back7: E.state().interp, stepped: { n, off, bands: seen.size } };
+});
+check('interpolation: off at zoom 7 (cells under 3 px), on at 8 and 11; mid-cell pixels show the mean of the two cells',
+      !interp.at7 && !interp.back7 && interp.at8 && interp.at11 && interp.out.every(d => d.ok), JSON.stringify(interp));
+check('interpolation + Stepped: pixels across the front are band colors (smoothed bands), several bands',
+      interp.stepped.n > 100 && interp.stepped.off <= interp.stepped.n * 0.06 && interp.stepped.bands >= 4, JSON.stringify(interp.stepped));
+
 check('no page errors', !page._errors.length, page._errors.join(' | '));
 await page.context().close();
 

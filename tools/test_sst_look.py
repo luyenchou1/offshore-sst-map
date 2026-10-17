@@ -1,6 +1,7 @@
-"""Checks for the SST look (sprint 2, lane V): the depth contours asset and its route, the Hudson Canyon spot at
-the canyon head, the /sst layout pieces assets/sstlook.js needs (Colors panel, live legend, dark basemap, the data
-element), the color presets against the designer's notes, and the How it works copy. No server, no network:
+"""Checks for the SST look (sprint 2, lane V): the depth contours asset and its route, the coastline assets
+(OpenStreetMap land, tools/build_land.py) and their route, the Hudson Canyon spot at the canyon head, the /sst
+layout pieces assets/sstlook.js needs (Colors panel, live legend, dark basemap, the data element), the color
+presets against the designer's notes, and the How it works copy. No server, no network:
 
     OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES .venv/bin/python tools/test_sst_look.py
 
@@ -111,6 +112,122 @@ def test_contours_route_gzip_etag():
     assert depth.contours_url().startswith(depth.ROUTE + "?v=") and etag.strip('"') in depth.contours_url()
 
 
+# --------------------------------------------------------------------------------------------- coastline --
+LAND_DIR = ROOT / "assets" / "sst" / "land"
+
+
+def _land(name):
+    return json.loads(gzip.decompress((LAND_DIR / f"land-{name}.json.gz").read_bytes()))
+
+
+def _rings_lonlat(piece, q, key="rings"):
+    out = []
+    for r in piece.get(key, []):
+        x = y = 0
+        ring = []
+        for i in range(0, len(r), 2):
+            x += r[i]
+            y += r[i + 1]
+            ring.append((x / q, y / q))
+        out.append(ring)
+    return out
+
+
+def _inside(pt, rings):
+    """Nonzero winding of pt (lon, lat) over rings: the browser fills with "nonzero"."""
+    lon, lat = pt
+    wn = 0
+    for ring in rings:
+        n = len(ring)
+        for i in range(n):
+            (x0, y0), (x1, y1) = ring[i], ring[(i + 1) % n]
+            if y0 <= lat < y1 and (x1 - x0) * (lat - y0) - (lon - x0) * (y1 - y0) > 0:
+                wn += 1
+            elif y1 <= lat < y0 and (x1 - x0) * (lat - y0) - (lon - x0) * (y1 - y0) < 0:
+                wn -= 1
+    return wn != 0
+
+
+def test_land_assets_small_and_complete():
+    import hashlib
+    l0_gz = (LAND_DIR / "land-0.json.gz").stat().st_size
+    assert l0_gz < 150 * 1024, f"level 0 {l0_gz / 1024:.0f} KB gzipped (budget 150)"
+    doc = _land("0")
+    assert doc["format"] == "GOLAND1" and doc["level"] == 0 and doc["box"] == [-76.0, 37.8, -64.8, 44.0]
+    assert "OpenStreetMap contributors" in doc["source"] and "ODbL" in doc["source"]
+    assert sorted(doc["index"]) == ["1", "2", "3"]
+    total = 0
+    for level, ent in doc["index"].items():
+        assert ent["zoom"] == [{"1": 10, "2": 11, "3": 12}[level]] * 2
+        for tid, (sha, size) in ent["tiles"].items():
+            body = (LAND_DIR / f"land-{level}-{tid}.json.gz").read_bytes()
+            assert len(body) == size and hashlib.sha1(body).hexdigest()[:10] == sha, (level, tid)
+            total += size
+    assert total < 1536 * 1024, f"levels 1 to 3: {total / 1024:.0f} KB gzipped (budget 1.5 MB)"
+    files = {p.name for p in LAND_DIR.glob("land-*.json.gz")}
+    want = {"land-0.json.gz"} | {f"land-{lv}-{t}.json.gz" for lv, e in doc["index"].items() for t in e["tiles"]}
+    assert files == want, files ^ want
+    # every vertex inside the box plus the margin; pieces inside their cut rectangles
+    q = doc["q"]
+    for piece in doc["tiles"]:
+        x0, y0, x1, y1 = (v / q for v in piece["clip"])
+        for ring in _rings_lonlat(piece, q) + _rings_lonlat(piece, q, "islets"):
+            for lon, lat in ring:
+                assert x0 - 1e-9 <= lon <= x1 + 1e-9 and y0 - 1e-9 <= lat <= y1 + 1e-9, (piece["id"], lon, lat)
+    assert (LAND_DIR / "README.txt").read_text().count("Open Database License") == 1
+
+
+def test_land_knows_land_from_water():
+    """Points on land and at sea, at every level (OpenStreetMap's coastline)."""
+    land = [(-72.90, 40.85), (-70.00, 41.68), (-71.60, 41.17), (-74.30, 39.80), (-70.40, 43.70)]   # Long Island,
+    water = [(-72.90, 40.60), (-71.00, 39.50), (-72.60, 41.10), (-70.55, 41.20), (-73.80, 40.55)]  # Cape Cod, Block I.
+    doc = _land("0")
+    levels = {0: doc}
+    for lv in ("1", "2", "3"):
+        for tid in ("w73n40", "w71n41", "w72n41", "w75n39", "w71n43", "w74n40", "w74n39"):
+            if tid in doc["index"][lv]["tiles"]:
+                d = _land(f"{lv}-{tid}")
+                levels.setdefault(int(lv), {"q": d["q"], "tiles": []})["tiles"].extend(d["tiles"])
+    for lv, d in levels.items():
+        rings = [r for p in d["tiles"] for r in _rings_lonlat(p, d["q"]) + _rings_lonlat(p, d["q"], "islets")]
+        for pt in land:
+            assert _inside(pt, rings), (lv, pt, "should be land")
+        for pt in water:
+            assert not _inside(pt, rings), (lv, pt, "should be water")
+
+
+def test_land_route_gzip_etag():
+    from map import land
+    c = appmod.server.test_client()
+    r = c.get("/api/sst/land/0.json")
+    assert r.status_code == 200 and r.headers["Content-Encoding"] == "gzip"
+    assert r.headers["Content-Type"].startswith("application/json")
+    assert "max-age=604800" in r.headers["Cache-Control"]
+    assert r.data == (LAND_DIR / "land-0.json.gz").read_bytes()
+    r2 = c.get("/api/sst/land/0.json", headers={"If-None-Match": r.headers["ETag"]})
+    assert r2.status_code == 304 and not r2.data
+    tid = sorted(_land("0")["index"]["3"]["tiles"])[0]
+    r3 = c.get(f"/api/sst/land/3-{tid}.json")
+    assert r3.status_code == 200 and r3.data == (LAND_DIR / f"land-3-{tid}.json.gz").read_bytes()
+    for bad in ("4-w73n40", "1-w73n40x", "0x", "1-x73n40", "1-w99n99"):
+        assert c.get(f"/api/sst/land/{bad}.json").status_code == 404, bad
+    for bad in ("../land-0", "0/../0", "", None):
+        assert land.land_gz(bad) == (None, None), bad
+    assert land.land_url().startswith("/api/sst/land/0.json?v=") and r.headers["ETag"].strip('"') in land.land_url()
+
+
+def test_layout_has_land_url():
+    from map import land
+    m = re.search(r'"data-land": "([^"]+)"', _sst_layout_json())
+    assert m and m.group(1) == land.land_url()
+
+
+def test_land_assets_load_without_network():
+    """The route reads committed files only: no outside call at request time (incident runbook)."""
+    src = (ROOT / "map" / "land.py").read_text()
+    assert "requests" not in src and "urllib" not in src and "outbound" not in src
+
+
 # ------------------------------------------------------------------------------------------ Hudson Canyon --
 def test_hudson_canyon_at_the_head():
     pos = {n: (la, lo) for n, la, lo in ALL_POIS}
@@ -190,12 +307,14 @@ def test_how_it_works_copy():
     for want in ("Tuna (62 to 76 °F)", "Marlin (70 to 84 °F)", "Gulf Stream", "Custom", "Fit to view",
                  "Stepped", "Breaks", "half a degree per nautical mile", "30, 40 and 100 fathoms",
                  "500, 1000 and 2000 meters", "Oceanographer Canyon", "ETOPO 2022", "dark purple",
-                 "tenth of a degree"):
+                 "tenth of a degree", "OpenStreetMap", "no satellite reading", "about 3 km"):
         assert want in t, want
     assert "Same colors every week" not in t                    # replaced by the fixed presets
     assert "Haze" not in t and "haze" not in t                  # dropped (analysis_error barely varies)
     assert "Where clouds hide the water" in t and "smooth" in t  # the clouds paragraph stays
-    for name in ("assets/sstlook.js", "assets/sstlook.css", "tools/build_contours.py", "map/depth.py"):
+    for name in ("assets/sstlook.js", "assets/sstlook.css", "tools/build_contours.py", "map/depth.py",
+                 "assets/sstland.js", "assets/sstengine.js", "tools/build_land.py", "map/land.py",
+                 "docs/coast-progress.md"):
         assert "—" not in (ROOT / name).read_text(), name
 
 
