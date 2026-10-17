@@ -11,7 +11,7 @@ GFW_NOTE = ("Fishing activity: where commercial fishing boats carrying AIS track
             "same days, from Global Fishing Watch. Most recreational boats don't show up, and the "
             "last few days can be empty while GFW catches up.")
 
-AOI_TILE_BOUNDS = [[38.80, -74.96], [43.80, -68.80]]
+AOI_TILE_BOUNDS = [[37.80, -76.00], [44.00, -64.80]]   # the SST coverage box (config.json, sprint 2)
 
 
 # The three optional layers are created only while their box is ticked (app.toggle_layers puts

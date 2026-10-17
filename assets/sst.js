@@ -41,7 +41,7 @@
     if (window.SST && window.SST._setup) { return; }       // already set up by an earlier copy
 
     var VIEW_KEY = "gotone-sst-view-v1";
-    var AREA = [[38.8, -74.6], [43.8, -68.8]];            // the whole mapped area
+    var AREA = [[37.8, -76.0], [44.0, -64.8]];            // the whole mapped area (sprint 2 coverage box)
     // Small maps (phones, landscape phones, short windows), where the whole
     // area only fits at zoom 6 or less: the NY Bight to the canyons (about 39.0
     // to 41.4 N, 74.2 to 69.0 W) at zoom 7. Whole zoom levels only: fractional
@@ -285,7 +285,7 @@
         try { saved = JSON.parse(store(VIEW_KEY) || "null"); } catch (e) { saved = null; }
         map.invalidateSize({ pan: false });
         if (saved && isFinite(saved.lat) && isFinite(saved.lng) && isFinite(saved.z) &&
-            saved.lat > 36 && saved.lat < 46 && saved.lng > -78 && saved.lng < -65) {
+            saved.lat > 36 && saved.lat < 46 && saved.lng > -78 && saved.lng < -63) {
             map.setView([saved.lat, saved.lng], saved.z, { animate: false });
         } else {
             if (map.getBoundsZoom(AREA, false, window.L.point(8, 8)) >= GROUNDS.zoom) {
@@ -420,7 +420,11 @@
         if (!map || !L) { return; }
         var where = sel ? [sel.kind || "reading", sel.lat, sel.lng, sel.name || ""].join("|") : null;
         if (SEL.marker && (where !== SEL.where || !map.hasLayer(SEL.marker))) {
+            // Leaflet fades a removed tooltip out over 200 ms; the next card is drawn at once, so drop the old one now
+            var tt = SEL.marker.getTooltip && SEL.marker.getTooltip(), el = tt && tt.getElement && tt.getElement();
             try { map.removeLayer(SEL.marker); } catch (e) { /* gone */ }
+            if (tt) { clearTimeout(tt._removeTimeout); }
+            if (el && el.parentNode) { el.parentNode.removeChild(el); }
             SEL.marker = null;
         }
         SEL.where = where;
@@ -432,11 +436,18 @@
         var html = cardHtml(sel, ready ? E.weekValuesAt(sel.lat, sel.lng) : undefined, dates, idx);
         if (!SEL.marker) {
             var poi = sel.kind === "poi";
+            // A tap on the open card's own marker closes it (taps near it go through SST.classify, which does the
+            // same). Handled here because a tap on exactly the same spot gives Dash the same clickData, which
+            // doesn't fire the tap callback again.
             SEL.marker = L.circleMarker([sel.lat, sel.lng], {
                 pane: map.getPane("click-pane") ? "click-pane" : "markerPane", radius: poi ? 9 : 6,
                 color: poi ? "#0183fe" : "#e11d48", weight: 2.5, fillOpacity: poi ? 0 : 0.3,
-                interactive: false, bubblingMouseEvents: true
+                interactive: true, bubblingMouseEvents: false
             }).addTo(map);
+            SEL.marker.on("click", function (ev) {
+                if (ev && ev.originalEvent) { L.DomEvent.stop(ev.originalEvent); }
+                try { window.dash_clientside.set_props("click-pos", { data: null }); } catch (e) { /* no Dash */ }
+            });
             SEL.marker.bindTooltip(html, { permanent: true, direction: "top", offset: [0, -10], pane: "tooltipPane",
                                            className: "sst-tooltip", interactive: false }).openTooltip();
         } else {

@@ -21,7 +21,10 @@
  *   histogram()                 {min, max, step, bins, below, above, total}: the week's water, for the color bar
  *   on(evt, fn)                 "ready" (a week drawn), "day", "change" (palette, range, options, auto range),
  *                               also "error" (the week's grid didn't download); returns an off() function
- * Extras: state(), colorFor(f), palettes, _stats (timings: decode, recolor, draw, analysis).
+ * Extras (lane V's color bar uses the first two): getRange() -> {mode, min, max} (the range drawn now; Auto's
+ * numbers too), colorFor(f) -> [r, g, b] as drawn (palette, range, stepped; its toString() is "rgb(r,g,b)", so it
+ * also works as a CSS color), state(), palettes, _stats (timings: decode, recolor, draw, analysis).
+ * The engine attaches itself to the "sst-map" map (an L.Map init hook); attach(map) is there for callers too.
  *
  * Drawing: per day a canvas the size of the grid (one pixel per cell, colored through a 65536-entry lookup table:
  * palette x range x stepped, rebuilt in well under a millisecond), blended toward white where the temperature
@@ -55,7 +58,7 @@
         });
     }
     var PALETTES = {
-        // design-notes.md "Palette": Turbo sampled 5% to 100%, 13 even stops (map/colorscale.SPECTRUM_COLORS)
+        // design-notes.md "Palette": Turbo sampled 5% to 100%, 13 even stops
         spectrum: ["#3d358b", "#476ee6", "#3ba0fd", "#1bd0d5", "#2aefa1", "#75fe5c", "#b4f836",
                    "#e3db38", "#fcb136", "#f9751d", "#e14109", "#b71d02", "#7a0403"],
         // the palette before sprint 2 (map/colorscale.SST_COLORS)
@@ -239,7 +242,16 @@
         var c = clamp(Math.round((f * 10 - h.baseT) / h.stepT), 0, MAX_CODES - 1);
         return unpack(S.lut[c]);
     }
-    function colorFor(f) { buildLut(); var c = rgbFor(f); return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; }
+    function colorFor(f) {
+        buildLut();
+        var c = rgbFor(+f), out = [c[0], c[1], c[2]];
+        out.toString = function () { return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; };
+        return out;
+    }
+    function getRange() {
+        var r = effectiveRange();
+        return { mode: S.range.mode === "fixed" ? "fixed" : "auto", min: r.min, max: r.max };
+    }
 
     // ------------------------------------------------------- per-day images --
     function dropImages() { S.img = {}; S.imgOrder = []; }
@@ -1034,6 +1046,7 @@
         weekValuesAt: weekValuesAt,
         histogram: histogram,
         on: on,
+        getRange: getRange,
         state: state,
         colorFor: colorFor,
         palettes: PALETTES,

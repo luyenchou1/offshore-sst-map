@@ -364,9 +364,9 @@ def test_nearest_saved_and_queue():
 
 def _app():
     import app as appmod
-    import tools.sync_cache as sc
-    appmod.mask_land_rasterized = lambda arr, lats, lons: arr  # no Natural Earth download
-    sc.mask_land_rasterized = lambda arr, lats, lons: arr
+    from data import geo
+    # no Natural Earth download (weeks are built by data/sstgrid.entry_from_fetch, which calls data.geo's)
+    geo.mask_land_rasterized = lambda arr, lats, lons: arr
     return appmod
 
 

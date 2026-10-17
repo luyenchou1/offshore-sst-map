@@ -13,13 +13,6 @@ SST_COLORS = [
     "#fde68a", "#fca35d", "#fb6a4a", "#ef3b2c", "#cb181d", "#99000d",
 ]
 
-# The default palette since sprint 2 ("spectrum", design-notes.md: Turbo sampled from 5% to 100%, 13 even stops, linear
-# in sRGB). assets/sstengine.js has the same stops (PALETTES.spectrum); SST_COLORS above is "classic".
-SPECTRUM_COLORS = [
-    "#3d358b", "#476ee6", "#3ba0fd", "#1bd0d5", "#2aefa1", "#75fe5c", "#b4f836",
-    "#e3db38", "#fcb136", "#f9751d", "#e14109", "#b71d02", "#7a0403",
-]
-
 
 def compute_color_bounds(arrF: np.ndarray, locked: bool = False):
     """Return (vmin, vmax) for the SST color scale.
@@ -70,7 +63,7 @@ def build_legend_component(vmin: float, vmax: float, res_km: float = None,
     (Same colors every week), with round ticks and what the end colors mean.
     Phones get a compact version (assets/sst.css). The source and grid size
     are in the status strip under the map."""
-    gradient = ", ".join(SPECTRUM_COLORS)   # SSTEngine's default palette
+    gradient = ", ".join(SST_COLORS)
     span = max(vmax - vmin, 1e-6)
     ticks = []
     for v in legend_ticks(vmin, vmax):

@@ -48,7 +48,6 @@ from layout.labsview import build_labs_page
 from layout.mapview import build_map, chart_layer, gebco_layer, gfw_layer
 from layout.statsview import render_stats_page
 from layout.sidebar import build_sidebar
-from map.colorscale import build_legend_component
 from map.measure import format_measurement
 from map.pois import build_poi_markers, get_all_poi_names, pois_payload
 from layout.sstabout import build_about_modal
@@ -1957,34 +1956,23 @@ def fetch_sst_data(n_clicks, n_intervals, saved_clicks, end_date_str):
     )
 
 
-# ---- Callback 2: the spots and the legend ----
-# Fires on a new week (sst-key, which carries no data), the spot list or "Same colors every week". The SST itself is
-# drawn by assets/sstengine.js (window.SSTEngine) from the week's bytes, wired below.
+# ---- Callback 2: the spots ----
+# The SST is drawn by assets/sstengine.js (window.SSTEngine) from the week's bytes, wired below; its legend and color
+# bar are the Colors panel's (assets/sstlook.js, lane V), from SSTEngine.getRange() / colorFor() / histogram(). The
+# server legend (legend-container) and "Same colors every week" (lock-scale) went with the PNG frames: neither is in
+# any callback now (both elements stay in the layout, hidden by the panel while the engine is on).
 @app.callback(
     Output("poi-layer", "children"),
-    Output("legend-container", "children"),
-    Input("sst-key", "data"),
     Input("poi-picker", "value"),
-    Input("lock-scale", "value"),
-    prevent_initial_call="initial_duplicate",
 )
-def render_static_layers(key, selected_pois, lock_scale):
-    poi_markers = build_poi_markers(selected=selected_pois)
-    if not key or not key.get("dates"):
-        return poi_markers, ""
-    locked = "lock" in (lock_scale or [])
-    vmin, vmax = sstgrid.LOCKED_RANGE if locked else (key["vmin"], key["vmax"])
-    meta = key.get("meta") or {}
-    res_km = meta.get("resolution_km") or key.get("res_km")
-    coarse = meta.get("source") == "OISST" or bool(res_km and res_km >= 5)
-    legend = build_legend_component(vmin, vmax, res_km=res_km, locked=locked, coarse=coarse)
-    return poi_markers, legend
+def render_static_layers(selected_pois):
+    return build_poi_markers(selected=selected_pois)
 
 
 # ---- SSTEngine wiring (assets/sstengine.js; API in CLAUDE.md, Architecture -> SST engine) ----
 # The week goes to the engine as it arrives (the engine fetches grid.url and draws it); the overlay is hidden when the
-# engine has drawn it ("ready") or couldn't ("error": the strip says so). The day slider, Color strength and "Same
-# colors every week" only call the engine: no server trip, no reload (review T6). Each writes "" to its own sink.
+# engine has drawn it ("ready") or couldn't ("error": the strip says so). The day slider and Color strength only call
+# the engine: no server trip, no reload (review T6). Each writes "" to its own sink.
 app.clientside_callback(
     """
     function(store) {
@@ -2030,20 +2018,13 @@ app.clientside_callback(
 
 app.clientside_callback(
     """
-    function(opacity, lock) {
-        var E = window.SSTEngine;
-        if (!E) { return ""; }
-        var t = ((window.dash_clientside.callback_context || {}).triggered || []).map(function (x) { return x.prop_id; });
-        if (opacity != null) { E.setOptions({opacity: opacity}); }
-        if (t.indexOf("lock-scale.value") >= 0) {
-            E.setRange((lock || []).indexOf("lock") >= 0 ? {mode: "fixed", min: 30, max: 90} : {mode: "auto"});
-        }
+    function(opacity) {
+        if (window.SSTEngine && opacity != null) { window.SSTEngine.setOptions({opacity: opacity}); }
         return "";
     }
     """,
     Output("sst-style-sink", "children"),
     Input("sst-opacity", "value"),
-    Input("lock-scale", "value"),
 )
 
 
