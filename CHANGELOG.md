@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-10-17 - SST sprint 2 (lane V): new colors and controls, a dark map, depth lines and spot names
+
+### Added
+- **Colors panel** (sidebar on laptops, inside the drawer on phones and tablets): range chips Auto, Tuna (62 to 76 °F), Marlin (70 to 84 °F), Gulf Stream (the week's warmest water and 18 °F below) and Custom (coldest and warmest ends in 1 °F steps with + and -, 28 to 90 °F); Fit to view (the colors spread over the water on screen); Stepped (1 °F bands) and Breaks (isotherms and the break highlight, off at first) passed to the SST engine; Depth lines on or off. A numbered color bar with triangles for "and beyond" and the week's water as a small histogram above it, saying whether the range is auto, a preset, your own or fitted to the view. Keyboard and screen readers: the chips are a radio group (arrow keys), the ends are spin buttons, the range is announced; 44 px targets on touch. Choices are remembered on the device (`gotone-sst-colors-v1`). The color part shows once the SST engine (lane E) is on the page; until then the page looks as before.
+- **A live legend on the map** that follows the panel (range in use, numbers, the OISST warning), compact at the top centre on phones.
+- **Depth lines above the colors**: 30, 40 and 100 fathoms and 500, 1000 and 2000 m from NOAA ETOPO 2022 (15 arc-seconds), drawn as thin dark lines with a faint light edge, the 100-fathom shelf edge heavier, with small labels along straight stretches (fathoms on the shelf, meters beyond) that break the line and never sit on a spot, a spot name or the map's controls. Crisp at every zoom; canyon walls hold their shape at zoom 9 to 11. Built offline by `tools/build_contours.py` into `assets/sst/contours.json.gz` (57 KB; 24,393 points), served at `/api/sst/contours.json`.
+- **Spot names** beside the circles: the canyons (short names) from zoom 8, every spot from zoom 9, The Dump over its box; a name that would cover another, a spot or a control waits for the next zoom.
+- Analytics events (only when the reader changes something): `preset_auto`, `preset_tuna`, `preset_marlin`, `preset_gulfstream`, `preset_custom`, `custom_range`, `fit_view`, `stepped`, `breaks`, `contours`.
+- `tools/test_sst_look.py`; `tools/smoke_sst.mjs` now checks the panel at the three sizes, the presets, the keyboard, the toggles, remembered choices (no events on a reload), the contours and their toggle, spot labels and Hudson Canyon's position. `tools/sst_engine_stub.js`: a test-only stand-in for the engine (never served).
+
+### Changed
+- **Dark basemap on the SST map** (Esri Dark Gray Canvas, keyless, with its place names above the colors): land is dark gray so the water stands out. Currents and the catch map are unchanged.
+- **Hudson Canyon's spot moved to the canyon head** (39.642 N, 72.440 W; was 39.54 N, 72.05 W, about 19 nm east-southeast on the slope), where ETOPO 2022's 300 m isobath reaches furthest inshore and NOAA's chart contours wrap the head.
+- Color strength starts at 100% (the colors are solid; lower it to see the chart or bathymetry underneath).
+- How it works: the new colors and presets, Fit to view, the color bar, Stepped, Breaks, the depth lines, spot names, the wider area, the sources. With the engine on, "Same colors every week" steps aside (Tuna, Marlin and Custom are fixed ranges).
+- The cloud haze planned for this sprint was dropped: MUR's analysis_error barely varies (0.36 to 0.40 °C everywhere), so it can't show where clouds were filled in. How it works still explains that clouds are filled in with estimates.
+
 ## 2026-10-16 - SST relaunch: the map is drawn where its readings are, and works on every load after a deploy
 
 ### Fixed

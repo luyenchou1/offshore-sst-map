@@ -987,6 +987,7 @@
         prefs: function () { return JSON.parse(JSON.stringify(S.prefs)); },
         range: shownRange,
         redraw: redraw,
+        _render: render,
         _colorFor: colorFor,
         _ramp: ramp,
         _pct: pct,
