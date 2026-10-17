@@ -23,3 +23,26 @@ Branch `sst2-lane-e`, worktree `/Users/lchou/Code/sst-sprint2/lane-e`, dev port 
   sized from the real disk with least-recently-viewed eviction, old two-variant entries still load, and plain retention
   rules in CLAUDE.md.
 - NOTE: pyflakes 4.0.3 got installed into the shared venv at 22:09 by a lint fallback; uninstall before finishing.
+- Haze dropped (Luyen, via the lead): no analysis_error fetch, no error grid in GOSST1 (header bytes 40 to 63
+  reserved), `setOptions` ignores "haze", `valueAt().estimate` is always null.
+- Built: data/sstgrid.py (GOSST1, weekly entry, Auto range, old-entry conversion, store payload), weekly cache in
+  sst/weeks/ with /api/cache/weeks and disk-budget LRU eviction (data/cache.py), /api/sst/week/<end>.bin, tenths and a
+  per-run day cache in data/erddap.py, the coverage box in config.json, assets/sstengine.js, the readout card in
+  assets/sst.js, the seeder's backfill (tools/sync_cache.py) and workflow, the preview builder reading weekly files.
+- Seeder run against NOAA from this Mac: 2026-10-15 and 2026-10-14 weeks, 588 / 590 KB files (grid 583 / 585 KB),
+  10.4 s and 5.2 s (the second week reused six days from the run's cache).
+- Lane V's requests (mid-task): getRange(), colorFor(f) -> [r, g, b] printing as rgb(...), the engine attaches itself,
+  opacity through the engine, lock-scale and the server legend out of every callback (both elements kept in the layout
+  because lane V's CSS and smoke test read them by id), AREA and AOI_TILE_BOUNDS on the coverage box, the smoke test on
+  the canvas.
+- Bugs found by the suites and fixed: the worker never got the week when breaks/isotherms were turned on after load;
+  returning to /sst crashed the page (attach added the canvas layer before the map was loaded); a second identical tap
+  didn't close the card (identical clickData doesn't refire Dash: the marker closes it itself); Leaflet's 200 ms
+  tooltip fade left two cards for a moment; the test stubs patched app.mask_land_rasterized, which no longer exists
+  there (the fetch and hang suites were downloading Natural Earth).
+- Frame times (tools/perf_sstengine.mjs, 390x664 @2x, CPU 4x): decode 63 ms, histogram 54 ms (once per week);
+  palette/range/stepped change ~5 ms; crossfade frames median 33 ms, worst 50 ms (idle page 17 ms), same with
+  isotherms + breaks; isotherms + breaks 160 to 270 ms per day in the worker.
+- Suites: test_sst_ui 9/9, test_sst_fetch 27/27, test_sst_hang 18/18, test_sst_grid 12/12, test_labstats 24/24,
+  load_sst_outage (3 scenarios ok), test_sstengine.mjs 20/20, smoke_sst.mjs all checks at 3 sizes (legend skipped
+  on this branch alone), boot_sst_pages.mjs all checks (24/24 pages + init paths).

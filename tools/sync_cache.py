@@ -43,7 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Clean imports only — deliberately NOT importing app.py (it starts a
 # pre-warm thread at import and, in some branches, loads extra data).
-from data import sstgrid  # noqa: E402
+from data import geo, sstgrid  # noqa: E402
 from data.cache import week_name  # noqa: E402
 from data.erddap import SSTUnavailable, get_sst_multiday, latest_mur_date  # noqa: E402
 
@@ -61,6 +61,11 @@ class DayCache(OrderedDict):
         super().__setitem__(key, value)
         while len(self) > DAY_CACHE_MAX:
             self.popitem(last=False)
+
+
+def _land_mask_ready() -> bool:
+    """The Natural Earth land mask is loaded (downloaded once per run; tests replace this)."""
+    return geo.load_land_gdf(wait_s=90) is not None
 
 
 def build_week_file(sst: dict, cfg: dict, level: int = LEVEL):
@@ -183,6 +188,9 @@ def seed(args, cfg) -> int:
         newest = latest or (date.today() - timedelta(days=args.start_back))
         print(f"newest MUR day: {latest or 'unknown'}; seeding from {newest}", flush=True)
     todo = plan(args, cfg, newest)
+    if todo and not _land_mask_ready():               # never upload a week whose land isn't masked
+        print("ERROR: the Natural Earth land mask didn't load; nothing seeded", file=sys.stderr, flush=True)
+        return 1
     dest = args.out or args.base_url
     print(f"seeding {len(todo)} weeks -> {dest}", flush=True)
     day_cache = DayCache()

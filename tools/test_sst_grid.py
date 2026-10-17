@@ -365,6 +365,7 @@ def run_seeder(world, *argv):
     slept = []
     requests.get, requests.post = world.get, world.post
     sc.sleep = slept.append
+    sc._land_mask_ready = lambda: True                    # the land mask is stubbed (no download)
     erddap._reset_latest_cache()
     outbound.reset_all()
     try:

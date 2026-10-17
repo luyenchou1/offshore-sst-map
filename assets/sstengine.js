@@ -528,6 +528,10 @@
     function ensureLayer() {
         var map = S.map;
         if (!map || S.layer || !S.week || !window.L || !L.Canvas) { return; }
+        if (!map._loaded) {                              // a map still being built (no view yet): once it has one
+            if (!map._sstEngineWait) { map._sstEngineWait = true; map.whenReady(function () { if (S.map === map) { ensureLayer(); redraw(); } }); }
+            return;
+        }
         var pane = "sst-pane";
         if (!map.getPane(pane)) {
             pane = "sstEnginePane";
@@ -537,6 +541,7 @@
         S.layer = new S.LayerClass({ pane: pane, padding: 0.1 });
         map.addLayer(S.layer);
         var c = S.layer._container;
+        if (!c) { return; }
         c.style.pointerEvents = "none";                 // taps go to the map (SST.classify), never to the canvas
         c.style.opacity = String(S.opts.opacity);
         c.classList.add("sst-engine-canvas");
@@ -831,8 +836,11 @@
     function setWeek(payload) {
         if (!payload) { return; }
         var grid = payload.grid || {}, url = grid.url || null;
-        if (S.week && url && url === S.url) {        // the same week again (e.g. new meta): keep what's drawn
+        if (S.week && url && url === S.url) {        // the same week again (new meta, or back on the page): keep it
             S.payload = payload;
+            ensureLayer();
+            redraw();
+            setTimeout(function () { if (S.url === url) { fire("ready", state()); } }, 0);
             return;
         }
         var gen = ++S.gen;
@@ -1017,8 +1025,7 @@
         detach();
         S.map = map;
         map.on("unload", function () { if (S.map === map) { detach(); } });
-        ensureLayer();
-        redraw();
+        try { ensureLayer(); redraw(); } catch (e) { if (window.console) { console.error("SSTEngine attach", e); } }
     }
 
     // Also attach by itself to the "sst-map" map, so the engine works whichever script loads first (sst.js calls

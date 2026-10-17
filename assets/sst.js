@@ -317,7 +317,8 @@
         map.on("unload", function () {
             if (S.map === map) { S.map = null; S.statusHtml = ""; SEL.marker = null; SEL.where = null; }
         });
-        if (window.SSTEngine) { window.SSTEngine.attach(map); }     // draws the SST on this map
+        try { if (window.SSTEngine) { window.SSTEngine.attach(map); } }  // draws the SST on this map
+        catch (e) { if (window.console) { console.error("SSTEngine.attach", e); } }   // never let it break the map
         // The page's flex layout and the drawer can resize the map without a window resize.
         if (window.ResizeObserver) {
             var ro = new ResizeObserver(function () { if (S.map === map) { map.invalidateSize({ pan: false }); } });

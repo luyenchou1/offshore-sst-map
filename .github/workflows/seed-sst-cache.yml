@@ -2,17 +2,30 @@ name: Seed SST cache
 
 # NOAA's firewall blocks ERDDAP from Render's datacenter IP, so SST data is
 # fetched here (GitHub runners CAN reach NOAA) and pushed to the live app's
-# /api/cache/upload endpoint. Keeps recent dates served from cache.
+# /api/cache/upload endpoint. Keeps recent dates served from cache, and (sprint 2)
+# rebuilds the weeks saved before the coverage box and 0.1 F data, a few dozen a run.
 on:
   schedule:
     - cron: '0 11 * * *'   # daily ~07:00 ET
     - cron: '0 21 * * *'   # and ~17:00 ET, in case MUR's newest day came out after the morning run
   workflow_dispatch:        # allow manual runs
+    inputs:
+      backfill:
+        description: "Old-format weeks to rebuild this run (0 = none)"
+        default: "24"
+      dates:
+        description: "Only these end dates (comma-separated, YYYY-MM-DD) instead of the usual run"
+        default: ""
+
+# One run at a time: a manual run waits for a scheduled one (the backfill picks up where the last run stopped)
+concurrency:
+  group: seed-sst-cache
+  cancel-in-progress: false
 
 jobs:
   seed:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,9 +34,18 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: pip install -r requirements.txt
-      # The 10 weeks ending on MUR's newest day (ERDDAP time[last]), plus up to 15 weeks readers
-      # asked for that NOAA couldn't send in time (/api/cache/wanted).
-      - name: Build and upload recent SST windows
+      # The 10 weeks ending on MUR's newest day (ERDDAP time[last]), up to 15 weeks readers asked for that NOAA
+      # couldn't send in time (/api/cache/wanted), then up to 24 weeks the app still has only in the old format
+      # (/api/cache/weeks), 20 s apart; new weeks stop being started after 40 minutes. See CLAUDE.md (SST backfill).
+      - name: Build and upload SST weeks
         env:
           CACHE_UPLOAD_TOKEN: ${{ secrets.CACHE_UPLOAD_TOKEN }}
-        run: python tools/sync_cache.py --base-url https://sst.gotoneapp.com --count 10 --max-wanted 15
+          DATES: ${{ inputs.dates }}
+          BACKFILL: ${{ inputs.backfill || '24' }}
+        run: |
+          if [ -n "$DATES" ]; then
+            python tools/sync_cache.py --base-url https://sst.gotoneapp.com --dates "$DATES"
+          else
+            python tools/sync_cache.py --base-url https://sst.gotoneapp.com --count 10 --max-wanted 15 \
+              --backfill "$BACKFILL" --backfill-delay 20 --max-minutes 40
+          fi

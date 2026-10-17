@@ -37,7 +37,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const ROUNDS = +(args.rounds || 6), PAGES = +(args.pages || 4);
 const PY = args.python || path.join(ROOT, '.venv/bin/python');
 const CACHE = args['cache-dir'] || process.env.SST_CACHE_DIR || '';
-const ASSET_JS = ['currents.js', 'dashExtensions_default.js', 'labs.js', 'sst.js'];
+const ASSET_JS = ['currents.js', 'dashExtensions_default.js', 'labs.js', 'sst.js', 'sstengine.js'];
 
 async function loadPlaywright() {
     const tries = [process.env.PLAYWRIGHT, 'playwright',
@@ -117,10 +117,11 @@ const pageState = page => page.evaluate(names => {
     return { SST: !!S, ready: !!(S && S.ready && S.ready()), map: !!(m && m.getContainer().id === 'sst-map'),
              missing: names.filter(n => have.indexOf(n) < 0), waits: S ? S._state.waits : null };
 }, ASSET_JS);
+// Sprint 2: the week is drawn by assets/sstengine.js (window.SSTEngine) on its canvas, not a PNG overlay
 const weekShown = page => page.waitForFunction(() => {
-    const i = document.querySelector('img.leaflet-image-layer');
-    const o = document.getElementById('map-loading-overlay');
-    return i && i.src.startsWith('data:') && o && getComputedStyle(o).display === 'none';
+    const E = window.SSTEngine, o = document.getElementById('map-loading-overlay');
+    return E && E.state().ready && document.querySelector('canvas.sst-engine-canvas') && o &&
+        getComputedStyle(o).display === 'none';
 }, null, { timeout: 90000, polling: 200 }).then(() => true).catch(() => false);
 async function tapReads(page) {
     await page.waitForFunction(() => window.SST && window.SST._state.map, null, { timeout: 10000 }).catch(() => {});
