@@ -8,8 +8,10 @@
 // visit counter ignores it).
 //
 //   node tools/shoot_sst_preview.mjs [--base https://labs.gotoneapp.com] [--out build/sst-shot.png]
-//                                    [--view 39.9,-71.0,8]
+//                                    [--view 39.9,-71.0,8] [--size 540x430 [--scale 2]]
 //   (--base http://127.0.0.1:8050 for a local server with a cached week)
+//   --size: the map alone fills a window of that many CSS pixels (the social images in
+//   tools/build_social.py: zoom 7 at 2x keeps the names readable on a phone)
 import { mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,6 +24,7 @@ const BASE = opt('--base', 'https://labs.gotoneapp.com').replace(/\/$/, '');
 const OUT = path.resolve(opt('--out', path.join(ROOT, 'build', 'sst-shot.png')));
 // Whole zoom levels only. Zoom 8 at this size: New Jersey to Nantucket, the canyons and the Gulf Stream.
 const [LAT, LNG, Z] = opt('--view', '39.9,-71.0,8').split(',').map(Number);
+const SIZE = opt('--size', null), SCALE = Number(opt('--scale', 2));
 const LAND = '#474749';        // World_Dark_Gray_Base land (the sea there is #232227, all covered by SST)
 
 async function loadPlaywright() {
@@ -36,7 +39,8 @@ async function loadPlaywright() {
 const { chromium } = await loadPlaywright();
 
 const browser = await chromium.launch({ headless: true });
-const ctx = await browser.newContext({ viewport: { width: 1760, height: 1040 }, deviceScaleFactor: 2 });
+const [VW, VH] = SIZE ? SIZE.split('x').map(Number) : [1760, 1040];
+const ctx = await browser.newContext({ viewport: { width: VW, height: VH }, deviceScaleFactor: SCALE });
 await ctx.route(/arcgisonline\.com/, r => r.abort());
 await ctx.addInitScript(([lat, lng, z]) => {
     try {
@@ -44,6 +48,14 @@ await ctx.addInitScript(([lat, lng, z]) => {
         localStorage.setItem('gotone-sst-view-v1', JSON.stringify({ lat, lng, z }));
     } catch (e) { /* storage blocked: the default view */ }
 }, [LAT, LNG, Z]);
+if (SIZE) {      // the map fills the window from the start, so Leaflet sizes itself to it
+    await ctx.addInitScript(() => document.addEventListener('DOMContentLoaded', () => {
+        const st = document.createElement('style');
+        st.textContent = '#sst-map { position: fixed !important; inset: 0 !important; width: 100vw !important; ' +
+                         'height: 100vh !important; z-index: 3000 !important; }';
+        document.head.appendChild(st);
+    }));
+}
 const page = await ctx.newPage();
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));

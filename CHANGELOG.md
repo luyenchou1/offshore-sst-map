@@ -8,6 +8,7 @@
 
 ### Added
 - `tools/shoot_sst_preview.mjs`: one load of the SST page in headless Chrome, basemap tiles blocked (the dark basemap's land color fills in), controls, legend and spot dots hidden, the map saved at 2x to `build/sst-shot.png`; `tools/build_labs_previews.py` crops it to the 16:9 tile (`--sst-shot`). The old matplotlib SST preview (classic colors) is gone.
+- `tools/build_social.py`: Instagram images in `build/social/` (a 3-slide 4:5 carousel, 1:1 squares for SST and Currents, 9:16 stories with room for a link sticker) and caption drafts. SST maps come from `shoot_sst_preview.mjs --size` (the map alone at a fixed size, zoom 7 at 2x so depth labels read on a phone) with canyon names added from `map/pois.py`; Currents from `currents_preview()`, which now takes a size, width and centre. Its notes said the Currents preview was mid-flood; it is The Race's strongest ebb (2.8 kn, 1.5 h before Montauk low water).
 
 ## 2026-10-17 - SST: smooth coastlines and smooth water when zoomed in
 

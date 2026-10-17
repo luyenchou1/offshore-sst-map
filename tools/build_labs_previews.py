@@ -6,7 +6,8 @@ Drawn from the apps' own data so the tiles show what each tool looks like:
   sst.jpg       the live SST map itself (tools/shoot_sst_preview.mjs screenshots it:
                 spectrum colours, depth lines, canyon names, dark land), New Jersey
                 to Nantucket, the canyons and the Gulf Stream
-  currents.jpg  the tide-stage atlas at average strength, mid-flood: streamlines
+  currents.jpg  the tide-stage atlas at average strength, The Race at its strongest
+                (the ebb, about 2.8 kn, 1.5 h before Montauk low water): streamlines
                 coloured by speed with the Currents page's colour ramp
   og-sst.jpg, og-currents.jpg  1200 x 630 cards for the tool pages themselves (tool_cards)
   og.jpg        1200 x 630 social-share card (link previews in Facebook groups,
@@ -56,8 +57,16 @@ def sst_preview(shot):
     im.resize((W, H), Image.LANCZOS).save(os.path.join(OUT, "sst.jpg"), quality=85, optimize=True)
 
 
-def currents_preview():
-    """Average-strength atlas at the phase bin of strongest flow at The Race."""
+# The Currents page's speed ramp, 0 to CURRENT_MAX m/s (about 3.1 kn)
+CURRENT_RAMP = ["#28509699", "#2d69af", "#3287c3", "#3ca5cd", "#55c3c8", "#82d7af",
+                "#c3e47d", "#f5d45c", "#faaf46", "#fff0cd"]
+CURRENT_MAX = 1.6
+
+
+def currents_preview(out="currents.jpg", width=W, height=H, lon_span=None, fontsize=15, lon_c=None):
+    """Average-strength atlas at the phase bin of strongest flow at The Race (an ebb). Any size
+    (the social images in tools/build_social.py): the region's full height by default, or
+    lon_span degrees wide around its centre (or lon_c)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -86,18 +95,16 @@ def currents_preview():
     s = np.hypot(u, v)
     x = np.linspace(lon0, lon1, nx)
     y = np.linspace(lat0, lat1, ny)
-    ramp = LinearSegmentedColormap.from_list("cur", [
-        "#28509699", "#2d69af", "#3287c3", "#3ca5cd", "#55c3c8", "#82d7af",
-        "#c3e47d", "#f5d45c", "#faaf46", "#fff0cd"])
+    ramp = LinearSegmentedColormap.from_list("cur", CURRENT_RAMP)
 
     from data.geo import load_land_gdf
 
-    fig = plt.figure(figsize=(W / 100, H / 100), dpi=100)
+    fig = plt.figure(figsize=(width / 100, height / 100), dpi=100)
     ax = fig.add_axes([0, 0, 1, 1])
     fig.patch.set_facecolor(NAVY_DARK)
     ax.set_facecolor(NAVY_DARK)
-    ax.streamplot(x, y, u, v, color=s, cmap=ramp, norm=matplotlib.colors.Normalize(0, 1.6),
-                  density=3.2, linewidth=0.6 + 1.6 * np.clip(s / 1.6, 0, 1), arrowsize=0.6,
+    ax.streamplot(x, y, u, v, color=s, cmap=ramp, norm=matplotlib.colors.Normalize(0, CURRENT_MAX),
+                  density=3.2, linewidth=0.6 + 1.6 * np.clip(s / CURRENT_MAX, 0, 1), arrowsize=0.6,
                   zorder=2)
     # The model's land (fills small islands Natural Earth omits, e.g. Plum and
     # Great Gull), then smooth coastlines over its 400 m stair-steps.
@@ -108,16 +115,18 @@ def currents_preview():
     for name, lon, lat in (("The Race", -72.06, 41.205), ("Plum Gut", -72.215, 41.152),
                            ("Montauk", -71.93, 41.03), ("Block Island", -71.58, 41.17),
                            ("Gardiners Bay", -72.16, 41.075)):
-        ax.text(lon, lat, name, color="#e2e8f0", fontsize=15, fontweight="bold", ha="center",
+        ax.text(lon, lat, name, color="#e2e8f0", fontsize=fontsize, fontweight="bold", ha="center",
                 va="center", zorder=4, alpha=0.9)
     cy = (lat0 + lat1) / 2
-    lon_span = (lat1 - lat0) * (W / H) / math.cos(math.radians(cy))
-    cx = (lon0 + lon1) / 2
+    if lon_span is None:
+        lon_span = (lat1 - lat0) * (width / height) / math.cos(math.radians(cy))
+    lat_span = lon_span * math.cos(math.radians(cy)) * height / width
+    cx = (lon0 + lon1) / 2 if lon_c is None else lon_c
     ax.set_xlim(cx - lon_span / 2, cx + lon_span / 2)
-    ax.set_ylim(lat0, lat1)
+    ax.set_ylim(cy - lat_span / 2, cy + lat_span / 2)
     ax.set_aspect(1 / math.cos(math.radians(cy)))
     ax.axis("off")
-    fig.savefig(os.path.join(OUT, "currents.jpg"), dpi=100, facecolor=NAVY_DARK,
+    fig.savefig(out if os.path.isabs(out) else os.path.join(OUT, out), dpi=100, facecolor=NAVY_DARK,
                 pil_kwargs={"quality": 82, "optimize": True})
     plt.close(fig)
 
