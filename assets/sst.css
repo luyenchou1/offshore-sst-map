@@ -184,6 +184,9 @@
 }
 .sst-day-slider .dash-slider-root.has-marks { padding-bottom: 32px; }
 .sst-day-slider .dash-slider-mark { font-size: 0.68rem; line-height: 1.15; white-space: pre-line; text-align: center; }
+/* the weekday and date are two lines: reserve both, or the date spills onto the play buttons (the mark is
+   anchored at the bottom and grows up; on some loads its box came out one line tall) */
+.sst-day-slider .dash-slider-mark { min-height: 2.3em; display: block; }
 
 /* ---- Tablets (any touch screen) and windows < 1200 px: the sidebar is a
    slide-in drawer (as on phones and on Currents) and the day controls float
