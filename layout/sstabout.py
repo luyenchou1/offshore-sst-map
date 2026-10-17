@@ -8,8 +8,11 @@ Currents modal styles (.currents-about*, .conf-* in assets/currents.css).
 Facts here were checked on Oct 16, 2026 (docs/sst1-progress-lane-u.md): MUR's
 sensors and update history from its ERDDAP metadata, the 0.36 C agreement from
 Chin et al. (2017), the magnetic variation range from WMM-2025 (map/declination.py),
-Global Fishing Watch's ~3-day delay from its data-availability page. Update the
-text if the data source, the color scale or the measure tool changes.
+Global Fishing Watch's ~3-day delay from its data-availability page. Sprint 2 (Oct 2026)
+added the colors (spectrum, presets, Stepped, Breaks), the depth lines, the spot names
+and the wider area; their numbers come from the designer's notes (sst-sprint2/design) and
+tools/build_contours.py. Update the text if the data source, the color scale or the measure
+tool changes.
 """
 
 import dash_bootstrap_components as dbc
@@ -64,8 +67,8 @@ def about_body():
                 "Offshore fish follow the water. Tuna, mahi, marlin and the bait they feed on "
                 "collect where warm and cool water meet, along the edges of warm eddies, and where "
                 "the continental shelf drops into the canyons. GotOne Offshore SST maps the "
-                "sea-surface temperature from Cape May, New Jersey to Portland, Maine, out past the "
-                "canyons, one map for each day, so you can see where those edges are and how they "
+                "sea-surface temperature from Cape May, New Jersey to Portland, Maine, east past "
+                "Oceanographer Canyon and south to the Gulf Stream, one map for each day, so you can see where those edges are and how they "
                 "moved over the past week."),
 
             _h("What to look for"),
@@ -84,9 +87,10 @@ def about_body():
                "The bottom drops from about 100 fathoms at the edge of the shelf to thousands of "
                "feet in Hudson, Block, Atlantis, Veatch, Hydrographer and the other canyons. Water "
                "running into that edge brings cooler, richer water up and holds bait. A break "
-               "that lines up with the edge or a canyon head is the classic combination. To see "
-               "the depths, turn on Nautical chart or Bathymetry and lower Color strength so they "
-               "show through the colors."),
+               "that lines up with the edge or a canyon head is the classic combination. The thin "
+               "dark lines on the map are depth lines: 30, 40 and 100 fathoms on the shelf, 500, "
+               "1000 and 2000 meters beyond it. The 100-fathom line, a little heavier, is the edge "
+               "of the shelf, and the lines crowd together where the canyon walls drop away."),
             _p("Cold water near the beach.",
                "In summer, a few days of southwest wind can bring cold bottom water up along the "
                "New Jersey shore. It shows as a cold strip close to the beach that can appear in "
@@ -113,7 +117,8 @@ def about_body():
                "step through the days, so you can watch one spot warm or cool."),
             _p("Spots.",
                "The white circles are 32 well-known offshore spots, wrecks, canyons and banks, and "
-               "the dashed box is The Dump. Tap a circle for its name, position and temperature. "
+               "the dashed box is The Dump. Their names appear as you zoom in, the canyons first. "
+               "Tap a circle for its name, position and temperature. "
                "Tapping anywhere else, even next to a spot or inside The Dump, reads the water "
                "where you tapped. Use Spots in the sidebar to show or hide them."),
             _p("Measure.",
@@ -126,27 +131,66 @@ def about_body():
                "remove it."),
             _p("Layers.",
                "Nautical chart shows NOAA's chart: depths, buoys, wrecks and hazards. Bathymetry "
-               "shades the depth of the bottom. Fishing activity shows where commercial fishing "
+               "shades the depth of the bottom. Both draw under the colors, so lower Color strength "
+               "to see them. Fishing activity shows where commercial fishing "
                "boats carrying AIS trackers fished during the same seven days, from Global Fishing "
                "Watch; most recreational boats don't appear, and the newest two or three days are "
                "usually empty because Global Fishing Watch runs about three days behind. Color "
-               "strength fades the temperatures so a layer underneath shows through."),
+               "strength fades the temperatures so a layer underneath shows through. Depth lines, "
+               "under Colors, turns the depth lines off and on."),
 
             _h("Reading the colors"),
             html.P(
-                "Blue is cold and red is warm. The scale fits each week: it runs from the cool end "
-                "to the warm end of that week's water across the whole map, leaving out the coldest "
-                "and warmest 5%, which show in the end colors. That way even a two-degree break "
-                "stands out. The legend shows the week's range. Because the scale changes from "
-                "week to week, the same red can mean 68 °F one week and 76 °F the next, "
-                "so read the legend or tap the map before comparing weeks."),
+                "The colors run from dark purple for the coldest water through blue, green and yellow "
+                "to orange and dark red for the warmest, the order most offshore temperature charts "
+                "use. Every degree gets a clearly different color, so a one-degree break shows, and "
+                "the colors are solid, so what you see on the map is what the color bar shows. Land "
+                "is dark gray so the water stands out. Tap the water for the exact temperature."),
+            _p("Auto.",
+               "The colors are fitted to this week's water over the whole map: from the cool end to "
+               "the warm end, leaving out the coldest and warmest 5%, and never less than 8 degrees "
+               "wide. They mean the same thing on every day of the week and don't change as you pan. "
+               "Water beyond the range takes the end colors, which the triangles at the ends of the "
+               "color bar stand for. Because the range follows the week, the same orange can be "
+               "68 °F one week and 76 °F the next: read the color bar or tap before comparing weeks."),
+            _p("Presets.",
+               "Tuna (62 to 76 °F) spreads the colors over the water tuna anglers work, from the "
+               "inshore side of the shelf front to the edges of the warm eddies; the Gulf Stream "
+               "itself shows dark red. Marlin (70 to 84 °F) is for the warm water of the Stream and "
+               "its rings, and makes a good late-summer tuna range when the canyons run 74 to 80. "
+               "Gulf Stream follows the warmest water of the week: the top of its range is the "
+               "week's warmest water and it runs 18 degrees below that, so the north wall and the "
+               "rings stay on the scale all year. Custom is your own range in 1-degree steps. A fixed "
+               "range (Tuna, Marlin or Custom) also lets you compare weeks: the same color is the "
+               "same temperature in both. The map remembers your choice on this device."),
+            _p("Fit to view.",
+               "Spreads the colors over the water on the map right now. Zoom in on an area and press "
+               "it to bring out small differences; the range then stays put until you press it again "
+               "or pick another range."),
+            _p("The color bar.",
+               "Under Colors in the sidebar, it shows the range in use and says whether it is Auto, "
+               "a preset, your own or fitted to the view. The gray shape above it is how this "
+               "week's water is spread over that range: a tall hump means a lot of water at that "
+               "temperature."),
+            _p("Stepped.",
+               "Turns the smooth colors into one band per degree, so you can count the degrees "
+               "across a break."),
+            _p("Breaks.",
+               "Draws a line at every whole degree, heavier every two degrees with a few labels, and "
+               "brightens the water where the temperature changes fast. The highlight starts at half "
+               "a degree per nautical mile and is brightest at a degree per mile, the rule of thumb "
+               "anglers use. MUR smooths fronts a little, so a real break is often sharper than it "
+               "looks here. It is off at first because lines and colors together get busy, "
+               "especially on a phone."),
             html.P(
-                "Same colors every week fixes the scale at 30 to 90 °F so any two weeks can be "
-                "compared directly. It also flattens the detail, so leave it off when you're "
-                "looking for breaks."),
-            html.P(
-                "Temperatures are rounded to the nearest whole degree Fahrenheit. Areas without "
-                "color are land or outside the mapped area."),
+                "Temperatures are to a tenth of a degree Fahrenheit. Weeks saved before October 2026 "
+                "may still be in whole degrees until they are refreshed. Areas without color are land "
+                "or outside the mapped area."),
+            _p("The mapped area.",
+               "37.8 to 44.0 degrees north and 76.0 to 64.8 degrees west: Cape May to Portland, east "
+               "past Oceanographer Canyon and south far enough to show the Gulf Stream. Weeks saved "
+               "before October 2026 cover a smaller area (38.8 to 43.8 north, to about 68.8 west) "
+               "until they are refreshed."),
 
             _h("Where the data comes from"),
             html.P(
@@ -202,6 +246,13 @@ def about_body():
                          _a("nauticalcharts.noaa.gov",
                             "https://nauticalcharts.noaa.gov/data/gis-data-and-services.html"), ")."]),
                 html.Li(["Bathymetry: ", _a("GEBCO", "https://www.gebco.net/"), "."]),
+                html.Li(["Depth lines: NOAA NCEI ",
+                         _a("ETOPO 2022", "https://www.ncei.noaa.gov/products/etopo-global-relief-model"),
+                         " at 15 arc-seconds (about 460 m), served by NOAA CoastWatch ERDDAP, smoothed a "
+                         "little and simplified for the map."]),
+                html.Li(["Basemap: Esri Dark Gray Canvas (",
+                         _a("esri.com", "https://www.esri.com/"),
+                         "; Esri, HERE, Garmin, OpenStreetMap contributors and the GIS user community)."]),
                 html.Li(["Fishing activity: Global Fishing Watch, apparent fishing effort (",
                          _a("globalfishingwatch.org",
                             "https://globalfishingwatch.org/dataset-and-code-fishing-effort/"), ")."]),

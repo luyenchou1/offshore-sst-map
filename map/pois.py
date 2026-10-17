@@ -29,7 +29,11 @@ ALL_POIS = [
     ("Mud Hole",            40.937300, -71.417300),
     ("Ranger Wreck",        40.588300, -71.790000),
     # Canyons (shelf edge — major tuna grounds)
-    ("Hudson Canyon",       39.540000, -72.050000),
+    # Hudson Canyon marks the canyon head (moved Oct 2026 from 39.54, -72.05, 19 nm ESE on the slope): in
+    # ETOPO 2022 the 300 m isobath reaches furthest inshore at 39.642 N, 72.440 W (tools/build_contours.py
+    # recomputes it into the contours asset's checks), and NOAA's chart contours (ENC US2EC03M/US2EC04M, the
+    # 12300 / 13003 scale band) wrap the head at about 39.66 N, 72.46 W.
+    ("Hudson Canyon",       39.642000, -72.440000),   # the canyon head (was 39.54, -72.05: 19 nm ESE)
     ("Block Canyon",        39.730000, -71.750000),
     ("Toms Canyon",         39.500000, -72.600000),
     ("Lindenkohl Canyon",   39.450000, -72.350000),

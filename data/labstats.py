@@ -92,6 +92,18 @@ EVENTS = {
         "lock_scale": "Locked the color scale",
         "opacity": "Changed the color strength (SST opacity)",
         "how_it_works": "Opened How it works (not the automatic first-visit opening)",
+        # Colors panel (sprint 2, assets/sstlook.js): sent only when the reader changes something, never for
+        # the defaults or a remembered choice
+        "preset_auto": "Picked the Auto color range",
+        "preset_tuna": "Picked the Tuna color range (62 to 76 F)",
+        "preset_marlin": "Picked the Marlin color range (70 to 84 F)",
+        "preset_gulfstream": "Picked the Gulf Stream color range",
+        "preset_custom": "Picked Custom (own color range)",
+        "custom_range": "Changed an end of the Custom range",
+        "fit_view": "Pressed Fit to view (colors fitted to the water on screen)",
+        "stepped": "Switched Stepped colors (1 F bands) on or off",
+        "breaks": "Switched Breaks (isotherms and the break highlight) on or off",
+        "contours": "Switched the depth lines on or off",
     },
     "currents": {
         "view_today": "Switched to the Today view",

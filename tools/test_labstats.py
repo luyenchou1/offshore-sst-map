@@ -459,6 +459,16 @@ def test_client_event_names_whitelisted():
     sst_sent = set(re.findall(r'ev\("([a-z0-9_]+)"\)', py))
     sst_sent |= set(re.findall(r'(?:contours|gebco|gfw): "([a-z_]+)"', py))
     sst_sent.add("step")                                         # data-labs-event in sidebar.py
+    # the Colors panel (assets/sstlook.js): track("..."), the preset map and track(id) for the toggles
+    look = (ROOT / "assets" / "sstlook.js").read_text()
+    sst_sent |= set(re.findall(r'track\("([a-z0-9_]+)"\)', look))
+    sst_sent |= set(re.findall(r': "(preset_[a-z]+)"', look))
+    toggles = re.search(r"var TOGGLES = \[(.*?)\];", look, re.S).group(1)
+    sst_sent |= set(re.findall(r'id: "([a-z]+)"', toggles))
+    assert "track(id)" in look and "track(EVENT[id])" in look
+    contract = (ROOT / "docs" / "labs-analytics-contract.md").read_text()
+    missing = [e for e in labstats.EVENTS["sst"] if f"`{e}`" not in contract]
+    assert not missing, f"not in docs/labs-analytics-contract.md: {missing}"
     assert '"how_it_works"' in py
     sent.add("how_it_works")
     assert sent == set(labstats.EVENTS["currents"]), sent ^ set(labstats.EVENTS["currents"])

@@ -158,6 +158,11 @@ def build_sidebar(labs_href="/"):
                         ],
                     ),
 
+                    # ── Colors: presets, color bar, Stepped / Breaks / Haze / Depth lines ──
+                    # Built by assets/sstlook.js into this empty div (Dash never renders its
+                    # children); the color part shows once the SST engine is on the page.
+                    html.Div(id="sst-color-panel", className="sst-color-panel"),
+
                     _divider(),
 
                     # ── Section 3: Map Tools ──
@@ -283,7 +288,9 @@ def build_sidebar(labs_href="/"):
                                 min=0.1,
                                 max=1.0,
                                 step=0.1,
-                                value=1.0,   # opaque by default (sprint 2, mockup B)
+                                # Opaque by default (sprint 2 look: the depth lines on top do what
+                                # the see-through colors used to); lower it to see a layer under.
+                                value=1.0,
                                 marks=None,
                                 tooltip={"placement": "bottom"},
                             ),
