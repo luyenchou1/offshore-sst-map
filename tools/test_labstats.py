@@ -413,6 +413,11 @@ def test_redirects_leave_api_alone():
         assert CLIENT.get("/currents?x=1", headers=old).headers["Location"] == \
             "https://labs.gotoneapp.com/currents?x=1"
         assert CLIENT.get("/striper-recount", headers=new).status_code == 302
+        # the GotOne web app forwards from either host, with or without a slash (the old gated map is gone)
+        for h in (old, new):
+            for path in ("/catches", "/catches/", "/Catches"):
+                r = CLIENT.get(path, headers=h)
+                assert r.status_code == 302 and r.headers["Location"] == appmod.EXTERNAL_TOOLS["/catches"], (path, h)
         # ... but never an API, beacon, asset or the stats, on either host, GET or POST
         for h in (old, new):
             for path in ("/api/hit", "/api/event", "/api/feedback"):
@@ -422,7 +427,7 @@ def test_redirects_leave_api_alone():
                 assert r.status_code == 204, (path, h, r.status_code)
                 assert CLIENT.get(path, headers=h).status_code not in (301, 302), path
             for path in ("/api/currents/manifest.json", "/api/labs/stats", "/labs/stats",
-                         "/assets/labs.js", "/api/striper-recount", "/api/labs"):
+                         "/assets/labs.js", "/api/striper-recount", "/api/labs", "/api/catches/upload"):
                 r = CLIENT.get(path, headers=h)
                 assert r.status_code not in (301, 302), (path, h, r.status_code)
         s = labstats.summary(7)

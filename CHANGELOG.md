@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-10-21 - Labs: the GotOne web app
+
+### Added
+- A Labs tile for the GotOne web app, Tom Fuda's dashboard where anglers sign in with their GotOne account to see their catches on a map, charts by month and species, and filters for tide, moon, wind and water temperature. Here and on gotoneapp.com/labs (rerun `tools/build_squarespace_labs.py` and repaste). The tile picture (`assets/labs/catches.jpg`) is the dashboard's catch map with its monthly and species charts, from Luyen's own account at Gulf-wide zoom.
+- `labs.gotoneapp.com/catches` (and `sst.gotoneapp.com/catches`) forwards to it, like `/striper-recount`; the short link is `gotoneapp.com/catches` (a Squarespace URL mapping). It points at got-one-362618.web.app until catches.gotoneapp.com is set up in Firebase.
+
+### Removed
+- The old gated catch map at `/catches` is no longer reachable (the forward comes first). Its code, `CATCHES_ACCESS_KEY` and `POST /api/catches/upload` are unchanged.
+
 ## 2026-10-17 - Labs previews show the new SST look
 
 ### Changed
