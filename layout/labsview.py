@@ -12,6 +12,23 @@ from dash import dcc, html
 
 TOOLS = [
     {
+        # Tom Fuda's GotOne web app (Firebase Hosting). Moves to catches.gotoneapp.com once that
+        # custom domain is live: change it here, in app.EXTERNAL_TOOLS and in the Squarespace mapping.
+        "href": "https://got-one-362618.web.app/",
+        "short": "catches",           # gotoneapp.com/catches (Squarespace URL mapping)
+        "img": "/assets/labs/catches.jpg",
+        "alt": "The GotOne dashboard: catches mapped across Florida, the Bahamas and the Gulf, "
+               "with charts of catches by month and by species",
+        "area": "Wherever you fish",
+        "title": "Your Catches",
+        "pill": "New",
+        "hook": "Every fish you've logged in GotOne, on one map.",
+        "text": ("Sign in with your GotOne account to see every catch on a map, with charts by "
+                 "month and species. Filter by tide, moon, wind and water temperature to see "
+                 "when you do best."),
+        "button": "Open your dashboard",
+    },
+    {
         "href": "/sst",
         "short": "sst",           # gotoneapp.com/sst (Squarespace URL mapping)
         "img": "/assets/labs/sst.jpg",
@@ -51,23 +68,6 @@ TOOLS = [
                  "to recreational striped bass estimates: the miscounted trips, why fewer fish "
                  "caught means fewer fish, and what happens next."),
         "button": "Watch and explore",
-    },
-    {
-        # Tom Fuda's GotOne web app (Firebase Hosting). Moves to catches.gotoneapp.com once that
-        # custom domain is live: change it here, in app.EXTERNAL_TOOLS and in the Squarespace mapping.
-        "href": "https://got-one-362618.web.app/",
-        "short": "catches",           # gotoneapp.com/catches (Squarespace URL mapping)
-        "img": "/assets/labs/catches.jpg",
-        "alt": "The GotOne dashboard: catches mapped across Florida, the Bahamas and the Gulf, "
-               "with charts of catches by month and by species",
-        "area": "Wherever you fish",
-        "title": "Your Catches",
-        "pill": "New",
-        "hook": "Every fish you've logged in GotOne, on one map.",
-        "text": ("Sign in with your GotOne account to see every catch on a map, with charts by "
-                 "month and species. Filter by tide, moon, wind and water temperature to see "
-                 "when you do best."),
-        "button": "Open your dashboard",
     },
 ]
 
