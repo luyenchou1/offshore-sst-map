@@ -12,9 +12,9 @@ from dash import dcc, html
 
 TOOLS = [
     {
-        # Tom Fuda's GotOne web app (Firebase Hosting). Moves to catches.gotoneapp.com once that
-        # custom domain is live: change it here, in app.EXTERNAL_TOOLS and in the Squarespace mapping.
-        "href": "https://got-one-362618.web.app/",
+        # Tom Fuda's GotOne web app (Firebase Hosting, project got-one-362618), on its own Labs address since
+        # Oct 26 2026. If it moves: change it here, in app.EXTERNAL_TOOLS and in the Squarespace mapping.
+        "href": "https://catches.gotoneapp.com/",
         "short": "catches",           # gotoneapp.com/catches (Squarespace URL mapping)
         "img": "/assets/labs/catches.jpg",
         "alt": "The GotOne dashboard: catches mapped across Florida, the Bahamas and the Gulf, "

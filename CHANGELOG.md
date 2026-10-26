@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-26 - Labs: Your Catches on catches.gotoneapp.com
+
+### Changed
+- The Your Catches tile and the `/catches` forwards (`labs.gotoneapp.com/catches`, and `gotoneapp.com/catches` through its Squarespace URL mapping) now go to catches.gotoneapp.com, the GotOne web app's own Labs address (a Firebase Hosting custom domain Tom Fuda set up; CNAME `catches` -> got-one-362618.web.app in Squarespace DNS). The Firebase address keeps working. The web app's GotOne logo now links back to gotoneapp.com/labs.
+
 ## 2026-10-21 - Labs: the GotOne web app
 
 ### Added

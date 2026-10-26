@@ -257,11 +257,11 @@ def labs_href():
 
 
 # Tools hosted elsewhere, so labs.gotoneapp.com/<name> works like the app's own pages.
-# /catches is the GotOne web app (Oct 21 2026; catches.gotoneapp.com once its custom domain is
-# live). It replaces the old gated catch map, whose page (build_catch_page, CATCHES_ACCESS_KEY)
+# /catches is the GotOne web app (Oct 21 2026; at catches.gotoneapp.com, its Firebase custom domain,
+# since Oct 26). It replaces the old gated catch map, whose page (build_catch_page, CATCHES_ACCESS_KEY)
 # this forward now shadows; /api/catches/upload is an API and is never redirected.
 EXTERNAL_TOOLS = {"/striper-recount": "https://striperrecount.gotoneapp.com/",
-                  "/catches": "https://got-one-362618.web.app/"}
+                  "/catches": "https://catches.gotoneapp.com/"}
 
 # Paths no host / home redirect may ever touch: the APIs (beacons, uploads, GFW tiles; a
 # redirected POST turns into a GET and loses its body), Dash's own routes, assets, the stats.
